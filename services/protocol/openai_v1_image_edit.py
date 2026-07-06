@@ -24,7 +24,7 @@ def _composite_mask(
     masks: list[tuple[bytes, str, str]],
 ) -> list[tuple[bytes, str, str]]:
     """将 mask 的 alpha 通道合成到图片中，标识需要编辑的区域。
-    
+
     mask 的透明区域（低 alpha）= 需要编辑的区域，
     mask 的不透明区域（高 alpha）= 保留的区域。
     如果无 mask 则返回原图。
@@ -84,6 +84,7 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
         message_as_error=True,
         progress_callback=progress_callback,
         poll_timeout_secs=poll_timeout_secs,
+        queue_coordinated=bool(body.get("queue_coordinated")),
     ))
     if body.get("stream"):
         return stream_image_chunks(outputs)

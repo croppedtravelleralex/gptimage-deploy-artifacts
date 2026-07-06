@@ -8,7 +8,14 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-from services.image_task_service import ImageTaskService, TASK_STATUS_ERROR, TASK_STATUS_RUNNING, TASK_STATUS_TIMEOUT_PENDING
+from services.image_task_service import (
+    ImageTaskService,
+    ImageTaskWaitTimeoutError,
+    TASK_STATUS_ERROR,
+    TASK_STATUS_RUNNING,
+    TASK_STATUS_SUCCESS,
+    TASK_STATUS_TIMEOUT_PENDING,
+)
 from services.openai_backend_api import InvalidAccessTokenError
 
 
@@ -524,6 +531,51 @@ class ImageTaskServiceTests(unittest.TestCase):
             self.assertEqual(fake_asset_service.asset_ids, ["asset-1"])
             self.assertEqual(seen_payloads[0]["images"], [(b"asset-bytes", "asset.png", "image/png")])
             self.assertNotIn("image_asset_ids", seen_payloads[0])
+
+    def test_wait_for_result_returns_success_task(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = self.make_service(Path(tmp_dir) / "image_tasks.json", submit_workers_getter=lambda: 1, poll_workers_getter=lambda: 0)
+            service.submit_generation(
+                OWNER,
+                client_task_id="wait-task",
+                prompt="cat",
+                model="gpt-image-2",
+                size=None,
+                base_url="http://local.test",
+            )
+            wait_for_task(service, OWNER, "wait-task", TASK_STATUS_SUCCESS)
+            task = service.wait_for_result(OWNER, "wait-task", timeout_secs=2.0, poll_interval_secs=0.05)
+            self.assertEqual(task["status"], TASK_STATUS_SUCCESS)
+            self.assertEqual(task["data"][0]["url"], "http://example.test/image.png")
+
+    def test_wait_for_result_raises_on_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            def slow_handler(_payload):
+                time.sleep(0.2)
+                return {"data": [{"url": "http://example.test/image.png"}]}
+
+            service = self.make_service(
+                Path(tmp_dir) / "image_tasks.json",
+                slow_handler,
+                submit_workers_getter=lambda: 1,
+                poll_workers_getter=lambda: 0,
+            )
+            service.submit_generation(
+                OWNER,
+                client_task_id="slow-task",
+                prompt="cat",
+                model="gpt-image-2",
+                size=None,
+                base_url="http://local.test",
+            )
+            with self.assertRaises(ImageTaskWaitTimeoutError) as ctx:
+                service.wait_for_result(OWNER, "slow-task", timeout_secs=0.05, poll_interval_secs=0.02)
+            self.assertEqual(ctx.exception.task_id, "slow-task")
+            # The timeout path intentionally leaves the task running in the
+            # background.  Wait for the worker before the tempdir is removed so
+            # the test does not produce a false sqlite "unable to open database"
+            # thread warning during teardown.
+            wait_for_task(service, OWNER, "slow-task", TASK_STATUS_SUCCESS)
 
 
 if __name__ == "__main__":

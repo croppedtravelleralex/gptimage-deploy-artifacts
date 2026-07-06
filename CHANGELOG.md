@@ -2,6 +2,15 @@
 
 ## Unreleased
 
++ [新增] IMG-012：`/v1/images/*` 非流式入口改为内部 sync-over-async（`submit image_task + wait_for_result`），解除同步全局 6 并发快拒。
++ [新增] `ImageTaskService.wait_for_result()` 与 `services/image_sync_adapter.py` 适配层。
++ [新增] `queue_coordinated` → `skip_global_limit` 链路，队列路径绕过 `image_global_concurrency=6`。
++ [新增] 部署/压测脚本：`scripts/img012_deploy.py`、`img012_patch_config.py`、`img012_verify.py`、`img012_newapi_sync_loadgen.py`、`img012_enable_burst_deploy.py`。
++ [优化] 默认 `per_user_running_max` 6、`image_return_window_size` 3；新增 `newapi_image_sync_wait_timeout_secs` 等配置。
++ [部署] Panda 2026-07-06：IMG-012 代码 + config patch；**16:41 restart** 后新代码生效。
++ [验收] NewAPI 24 路单轮压测：`busy_6=0` ✅；`5/24` 成功 ❌（19 失败为 NewAPI HTTP/2 断连，见 `reports/img012-newapi-sync-stage24-1rounds-20260706-164210/`）。
++ [文档] 精简 `docs/04-improvement-backlog.md`；同步 IMG-012 实施状态至 `08-image-pipeline-newapi-async-plan.md` §13、`02-current-state.md`、`06-handoff.md`。
+
 ## 1.5.0 - 2026-06-13
 
 + [新增] 新增 WARP / Privoxy / FlareSolverr 清障方案，注册遇到 Cloudflare 拦截后可刷新 clearance 并重试。

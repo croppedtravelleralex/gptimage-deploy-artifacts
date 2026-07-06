@@ -402,6 +402,7 @@ class ConversationRequest:
     message_as_error: bool = False
     progress_callback: Any = None  # Callable[[str], None] | None
     poll_timeout_secs: float | None = None
+    queue_coordinated: bool = False
 
 
 @dataclass
@@ -1236,7 +1237,7 @@ def stream_image_outputs(
                     continue
                 # 超时错误或重试次数用尽，停止重试
                 break
-        
+
         if file_ids or sediment_ids:
             image_urls = backend.resolve_conversation_image_urls(
                 conversation_id, file_ids, sediment_ids, poll=False,
@@ -1253,7 +1254,7 @@ def stream_image_outputs(
                 if data:
                     yield ImageOutput(kind="result", model=request.model, index=index, total=total, data=data, conversation_id=conversation_id)
                     return
-        
+
         # 重试后仍然失败，yield 错误消息
         yield ImageOutput(kind="message", model=request.model, index=index, total=total,
                           text="Image generation completed upstream but the result could not be retrieved. "
@@ -1363,6 +1364,7 @@ def _generate_single_image(
                 plan_type=plan_type,
                 source_type="codex" if codex_model else None,
                 plan_types=("plus", "team", "pro") if codex_model and not plan_type else None,
+                skip_global_limit=bool(request.queue_coordinated),
             )
         except RuntimeError as exc:
             raise ImageGenerationError(str(exc) or "image generation failed", account_email=account_email) from exc

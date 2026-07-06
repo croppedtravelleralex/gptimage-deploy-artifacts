@@ -4,7 +4,7 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from api.image_inputs import parse_image_edit_request, read_image_sources
+from api.image_inputs import parse_image_edit_request, read_image_sources, read_image_sources_with_asset_ids
 from api.support import require_identity, resolve_image_base_url
 from services.content_filter import check_request
 from services.image_task_service import ImageTaskQueueFullError, image_task_service
@@ -97,7 +97,8 @@ def create_router() -> APIRouter:
         asset_ids = [str(item).strip() for item in (payload.get("asset_ids") or []) if str(item).strip()]
         await filter_or_log(LoggedCall(identity, "/api/image-tasks/edits", model, "图生图任务", request_text=prompt), prompt)
         if image_sources:
-            images = await read_image_sources(image_sources)
+            images, asset_ids_from_images = await read_image_sources_with_asset_ids(image_sources)
+            asset_ids = list(dict.fromkeys([*asset_ids, *asset_ids_from_images]))
         elif asset_ids:
             images = []
         else:

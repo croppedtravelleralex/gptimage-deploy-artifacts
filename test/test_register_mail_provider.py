@@ -42,7 +42,7 @@ class TempMailLolProviderTests(unittest.TestCase):
         mail_provider.tempmail_lol_next_create_at = self._old_next
         mail_provider.tempmail_lol_backoff_until = self._old_backoff
 
-    def test_tempmail_lol_create_does_not_use_provider_rate_slot(self) -> None:
+    def test_tempmail_lol_create_uses_provider_rate_slot(self) -> None:
         fake = FakeSession(FakeResponse(201, {"address": "a@example.com", "token": "mail-token"}))
         entry = {"type": "tempmail_lol", "create_min_interval_sec": 60}
         conf = {"user_agent": "UA", "request_timeout": 3, "proxy": ""}
@@ -54,12 +54,12 @@ class TempMailLolProviderTests(unittest.TestCase):
             provider = mail_provider.TempMailLolProvider(entry, conf)
             mailbox = provider.create_mailbox()
 
-        reserve.assert_not_called()
+        reserve.assert_called_once_with(60.0)
         self.assertEqual(mailbox["address"], "a@example.com")
         self.assertEqual(fake.calls[0]["method"], "POST")
         self.assertTrue(fake.calls[0]["url"].endswith("/v2/inbox/create"))
 
-    def test_tempmail_lol_429_does_not_update_global_backoff(self) -> None:
+    def test_tempmail_lol_429_updates_global_backoff(self) -> None:
         fake = FakeSession(FakeResponse(429, text='{"error":"Rate limited (free)"}', headers={"retry-after": "7"}))
         entry = {"type": "tempmail_lol", "create_min_interval_sec": 0, "rate_limit_backoff_sec": 60}
         conf = {"user_agent": "UA", "request_timeout": 3, "proxy": ""}
@@ -69,7 +69,7 @@ class TempMailLolProviderTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "HTTP 429"):
                 provider.create_mailbox()
 
-        self.assertEqual(mail_provider.tempmail_lol_backoff_until, 0.0)
+        self.assertGreater(mail_provider.tempmail_lol_backoff_until, 0.0)
 
     def test_loopback_connection_refused_is_transient(self) -> None:
         self.assertTrue(mail_provider._is_transient_mail_error("Connection refused by proxy"))

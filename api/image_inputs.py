@@ -15,6 +15,7 @@ ImageInput = tuple[bytes, str, str]
 ImageSource = str | UploadFile | ImageInput
 
 MAX_IMAGE_REFERENCE_BYTES = 50 * 1024 * 1024
+ASSET_URI_PREFIX = "panda-asset://"
 IMAGE_REFERENCE_FIELDS = {"image", "image[]", "images", "images[]", "image_url", "image_url[]"}
 MASK_REFERENCE_FIELDS = {"mask", "mask[]"}
 ASSET_ID_FIELDS = {"asset_id", "asset_ids", "asset_ids[]", "reference_asset_id", "reference_asset_ids", "reference_asset_ids[]"}
@@ -66,6 +67,13 @@ def _string_list(value: object) -> list[str]:
             items.extend(_string_list(item))
         return items
     return [str(value).strip()] if str(value).strip() else []
+
+
+def asset_ids_from_uri(value: object) -> list[str]:
+    text = _clean(value)
+    if not text.startswith(ASSET_URI_PREFIX):
+        return []
+    return _string_list(text[len(ASSET_URI_PREFIX):])
 
 
 def _parse_count(value: object) -> int:
@@ -159,6 +167,8 @@ def _sources_from_value(value: object) -> list[ImageSource]:
         text = value.strip()
         if not text:
             return []
+        if text.startswith(ASSET_URI_PREFIX):
+            return [text]
         if text.lower().startswith(("data:", "http://", "https://")):
             return [text]
         return [_decode_base64_image(text, "image.png", "image/png")]
@@ -193,7 +203,7 @@ def _json_mask_sources(body: dict[str, Any]) -> list[ImageSource]:
 
 async def parse_image_edit_request(request: Request) -> tuple[dict[str, Any], list[ImageSource], list[ImageSource]]:
     """解析图片编辑请求：同时支持 multipart 上传和官方 JSON 图片 URL。
-    
+
     返回 (payload, image_sources, mask_sources)
     """
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
@@ -326,3 +336,58 @@ async def read_image_sources(sources: list[ImageSource]) -> list[ImageInput]:
     if not images:
         raise HTTPException(status_code=400, detail={"error": "image file is required"})
     return images
+
+
+async def read_image_sources_with_asset_ids(sources: list[ImageSource]) -> tuple[list[ImageInput], list[str]]:
+    """读取图片来源，同时识别 `panda-asset://...` 指针文件。
+
+    用途：NewAPI 标准 `/v1/images/edits` 会强制要求 multipart 里存在
+    `image` 文件。为了避免让大参考图二次穿过 NewAPI，可把已经上传到
+    Panda 的 asset id 包装成一个很小的 `image` 文件，文件内容形如：
+    `panda-asset://asset-a,asset-b`。
+    """
+
+    images: list[ImageInput] = []
+    asset_ids: list[str] = []
+    for index, source in enumerate(sources, start=1):
+        if isinstance(source, tuple):
+            data, filename, mime_type = source
+            try:
+                marker = data.decode("utf-8", errors="strict").strip()
+            except UnicodeDecodeError:
+                marker = ""
+            ids = asset_ids_from_uri(marker)
+            if ids:
+                asset_ids.extend(ids)
+                continue
+            images.append((data, filename, mime_type))
+            continue
+        if _is_upload(source):
+            try:
+                image_data = await source.read()
+            finally:
+                await source.close()
+            if not image_data:
+                raise HTTPException(status_code=400, detail={"error": "image file is empty"})
+            try:
+                marker = image_data.decode("utf-8", errors="strict").strip()
+            except UnicodeDecodeError:
+                marker = ""
+            ids = asset_ids_from_uri(marker)
+            if ids:
+                asset_ids.extend(ids)
+                continue
+            images.append((image_data, source.filename or "image.png", source.content_type or "image/png"))
+            continue
+        if isinstance(source, str):
+            ids = asset_ids_from_uri(source)
+            if ids:
+                asset_ids.extend(ids)
+                continue
+            if source.strip().startswith("data:"):
+                images.append(_data_url_with_indexed_filename(source, index))
+                continue
+        images.append(await run_in_threadpool(_download_image_url, source))
+    if not images and not asset_ids:
+        raise HTTPException(status_code=400, detail={"error": "image file is required"})
+    return images, list(dict.fromkeys(asset_ids))

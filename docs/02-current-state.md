@@ -891,7 +891,7 @@ image poll timeout 360s: 1
 
 BUG-003：
 
-- 根因：services/image_task_service.py::ImageTaskService.__init__() 在构造时执行 _recover_unfinished_locked()，导致 docker compose exec ... import image_task_service 这种只读检查也会把生产 DB 里的 
+- 根因：services/image_task_service.py::ImageTaskService.__init__() 在构造时执行 _recover_unfinished_locked()，导致 docker compose exec ... import image_task_service 这种只读检查也会把生产 DB 里的
 unning 任务当作“服务重启”改成 queued/timeout_pending/error。
 - 影响：IMG-008 首轮 img005-stage24-1rounds-20260705-224321 的最后 1 个 running 任务被一次只读检查污染；后续它最终完成，但该轮本地 summary 因会话中断不可作为完整报告。
 - 修复：构造/导入只加载 DB，不恢复未完成任务；只有 start_background() / worker 运行前执行一次 runtime recovery。
@@ -907,14 +907,14 @@ eports/img005-stage24-1rounds-20260705-235210/aggregate-summary.json
   - Panda：/root/gptimage/backups/img005-stage24-1rounds-20260705-235210/aggregate-summary.json
 - 输入：单轮 24，8 文生图 + 16 图生图，10 单参考 + 6 双参考，参考 PNG 总量 30.28MB，未做输入减重。
 - 结果：上传 16/16，入队 24/24，最终 23 success / 1 error / 0 unfinished。
-- 错误：1 个文生图 ChatGPT 生图超时（已等待 300.0 秒）；本轮 
+- 错误：1 个文生图 ChatGPT 生图超时（已等待 300.0 秒）；本轮
 o available image quota 为 0。
 - 关键指标：asset upload p95 17.37s，submit p95 2.39s，status p95 3.15s，CPU p95 8.69%，内存 max 710.3MiB，bandwidth total p95 18.09Mbps，strict bad logs 。
 - 账号池变化：pre active/quota/schedulable 96/438/96 -> post 88/385/87；扩大候选面有效解决抽样过窄，但会更快暴露坏号/限流号并消耗水位。
 
 判断：
 
-- IMG-008 第一档有效：上一轮三轮 24 中 
+- IMG-008 第一档有效：上一轮三轮 24 中
 o available image quota (tried 8 tokens) 23 次，本轮 24 候选面下为 0。
 - Panda CPU/内存不是瓶颈，状态查询仍偏慢，长尾来自上游生成/poll 与账号质量。
 - 不建议直接进 30；下一步若继续优化，应在补号/水位恢复后小心 A/B per_user_running_max 2 -> 3，并继续保持 image_token_max_attempts=24，暂不升到 32。
@@ -1212,7 +1212,8 @@ status query p95=3499ms
 已执行：
 
 - 生产备份：/root/gptimage/backups/img011-image-task-hard-timeout-20260706-124825/，含 ROLLBACK.sh。
-- services/image_task_service.py：为异步生图 worker 增加任务级 hard timeout，避免上游 SSE/pre-conversation 阻塞导致 unning + conversation_id=false 无限占槽。
+- services/image_task_service.py：为异步生图 worker 增加任务级 hard timeout，避免上游 SSE/pre-conversation 阻塞导致
+unning + conversation_id=false 无限占槽。
 - scripts/img005_asset_stage_loadgen.py：
   - asset upload 增加窗口与可重试：IMG005_ASSET_UPLOAD_WINDOW=8，IMG005_ASSET_UPLOAD_MAX_ATTEMPTS=2。
   - submit/status 查询统一使用 HTTP/2 keepalive，降低本地压测客户端 TLS 长尾噪音。
@@ -1333,35 +1334,105 @@ Panda：/root/gptimage/backups/img005-stage24-3rounds-20260706-125316/aggregate-
 - 24 入队、2 running 的直观模型：后台只有 2 条流水线，每条约 1 分钟出 1 张；24 张约等于 12 个波次，因此 clean 轮总完成时间约 12 分钟。
 - 实测：R2 从入队后到全完成约 745s≈12.4min，R3 约 743s≈12.4min。若再计入参考图 asset upload，端到端每轮约 14 分钟。
 
-## 2026-07-06 IMG-012 NewAPI 同步入口内部异步化待办
+## 2026-07-06 IMG-012 NewAPI 同步入口内部异步化
 
-状态：**方案已记录，未实现，未部署，未压测**。
+状态：**已本地实现 + Panda 已部署 + 16:41 restart**；busy_6 验收通过；24 路全成功未通过。
 
-新增方案文档：
+方案文档：`docs/08-image-pipeline-newapi-async-plan.md` §13
 
-```text
-docs/08-image-pipeline-newapi-async-plan.md
-```
-
-当前事实：
-
-- Panda `/api/image-tasks` 异步链路在 IMG-011 三轮 24 公网混合输入压测中表现为 `72/72 submit`、`70/72 success`、`0 unfinished`。
-- 当前后台单用户 running≈2，clean 轮 24 入队后全完成约 `12.4min`；如果计入 reference asset 上传，端到端约 `14min`。
-- NewAPI 标准 `/v1/images/*` 仍走同步兼容入口，受 `image_global_concurrency=6` 和 `image_global_queue_timeout_secs=0` 影响，超过 6 个并发会直接 busy/502。
-
-IMG-012 目标：
-
-- `/v1/images/generations` 和 `/v1/images/edits` 改为内部 `sync-over-async`，让 NewAPI 标准调用进入 Panda 内部异步任务队列并等待自己的结果。
-- 后台生成窗口默认 `6`，健康时 `burst=8`。
-- 参考图上传、上游提交、上游生成等待、结果下载、b64/url 组装和回传拆成独立阶段，用窗口和带宽阈值削平尖峰。
-- 不压缩参考图，不降低输入质量，不用输入减重换性能数字。
-
-预估：
+### 已实现
 
 ```text
-固定 6：24 个请求最后完成约 5~6.2min
-6 + burst 8：24 个请求最后完成约 4.5~6min
-极差上游尾流：8~10min+
+api/ai.py：非 stream /v1/images/* → submit image_task + wait_for_result
+services/image_sync_adapter.py：run_generation_sync / run_edit_sync
+services/image_task_service.py：wait_for_result、payload queue_coordinated=True
+services/account_service.py：skip_global_limit（队列路径绕过全局 6）
+services/protocol/conversation.py：request.queue_coordinated → skip_global_limit
+Panda config：per_user_running_max=6, burst_enabled=false, image_return_window_size=3
+部署脚本：scripts/img012_deploy.py / patch_config / verify / newapi_sync_loadgen / enable_burst
 ```
 
-下一步如果继续执行：先读 `docs/08-image-pipeline-newapi-async-plan.md`，再按 IMG-012A~F 切片实现、备份、部署和 NewAPI 24 压测。
+### 压测（2026-07-06 16:42，NewAPI 单轮 24）
+
+```text
+报告：reports/img012-newapi-sync-stage24-1rounds-20260706-164210/
+busy_6：0（✅ 核心目标达成）
+成功：5/24（文生图 60–111s）
+失败：19/24（JSONDecodeError 8 + HTTP/2 ConnectionTerminated 11，NewAPI 传输层）
+```
+
+### 未做
+
+```text
+burst 8 动态升档（burst_enabled 仍 false）
+3 轮 72 路验收
+stream=true 同步入口改造
+NewAPI 网关 24 长连接 / HTTP/2 稳定性
+下载/回传独立窗口（IMG-012E 完整形态）
+```
+
+### 运维注意
+
+```text
+改 Python 代码后必须 docker compose restart，up -d 不会 reload 进程。
+16:18 部署代码但 12:51 启动的容器在 restart 前仍报 busy_6，即此原因。
+image_global_concurrency=6 配置仍在，仅 queue_coordinated 路径跳过。
+NewAPI 可见 110–300s = 排队（6 槽位）+ 上游执行，非单次生图纯时间。
+```
+
+下一步：修 NewAPI 传输层 → 重跑 24 路 → burst 8 → 3 轮 72 路。
+
+## 2026-07-06 IMG-012 追加：asset pointer 小请求、NewAPI 压测和 524 根因
+
+状态：**Panda 已部署并验收；NewAPI 6/12 通过，24 同步入口仍受 NewAPI/Cloudflare 外层超时限制**。
+
+已部署备份：
+
+```text
+/root/gptimage/backups/img012-assetids-smallreq-20260706-173824/
+/root/gptimage/backups/img012-asset-pointer-20260706-174706/
+/root/gptimage/backups/img012-resume-poll-hard-timeout-20260706-195215/
+```
+
+新增实现：
+
+- `api/image_inputs.py`：支持 `panda-asset://<asset_id>` 指针；NewAPI 必填的 multipart `image` 文件可用极小 text/plain 指针文件替代，不再让大参考图二次穿过 NewAPI。
+- `api/ai.py` / `api/image_tasks.py`：读取 image sources 时自动拆出 asset ids，指针文件不会作为真实参考图传给上游。
+- `scripts/img012_newapi_sync_loadgen.py`：支持 `6/12/18/24/30` 小档；图生图先上传 Panda asset，再通过 NewAPI 发送 pointer file；新增 `IMG012_HTTP2=0/1` 对照。
+- `services/image_task_service.py`：`resume_polling` 增加 hard-timeout 止血，避免续轮询长期停在 running。
+
+本地验证：
+
+```text
+python -m py_compile api/ai.py api/image_inputs.py api/image_tasks.py services/image_sync_adapter.py services/image_task_service.py scripts/img012_newapi_sync_loadgen.py
+python -m pytest test/test_v1_images_edits_api.py test/test_v1_images_edits_json.py test/test_v1_images_sync_async.py test/test_image_task_service.py test/test_image_tasks_api.py -q
+# 36 passed（asset pointer 后）
+python -m pytest test/test_image_task_service.py test/test_image_tasks_api.py test/test_v1_images_edits_api.py test/test_v1_images_sync_async.py -q
+# 28 passed（resume poll hard-timeout 后）
+```
+
+生产验收：
+
+```text
+Panda health after final deploy: healthy=true, image_inflight_count=0, dispatchable_candidate_count=160, verified_total_quota=752, preflight_backoff_count=0
+NewAPI asset pointer smoke: 1/1 success, elapsed≈34.15s
+NewAPI stage 6: 6/6 success, busy_6=0, report=reports/img012-newapi-sync-stage6-1rounds-20260706-175102/
+NewAPI stage 12: 12/12 success, busy_6=0, report=reports/img012-newapi-sync-stage12-1rounds-20260706-175304/
+```
+
+24 对照结果：
+
+```text
+HTTP/2 + pointer，24 同时提交：客户端 17/24 success，7 个 RemoteProtocolError / stream reset；Panda DB 仅入库 17 个，17/17 success。
+HTTP/1.1 + pointer，24 同时提交：客户端 14/24 success，10 个 Cloudflare 524（约 175~209s）；Panda DB 入库 24 个，最终 23 success / 1 error。
+窗口 12 对照：被 closeapi/NewAPI 短时拒连污染（ConnectError 10061 / server disconnected），不能作为容量结论；停止继续压测。
+```
+
+判断：
+
+- `busy_6` 已解决；大参考图二次穿 NewAPI 也已解决。
+- 24 同步入口失败主因不是 Panda 生成失败，而是 NewAPI/closeapi/Cloudflare 同步长连接约 175~210s 超时或断流。
+- Panda 对“已入库任务”的完成率高；但 NewAPI 标准同步接口无法稳定承载 24 个长等待请求。
+- 想要 24/30 的用户体验，不能继续强压 `/v1/images/*` 长同步；需要 NewAPI 侧接异步 task/callback，或把公共同步入口 admission 控制在能低于 Cloudflare 超时的窗口内。
+
+补充验收：2026-07-06 19:59 +08 复查 Panda：`image_inflight_count=0`，`image_tasks.db unfinished=0`，`dispatchable_candidate_count=161`。

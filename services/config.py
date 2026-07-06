@@ -56,7 +56,10 @@ DEFAULT_IMAGE_TASK_QUEUE = {
     "poll_workers": 24,
     "download_workers": 4,
     "global_queue_max": 200,
-    "per_user_running_max": 2,
+    "per_user_running_max": 6,
+    "per_user_running_base": 6,
+    "per_user_running_burst": 8,
+    "burst_enabled": False,
     "per_user_queue_max": 36,
     "timeout_pending_poll_secs": 300,
     "timeout_pending_max_attempts": 4,
@@ -336,6 +339,9 @@ def _normalize_image_task_queue_settings(value: object) -> dict[str, object]:
         "download_workers": _normalize_positive_int(source.get("download_workers"), int(DEFAULT_IMAGE_TASK_QUEUE["download_workers"]), 1),
         "global_queue_max": _normalize_positive_int(source.get("global_queue_max"), int(DEFAULT_IMAGE_TASK_QUEUE["global_queue_max"]), 1),
         "per_user_running_max": _normalize_positive_int(source.get("per_user_running_max"), int(DEFAULT_IMAGE_TASK_QUEUE["per_user_running_max"]), 1),
+        "per_user_running_base": _normalize_positive_int(source.get("per_user_running_base"), int(DEFAULT_IMAGE_TASK_QUEUE["per_user_running_base"]), 1),
+        "per_user_running_burst": _normalize_positive_int(source.get("per_user_running_burst"), int(DEFAULT_IMAGE_TASK_QUEUE["per_user_running_burst"]), 1),
+        "burst_enabled": _normalize_bool(source.get("burst_enabled"), bool(DEFAULT_IMAGE_TASK_QUEUE["burst_enabled"])),
         "per_user_queue_max": _normalize_positive_int(source.get("per_user_queue_max"), int(DEFAULT_IMAGE_TASK_QUEUE["per_user_queue_max"]), 1),
         "timeout_pending_poll_secs": _normalize_positive_int(source.get("timeout_pending_poll_secs"), int(DEFAULT_IMAGE_TASK_QUEUE["timeout_pending_poll_secs"]), 5),
         "timeout_pending_max_attempts": _normalize_positive_int(source.get("timeout_pending_max_attempts"), int(DEFAULT_IMAGE_TASK_QUEUE["timeout_pending_max_attempts"]), 1),
@@ -889,12 +895,26 @@ class ConfigStore:
             return 120.0
 
     @property
+    def newapi_image_sync_wait_timeout_secs(self) -> float:
+        try:
+            return max(60.0, min(900.0, float(self.data.get("newapi_image_sync_wait_timeout_secs", 540.0))))
+        except (TypeError, ValueError):
+            return 540.0
+
+    @property
+    def newapi_image_sync_poll_interval_secs(self) -> float:
+        try:
+            return max(0.2, min(10.0, float(self.data.get("newapi_image_sync_poll_interval_secs", 1.5))))
+        except (TypeError, ValueError):
+            return 1.5
+
+    @property
     def image_return_window_size(self) -> int:
         """同时进入“下载图片 + b64/url 组装”回传窗口的最大图片数；0 表示不限制。"""
         try:
-            return max(0, min(200, int(self.data.get("image_return_window_size", 20))))
+            return max(0, min(200, int(self.data.get("image_return_window_size", 3))))
         except (TypeError, ValueError):
-            return 20
+            return 3
 
     @property
     def image_return_window_timeout_secs(self) -> float:

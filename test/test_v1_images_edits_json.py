@@ -21,15 +21,15 @@ class ImageEditsJsonApiTests(unittest.TestCase):
     def setUp(self):
         self.calls = []
 
-        def fake_handle(payload):
-            self.calls.append(payload)
+        def fake_run_edit_sync(identity, **kwargs):
+            self.calls.append(kwargs)
             return {"created": 1, "data": [{"b64_json": "ZmFrZQ=="}]}
 
-        self.handle_patcher = mock.patch.object(ai_module.openai_v1_image_edit, "handle", fake_handle)
+        self.sync_patcher = mock.patch.object(ai_module, "run_edit_sync", fake_run_edit_sync)
         self.filter_patcher = mock.patch.object(ai_module, "filter_or_log", mock.AsyncMock())
-        self.handle_patcher.start()
+        self.sync_patcher.start()
         self.filter_patcher.start()
-        self.addCleanup(self.handle_patcher.stop)
+        self.addCleanup(self.sync_patcher.stop)
         self.addCleanup(self.filter_patcher.stop)
 
         app = FastAPI()

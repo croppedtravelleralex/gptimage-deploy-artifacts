@@ -19,6 +19,9 @@ from services.register import mail_provider, openai_register
 
 REGISTER_FILE = DATA_DIR / "register.json"
 STOP_DETACH_AFTER_SECONDS = 90.0
+REGISTER_TRANSIENT_COOLDOWN_MAX_SECONDS = 5
+REGISTER_TRANSIENT_DEGRADE_STREAK = 5
+REGISTER_TRANSIENT_DEGRADED_MIN_WORKERS = 5
 
 
 def _serialize_outlook_pool(credentials: list[dict]) -> str:
@@ -377,13 +380,26 @@ class RegisterService:
         futures = set()
         stop_seen_at: float | None = None
         detached = False
+        last_effective_threads = threads
         try:
             while True:
                 cfg = self.get()
+                effective_threads = threads
+                if transient_streak >= REGISTER_TRANSIENT_DEGRADE_STREAK:
+                    effective_threads = max(REGISTER_TRANSIENT_DEGRADED_MIN_WORKERS, threads // 2)
+                if effective_threads != last_effective_threads:
+                    if effective_threads < threads:
+                        self._append_log(
+                            f"检测到连续网络/代理瞬断，临时降并发 {threads}->{effective_threads}，避免把 40080/WARP 打穿",
+                            "yellow",
+                        )
+                    else:
+                        self._append_log(f"网络/代理瞬断缓解，恢复注册并发 {threads}", "green")
+                    last_effective_threads = effective_threads
                 while (
                     self.get()["enabled"]
                     and not self._target_reached(cfg, submitted)
-                    and len(futures) < threads
+                    and len(futures) < effective_threads
                 ):
                     submitted += 1
                     futures.add(executor.submit(openai_register.worker, submitted))
@@ -421,7 +437,7 @@ class RegisterService:
                             fail += 1
                             transient += 1
                             transient_streak += 1
-                            cooldown_seconds = max(cooldown_seconds, min(60, 5 * transient_streak))
+                            cooldown_seconds = max(cooldown_seconds, min(REGISTER_TRANSIENT_COOLDOWN_MAX_SECONDS, 5 * transient_streak))
                         else:
                             done += 1
                             fail += 1
@@ -432,7 +448,7 @@ class RegisterService:
                         fail += 1
                         transient_streak = 0
                 if cooldown_seconds and self.get()["enabled"]:
-                    self._append_log(f"检测到连续网络/代理瞬断，冷却 {cooldown_seconds}s 后继续，避免把瞬断刷成失败", "yellow")
+                    self._append_log(f"检测到连续网络/代理瞬断，短冷却 {cooldown_seconds}s 后继续，避免全局长冷却打掉吞吐", "yellow")
                     time.sleep(cooldown_seconds)
         finally:
             executor.shutdown(wait=not detached, cancel_futures=True)

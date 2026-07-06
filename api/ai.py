@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from api.image_inputs import parse_image_edit_request, read_image_sources
+from api.image_inputs import parse_image_edit_request, read_image_sources, read_image_sources_with_asset_ids
 from api.support import require_identity, resolve_image_base_url
 from services.content_filter import check_request, request_shape, request_text
 from services.editable_file_task_service import editable_file_task_service
-from services.log_service import LoggedCall
+from services.image_sync_adapter import run_edit_sync, run_generation_sync
+from services.image_task_service import ImageTaskQueueFullError, ImageTaskWaitTimeoutError
+from services.log_service import LoggedCall, _image_error_response
 from services.protocol import (
     anthropic_v1_messages,
     openai_v1_chat_complete,
@@ -77,6 +79,40 @@ async def filter_or_log(call: LoggedCall, text: str) -> None:
         raise
 
 
+async def _run_image_sync_call(call: LoggedCall, runner, **kwargs):
+    try:
+        result = await run_in_threadpool(runner, call.identity, **kwargs)
+        call.log("调用完成", result)
+        return result
+    except ImageTaskQueueFullError as exc:
+        call.log("调用失败", status="failed", error=str(exc))
+        raise HTTPException(
+            status_code=429,
+            detail={"error": str(exc)},
+            headers={"Retry-After": "5"},
+        ) from exc
+    except ImageTaskWaitTimeoutError as exc:
+        call.log(
+            "调用超时",
+            status="timeout_pending",
+            error=str(exc),
+        )
+        return JSONResponse(
+            status_code=504,
+            content={
+                "error": {
+                    "message": str(exc),
+                    "type": "image_task_timeout",
+                    "code": "image_task_timeout",
+                    "task_id": exc.task_id,
+                }
+            },
+        )
+    except Exception as exc:
+        call.log("调用失败", status="failed", error=str(exc))
+        return _image_error_response(exc)
+
+
 def create_router() -> APIRouter:
     router = APIRouter()
 
@@ -99,7 +135,19 @@ def create_router() -> APIRouter:
         payload["base_url"] = resolve_image_base_url(request)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
         await filter_or_log(call, body.prompt)
-        return await call.run(openai_v1_image_generations.handle, payload)
+        if body.stream:
+            return await call.run(openai_v1_image_generations.handle, payload)
+        return await _run_image_sync_call(
+            call,
+            run_generation_sync,
+            prompt=body.prompt,
+            model=body.model,
+            size=body.size,
+            quality=body.quality,
+            response_format=body.response_format,
+            base_url=payload["base_url"],
+            n=body.n,
+        )
 
     @router.post("/v1/images/edits")
     async def edit_images(
@@ -112,11 +160,36 @@ def create_router() -> APIRouter:
         model = str(payload["model"])
         call = LoggedCall(identity, "/v1/images/edits", model, "图生图", request_text=prompt)
         await filter_or_log(call, prompt)
-        payload["images"] = await read_image_sources(image_sources)
+        asset_ids = [str(item).strip() for item in (payload.get("asset_ids") or []) if str(item).strip()]
+        if image_sources:
+            images, asset_ids_from_images = await read_image_sources_with_asset_ids(image_sources)
+            payload["images"] = images
+            asset_ids = list(dict.fromkeys([*asset_ids, *asset_ids_from_images]))
+        elif asset_ids:
+            payload["images"] = []
+        else:
+            payload["images"] = await read_image_sources(image_sources)
         if mask_sources:
             payload["mask"] = await read_image_sources(mask_sources)
         payload["base_url"] = resolve_image_base_url(request)
-        return await call.run(openai_v1_image_edit.handle, payload)
+        if payload.get("stream"):
+            if asset_ids:
+                raise HTTPException(status_code=400, detail={"error": "asset_ids are not supported for stream image edits"})
+            return await call.run(openai_v1_image_edit.handle, payload)
+        return await _run_image_sync_call(
+            call,
+            run_edit_sync,
+            prompt=prompt,
+            model=model,
+            size=payload.get("size"),
+            quality=str(payload.get("quality") or "auto"),
+            response_format=str(payload.get("response_format") or "b64_json"),
+            base_url=payload["base_url"],
+            images=payload["images"],
+            masks=payload.get("mask") or None,
+            image_asset_ids=asset_ids,
+            n=int(payload.get("n") or 1),
+        )
 
     @router.post("/v1/chat/completions")
     async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):

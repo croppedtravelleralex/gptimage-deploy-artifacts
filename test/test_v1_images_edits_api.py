@@ -19,11 +19,11 @@ class ImagesEditsApiTests(unittest.TestCase):
     def setUp(self):
         self.handle_calls = []
 
-        def fake_handle(payload):
-            self.handle_calls.append(payload)
+        def fake_run_edit_sync(identity, **kwargs):
+            self.handle_calls.append(kwargs)
             return {"created": 1, "data": [{"b64_json": base64.b64encode(b"out").decode("ascii")}]}
 
-        self.handler_patcher = mock.patch.object(ai_module.openai_v1_image_edit, "handle", fake_handle)
+        self.handler_patcher = mock.patch.object(ai_module, "run_edit_sync", fake_run_edit_sync)
         self.handler_patcher.start()
         self.addCleanup(self.handler_patcher.stop)
         self.identity_patcher = mock.patch.object(
@@ -57,6 +57,47 @@ class ImagesEditsApiTests(unittest.TestCase):
         self.assertEqual(payload["prompt"], "edit")
         self.assertEqual(payload["n"], 1)
         self.assertEqual(payload["images"], [(PNG_BYTES, "image_1.png", "image/png")])
+        self.assertEqual(payload["image_asset_ids"], [])
+
+    def test_edit_accepts_asset_ids_without_image_file(self):
+        """测试 NewAPI 小请求可只带 Panda reference asset id，不再强制 multipart 大图。"""
+        response = self.client.post(
+            "/v1/images/edits",
+            headers=AUTH_HEADERS,
+            json={
+                "model": "gpt-image-2",
+                "prompt": "edit asset",
+                "asset_ids": ["asset-a", "asset-b"],
+                "response_format": "url",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = self.handle_calls[0]
+        self.assertEqual(payload["prompt"], "edit asset")
+        self.assertEqual(payload["images"], [])
+        self.assertEqual(payload["image_asset_ids"], ["asset-a", "asset-b"])
+
+    def test_edit_accepts_asset_pointer_image_file(self):
+        """测试 NewAPI 必填 image 文件可用 Panda asset 指针小文件替代。"""
+        response = self.client.post(
+            "/v1/images/edits",
+            headers=AUTH_HEADERS,
+            data={
+                "model": "gpt-image-2",
+                "prompt": "edit pointer asset",
+                "response_format": "url",
+            },
+            files={
+                "image": ("asset.txt", b"panda-asset://asset-a,asset-b", "text/plain"),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = self.handle_calls[0]
+        self.assertEqual(payload["prompt"], "edit pointer asset")
+        self.assertEqual(payload["images"], [])
+        self.assertEqual(payload["image_asset_ids"], ["asset-a", "asset-b"])
 
     def test_edit_rejects_file_id_reference(self):
         """测试图片编辑接口对暂不支持的 file_id 返回明确错误。"""

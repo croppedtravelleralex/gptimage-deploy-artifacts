@@ -869,7 +869,13 @@ class TempMailLolProvider(BaseMailProvider):
                 payload["prefix"] = _random_mailbox_name()
         if username and "prefix" not in payload:
             payload["prefix"] = username
-        data = self._request("POST", "/inbox/create", payload=payload, expected=(200, 201))
+        _reserve_tempmail_lol_create_slot(self.create_min_interval_sec)
+        try:
+            data = self._request("POST", "/inbox/create", payload=payload, expected=(200, 201))
+        except Exception as exc:
+            if "429" in str(exc) or "rate limited" in str(exc).lower():
+                _note_tempmail_lol_rate_limit(self.rate_limit_backoff_sec)
+            raise
         address = str(data.get("address") or "").strip()
         token = str(data.get("token") or "").strip()
         if not address or not token:

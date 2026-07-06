@@ -16,7 +16,7 @@
 4. `07-account-pool-performance-upgrade.md`：账号池与性能升级落地方案
 5. `sync-strategy.md`：Panda 同步、水位线与公网入口保护
 6. `performance-acceptance-test-plan.md`：多轮测试与验收计划
-7. `08-image-pipeline-newapi-async-plan.md`：IMG-012 NewAPI 同步入口内部异步化与多阶段传输流水线待办方案
+7. `08-image-pipeline-newapi-async-plan.md`：IMG-012 方案与实施状态（§13：busy_6=0 已验收，24 路成功率待修 NewAPI 传输层）
 8. `01-project-charter.md`：项目长期目标和边界
 9. `03-roadmap.md`：近期 / 中期 / 远期路线图
 10. `04-improvement-backlog.md`：长期改进池
@@ -33,7 +33,7 @@
 - `07-account-pool-performance-upgrade.md`：账号池、本地 SQLite、Panda SQLite、maintenance、b64 回传落地设计
 - `sync-strategy.md`：Panda 水位线、动态公网 IP 同步保护、HMAC、幂等和限频
 - `performance-acceptance-test-plan.md`：优化完成后的多轮测试、压测和验收标准
-- `08-image-pipeline-newapi-async-plan.md`：IMG-012 NewAPI sync-over-async、6/burst8 和多阶段带宽窗口方案
+- `08-image-pipeline-newapi-async-plan.md`：IMG-012 sync-over-async（已部署 Panda；§13 实施状态与压测结果）
 - `quota-semantics.md`：**额度三态规范**（真无限额 / 未知 / 数值）
 - `deployment.md`：部署与升级（含 Panda 生产热更新）
 - `logs/YYYY/YYYY-MM.md`：每月工作记录

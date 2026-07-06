@@ -30,6 +30,16 @@ class ImageTaskQueueFullError(RuntimeError):
     """异步生图队列已满或被熔断保护暂停。"""
 
 
+class ImageTaskWaitTimeoutError(TimeoutError):
+    """同步等待图片任务结果超时；任务仍在后台队列中继续执行。"""
+
+    def __init__(self, task_id: str, task: dict[str, Any]):
+        self.task_id = task_id
+        self.task = task
+        status = _clean(task.get("status"), "unknown")
+        super().__init__(f"image task wait timeout: {task_id} (status={status})")
+
+
 def _now_iso() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -308,17 +318,20 @@ class ImageTaskService:
         size: str | None,
         quality: str = "auto",
         base_url: str = "",
+        response_format: str = "url",
+        n: int = 1,
     ) -> dict[str, Any]:
         payload = {
             "prompt": prompt,
             "model": model,
-            "n": 1,
+            "n": max(1, min(4, int(n or 1))),
             "size": size,
             "quality": quality,
-            "response_format": "url",
+            "response_format": _clean(response_format, "url"),
             "base_url": base_url,
             "poll_timeout_secs": float(config.image_generation_poll_timeout_secs),
             "resume_timeout_secs": float(self.timeout_pending_poll_secs_getter()),
+            "queue_coordinated": True,
         }
         return self._submit(identity, client_task_id=client_task_id, mode="generate", payload=payload)
 
@@ -336,6 +349,8 @@ class ImageTaskService:
         masks: list[tuple[bytes, str, str]] | None = None,
         image_asset_ids: list[str] | None = None,
         mask_asset_ids: list[str] | None = None,
+        response_format: str = "url",
+        n: int = 1,
     ) -> dict[str, Any]:
         payload = {
             "prompt": prompt,
@@ -344,10 +359,10 @@ class ImageTaskService:
             "image_asset_ids": image_asset_ids or [],
             "mask_asset_ids": mask_asset_ids or [],
             "model": model,
-            "n": 1,
+            "n": max(1, min(4, int(n or 1))),
             "size": size,
             "quality": quality,
-            "response_format": "url",
+            "response_format": _clean(response_format, "url"),
             "base_url": base_url,
         }
         reference_count = len(payload["images"]) + len(payload["image_asset_ids"])
@@ -357,7 +372,45 @@ class ImageTaskService:
             else config.image_edit_poll_timeout_secs
         )
         payload["resume_timeout_secs"] = float(self.timeout_pending_poll_secs_getter())
+        payload["queue_coordinated"] = True
         return self._submit(identity, client_task_id=client_task_id, mode="edit", payload=payload)
+
+    def wait_for_result(
+        self,
+        identity: dict[str, object],
+        task_id: str,
+        *,
+        timeout_secs: float | None = None,
+        poll_interval_secs: float | None = None,
+    ) -> dict[str, Any]:
+        owner = _owner_id(identity)
+        task_id = _clean(task_id)
+        if not task_id:
+            raise ValueError("task_id is required")
+        key = _task_key(owner, task_id)
+        try:
+            wait_timeout = max(0.05, min(900.0, float(timeout_secs if timeout_secs is not None else 540.0)))
+        except Exception:
+            wait_timeout = 540.0
+        try:
+            poll_interval = max(0.2, min(10.0, float(poll_interval_secs if poll_interval_secs is not None else 1.5)))
+        except Exception:
+            poll_interval = 1.5
+        deadline = time.time() + wait_timeout
+        with self._condition:
+            while True:
+                if self._cleanup_locked():
+                    self._save_locked()
+                task = self._tasks.get(key)
+                if task is None:
+                    raise KeyError(f"image task not found: {task_id}")
+                status = _clean(task.get("status"))
+                if status in TERMINAL_STATUSES:
+                    return _public_task(task)
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise ImageTaskWaitTimeoutError(task_id, _public_task(task))
+                self._condition.wait(timeout=min(poll_interval, max(0.05, remaining)))
 
     def list_tasks(self, identity: dict[str, object], task_ids: list[str]) -> dict[str, Any]:
         owner = _owner_id(identity)
@@ -551,13 +604,41 @@ class ImageTaskService:
     def _owner_running_count_locked(self, owner: str) -> int:
         return sum(1 for task in self._tasks.values() if task.get("owner_id") == owner and task.get("status") == TASK_STATUS_RUNNING)
 
+    def _effective_per_user_running_max_locked(self) -> int:
+        settings = self._queue_settings()
+        try:
+            base = max(1, int(settings.get("per_user_running_base") or settings.get("per_user_running_max") or 6))
+        except Exception:
+            base = 6
+        try:
+            burst = max(base, int(settings.get("per_user_running_burst") or 8))
+        except Exception:
+            burst = max(base, 8)
+        if not bool(settings.get("burst_enabled")):
+            return base
+        queued_count = sum(1 for task in self._tasks.values() if task.get("status") == TASK_STATUS_QUEUED)
+        try:
+            stats = account_service.get_image_candidate_runtime_stats()
+        except Exception:
+            return base
+        dispatchable = int(stats.get("dispatchable_candidate_count") or 0)
+        preflight_backoff = int(stats.get("preflight_backoff_count") or 0)
+        inflight = int(stats.get("image_inflight_count") or 0)
+        if self._deadlock_guard_tripped_locked():
+            return base
+        if (
+            queued_count >= 6
+            and dispatchable >= 80
+            and preflight_backoff == 0
+            and inflight < burst
+        ):
+            return burst
+        return base
+
     def _next_submit_task_locked(self) -> tuple[str, str, dict[str, Any], dict[str, object], str] | None:
         if self._deadlock_guard_tripped_locked():
             return None
-        try:
-            per_user_running_max = max(1, int(self.per_user_running_max_getter()))
-        except Exception:
-            per_user_running_max = 2
+        per_user_running_max = self._effective_per_user_running_max_locked()
         candidates = sorted(
             ((key, task) for key, task in self._tasks.items() if task.get("status") == TASK_STATUS_QUEUED),
             key=lambda item: float(item[1].get("created_ts") or 0.0),
@@ -794,9 +875,95 @@ class ImageTaskService:
                     self._condition.wait(timeout=1.0)
                     continue
             key, conversation_id, timeout_secs, identity, mode, model, access_token = run_args
-            self._run_resume_poll(key, conversation_id, timeout_secs, identity, mode, model, access_token=access_token)
+            self._run_resume_poll_with_hard_timeout(
+                key,
+                conversation_id,
+                timeout_secs,
+                identity,
+                mode,
+                model,
+                access_token=access_token,
+            )
             with self._condition:
                 self._condition.notify_all()
+
+    def _resume_poll_hard_timeout_secs(self, timeout_secs: float) -> float:
+        try:
+            base_timeout = max(5.0, float(timeout_secs))
+        except Exception:
+            base_timeout = float(self.timeout_pending_poll_secs_getter())
+        # backend._poll_image_results already has its own timeout.  The extra
+        # margin covers final URL resolving/download, but prevents a resume
+        # worker from staying "running" indefinitely after a public sync caller
+        # has already hit Cloudflare/NewAPI timeout.
+        return max(10.0, min(900.0, base_timeout + 60.0))
+
+    def _run_resume_poll_with_hard_timeout(
+        self,
+        key: str,
+        conversation_id: str,
+        timeout_secs: float,
+        identity: dict[str, object],
+        mode: str,
+        model: str,
+        *,
+        access_token: str = "",
+    ) -> None:
+        started = time.time()
+        finished = threading.Event()
+
+        def runner() -> None:
+            try:
+                self._run_resume_poll(
+                    key,
+                    conversation_id,
+                    timeout_secs,
+                    identity,
+                    mode,
+                    model,
+                    access_token=access_token,
+                )
+            finally:
+                finished.set()
+
+        thread = threading.Thread(target=runner, name=f"image-resume-poll-{key.replace(':', '-')}", daemon=True)
+        thread.start()
+        hard_timeout_secs = self._resume_poll_hard_timeout_secs(timeout_secs)
+        if finished.wait(timeout=hard_timeout_secs):
+            return
+
+        error_message = f"image resume poll hard timeout ({hard_timeout_secs:.1f}s); conversation_id={conversation_id}"
+        with self._condition:
+            task = self._tasks.get(key)
+            attempts = int(task.get("resume_attempts") or 0) if task else 0
+            try:
+                max_attempts = max(1, int(self.timeout_pending_max_attempts_getter()))
+            except Exception:
+                max_attempts = 3
+            if task and attempts < max_attempts:
+                task.update(
+                    status=TASK_STATUS_TIMEOUT_PENDING,
+                    progress="timeout_pending",
+                    error=error_message,
+                    data=[],
+                    duration_ms=int((time.time() - started) * 1000),
+                    next_resume_ts=time.time() + min(300.0, 30.0 * max(1, attempts)),
+                    updated_at=_now_iso(),
+                    updated_ts=time.time(),
+                )
+                self._save_task_locked(key)
+                self._condition.notify_all()
+                self._log_call(identity, mode, model, started, "续轮询硬超时待重试", status="timeout_pending", error=error_message)
+                return
+        self._update_task(
+            key,
+            status=TASK_STATUS_ERROR,
+            progress="failed",
+            error=error_message,
+            data=[],
+            duration_ms=int((time.time() - started) * 1000),
+        )
+        self._log_call(identity, mode, model, started, "续轮询硬超时", status="failed", error=error_message)
 
     def resume_poll(self, identity: dict[str, object], task_id: str, extra_timeout_secs: float = 30.0) -> dict[str, Any]:
         """把超时任务放回 timeout_pending 队列，后台继续轮询原 conversation_id。"""

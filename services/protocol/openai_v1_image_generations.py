@@ -36,6 +36,7 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
         message_as_error=True,
         progress_callback=progress_callback,
         poll_timeout_secs=poll_timeout_secs,
+        queue_coordinated=bool(body.get("queue_coordinated")),
     ))
     if body.get("stream"):
         return stream_image_chunks(outputs)

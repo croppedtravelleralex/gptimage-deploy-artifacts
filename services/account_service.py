@@ -834,7 +834,7 @@ class AccountService:
     def _login_with_password(self, email: str, password: str) -> dict:
         """通过邮箱+密码登录，返回 {access_token, refresh_token, id_token, ...}"""
         from curl_cffi import requests
-        
+
         # 常量
         auth_base = "https://auth.openai.com"
         platform_oauth_audience = "https://api.openai.com/v1"
@@ -842,7 +842,7 @@ class AccountService:
         platform_oauth_client_id = self._OAUTH_CLIENT_ID
         platform_oauth_redirect_uri = "https://platform.openai.com/auth/callback"
         user_agent = self._OAUTH_USER_AGENT
-        
+
         from services.proxy_service import proxy_settings
 
         # 创建 session：OpenAI 登录/换 token 链路不能直连，必须走 upstream 代理运行时。
@@ -851,16 +851,16 @@ class AccountService:
             verify=False,
             upstream=True,
         ))
-        
+
         try:
             device_id = str(uuid.uuid4())
-            
+
             # ─── 方式2: OAuth authorize 流程 ──────────────────────────
             # 使用 Platform Client + PKCE（与注册流程相同）
-            
+
             from utils.pkce import generate_pkce
             code_verifier, code_challenge = generate_pkce()
-            
+
             # ② 发起 OAuth authorize 请求 (使用 Platform Client + PKCE)
             session.cookies.set("oai-did", device_id, domain=".auth.openai.com")
             session.cookies.set("oai-did", device_id, domain="auth.openai.com")
@@ -902,10 +902,10 @@ class AccountService:
                 allow_redirects=True,
                 timeout=30,
             )
-            
+
             if resp.status_code not in (200, 302):
                 return {"ok": False, "error": f"authorize_failed_{resp.status_code}", "detail": {"url": resp.url, "text": resp.text[:500]}}
-            
+
             # 检测最终 URL 是否指向错误页面
             final_url = str(resp.url)
             if "/error" in final_url and "payload=" in final_url:
@@ -922,7 +922,7 @@ class AccountService:
                         return {"ok": False, "error": f"authorize_error_{error_code}", "detail": error_payload}
                 except Exception as e:
                     return {"ok": False, "error": "authorize_redirect_error", "detail": {"url": final_url, "parse_error": str(e)}}
-            
+
             # ③ 提交密码验证
             login_headers = {
                 "accept": "application/json",
@@ -940,7 +940,7 @@ class AccountService:
                 "referer": f"{auth_base}/email-verification",
                 "oai-device-id": device_id,
             }
-            
+
             # 添加 sentinel token
             try:
                 from utils.sentinel import build_sentinel_token
@@ -950,20 +950,20 @@ class AccountService:
                     session.cookies.set("oai-sc", oai_sc_val, domain=".openai.com")
             except Exception:
                 pass
-            
+
             login_resp = session.post(
                 f"{auth_base}/api/accounts/password/verify",
                 headers=login_headers,
                 json={"password": password},
                 timeout=30,
             )
-            
+
             login_data = {}
             try:
                 login_data = login_resp.json() if login_resp.text else {}
             except Exception:
                 pass
-            
+
             if login_resp.status_code != 200:
                 error_code = login_data.get("error", {}).get("code", "")
                 error_msg = login_data.get("error", {}).get("message", "")
@@ -974,7 +974,7 @@ class AccountService:
                 elif "Invalid credentials" in error_msg or "wrong password" in error_msg.lower():
                     return {"ok": False, "error": "invalid_password", "detail": login_data}
                 return {"ok": False, "error": f"password_verify_failed_{login_resp.status_code}", "detail": login_data}
-            
+
             # 获取 authorization code
             continue_url = str(login_data.get("continue_url") or "").strip()
             auth_code = ""
@@ -982,20 +982,20 @@ class AccountService:
                 from urllib.parse import parse_qs, urlparse
                 parsed_params = parse_qs(urlparse(continue_url).query)
                 auth_code = str((parsed_params.get("code") or [""])[0]).strip()
-            
+
             # ─── 处理邮箱 OTP 验证 ──────────────────────────
             if not auth_code:
                 page_type = ""
                 page_info = login_data.get("page")
                 if isinstance(page_info, dict):
                     page_type = str(page_info.get("type") or "")
-                
+
                 if page_type == "email_otp_verification":
                     # 需要验证码才能登录，直接标记为账号异常
                     return {"ok": False, "error": "need_verification_code", "detail": login_data}
                 else:
                     return {"ok": False, "error": "no_auth_code", "detail": login_data}
-            
+
             # ④ 用 code 换 token (使用 Platform Client + code_verifier，与注册流程相同)
             platform_base = "https://platform.openai.com"
             token_resp = session.post(
@@ -1028,20 +1028,20 @@ class AccountService:
                 verify=False,
                 timeout=60,
             )
-            
+
             token_data = {}
             try:
                 token_data = token_resp.json() if token_resp.text else {}
             except Exception:
                 pass
-            
+
             if token_resp.status_code != 200 or not token_data.get("access_token"):
                 return {"ok": False, "error": "token_exchange_failed", "detail": token_data}
-            
+
             access_token = str(token_data.get("access_token") or "").strip()
             refresh_token = str(token_data.get("refresh_token") or "").strip()
             id_token = str(token_data.get("id_token") or "").strip()
-            
+
             # ⑤ 用 access_token 获取用户信息
             user_info = {}
             try:
@@ -1058,15 +1058,15 @@ class AccountService:
                     user_info = me_resp.json() if me_resp.text else {}
             except Exception:
                 pass
-            
+
             # 解析 JWT payload
             jwt_payload = self._decode_jwt_payload(access_token)
-            
+
             email_from_jwt = str(jwt_payload.get("https://api.openai.com/profile", {}).get("email") or "").strip()
             account_id_from_jwt = str(
                 jwt_payload.get("https://api.openai.com/auth", {}).get("chatgpt_account_id") or ""
             ).strip()
-            
+
             account_info = user_info.get("account") if isinstance(user_info.get("account"), dict) else {}
             result = {
                 "ok": True,
@@ -1078,9 +1078,9 @@ class AccountService:
                 "expires_at": jwt_payload.get("exp"),
                 "source_type": "password",
             }
-            
+
             return result
-        
+
         finally:
             session.close()
 
@@ -1256,12 +1256,17 @@ class AccountService:
             plan_type: str | None = None,
             source_type: str | None = None,
             plan_types: set[str] | tuple[str, ...] | None = None,
+            skip_global_limit: bool = False,
     ) -> str:
         with self._image_slot_condition:
             queue_started_at = time.monotonic()
             while True:
                 global_limit = int(config.image_global_concurrency or 0)
-                if global_limit > 0 and self._total_image_inflight_locked() >= global_limit:
+                if (
+                        not skip_global_limit
+                        and global_limit > 0
+                        and self._total_image_inflight_locked() >= global_limit
+                ):
                     queue_timeout = float(config.image_global_queue_timeout_secs or 0.0)
                     if queue_timeout <= 0 or time.monotonic() - queue_started_at >= queue_timeout:
                         raise RuntimeError(
@@ -1299,6 +1304,7 @@ class AccountService:
             plan_type: str | None = None,
             source_type: str | None = None,
             plan_types: set[str] | tuple[str, ...] | None = None,
+            skip_global_limit: bool = False,
     ) -> str:
         """从候选池中获取一个可用的图片生图 token。
 
@@ -1318,6 +1324,7 @@ class AccountService:
                 plan_type=plan_type,
                 source_type=source_type,
                 plan_types=plan_types,
+                skip_global_limit=skip_global_limit,
             )
             attempted_tokens.add(access_token)
             local_account = self.get_account(access_token)
