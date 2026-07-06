@@ -352,6 +352,14 @@ class AccountService:
             token = self._resolve_access_token_locked(access_token)
             self._image_preflight_failed_until.pop(token, None)
 
+    def record_image_transient_backoff(self, access_token: str, error: object) -> None:
+        """把上游生图瞬断账号短期移出候选面。
+
+        这里只复用内存态 preflight backoff，不删除账号、不写库；目标是在
+        ChatGPT 上游连接 timeout / reset 时避免同一个 token 立刻被重复调度。
+        """
+        self._record_image_preflight_failure(access_token, error)
+
     @classmethod
     def _account_matches_plan_type(cls, account: dict, plan_type: str | None = None) -> bool:
         if not plan_type:

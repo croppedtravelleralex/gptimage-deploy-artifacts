@@ -235,6 +235,8 @@ class OpenAIBackendAPI:
         self.pow_script_sources: list[str] = []
         self.pow_data_build = ""
         self.progress_callback: Callable[[str], None] | None = None
+        self._progress_started_at = time.time()
+        self._progress_last_at = self._progress_started_at
         self.session = requests.Session(**proxy_settings.build_session_kwargs(
             account=self.account,
             impersonate=self.fp["impersonate"],
@@ -2663,6 +2665,17 @@ class OpenAIBackendAPI:
 
     def _report_progress(self, step: str) -> None:
         """Report progress step to the callback if set."""
+        now = time.time()
+        try:
+            logger.info({
+                "event": "image_upstream_phase",
+                "phase": str(step or ""),
+                "elapsed_ms": int((now - self._progress_started_at) * 1000),
+                "since_last_ms": int((now - self._progress_last_at) * 1000),
+            })
+        except Exception:
+            pass
+        self._progress_last_at = now
         if self.progress_callback:
             try:
                 self.progress_callback(step)

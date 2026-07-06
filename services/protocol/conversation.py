@@ -1587,6 +1587,10 @@ def _generate_single_image(
             if not emitted_for_token and is_pre_conversation_transient_error(last_error):
                 pre_conversation_transient_count += 1
                 max_attempts = max(1, int(config.image_pre_conversation_max_attempts))
+                try:
+                    account_service.record_image_transient_backoff(token, last_error)
+                except Exception:
+                    pass
                 if pre_conversation_transient_count < max_attempts:
                     wait_secs = max(0.0, float(config.image_pre_conversation_retry_backoff_secs))
                     logger.warning({

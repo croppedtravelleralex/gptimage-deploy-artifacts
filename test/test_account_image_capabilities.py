@@ -180,6 +180,29 @@ class AccountCapabilityTests(unittest.TestCase):
             self._restore_config("image_require_recent_quota_refresh", prev_required)
             self._restore_config("image_account_concurrency", prev_account_concurrency)
 
+    def test_transient_image_backoff_temporarily_removes_candidate(self) -> None:
+        prev_backoff = self._set_config("image_preflight_failure_backoff_sec", 60)
+        prev_required = self._set_config("image_require_recent_quota_refresh", False)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+                service.add_account_items([
+                    {"access_token": "token-a", "status": "正常", "quota": 5},
+                    {"access_token": "token-b", "status": "正常", "quota": 5},
+                ])
+
+                service.record_image_transient_backoff("token-a", "curl: (28) Operation timed out")
+
+                stats = service.get_stats()
+                self.assertEqual(stats["schedulable"], 2)
+                self.assertEqual(stats["preflight_backoff_count"], 1)
+                self.assertEqual(stats["ready_candidate_count"], 1)
+                self.assertEqual(stats["available_candidate_count"], 1)
+                self.assertEqual(service._list_ready_candidate_tokens(), ["token-b"])
+        finally:
+            self._restore_config("image_preflight_failure_backoff_sec", prev_backoff)
+            self._restore_config("image_require_recent_quota_refresh", prev_required)
+
     def test_imported_accounts_enter_panda_incoming_until_verified(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))

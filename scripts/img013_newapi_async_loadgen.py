@@ -51,6 +51,8 @@ HTTP2_ENABLED = os.getenv("IMG013_HTTP2", "1").strip().lower() in {"1", "true", 
 SUBMIT_WINDOW = max(1, int(os.getenv("IMG013_SUBMIT_WINDOW", str(STAGE))))
 ASSET_UPLOAD_WINDOW = max(1, int(os.getenv("IMG013_ASSET_UPLOAD_WINDOW", "6")))
 POLL_INTERVAL = max(1.0, float(os.getenv("IMG013_POLL_INTERVAL", "3")))
+POLL_INTERVAL_MAX = max(POLL_INTERVAL, float(os.getenv("IMG013_POLL_INTERVAL_MAX", "18")))
+POLL_INTERVAL_FACTOR = max(1.0, float(os.getenv("IMG013_POLL_INTERVAL_FACTOR", "1.35")))
 POLL_TIMEOUT = max(60.0, float(os.getenv("IMG013_POLL_TIMEOUT", "900")))
 CONNECT_TIMEOUT = float(os.getenv("IMG013_CONNECT_TIMEOUT", "30"))
 READ_TIMEOUT = float(os.getenv("IMG013_READ_TIMEOUT", "120"))
@@ -222,18 +224,27 @@ def upload_reference_assets(files: list[tuple[str, bytes, str]]) -> list[str]:
 
 def submit_task(task: dict[str, Any]) -> dict[str, Any]:
     started = time.time()
+    asset_upload_ms = 0.0
+    newapi_submit_ms = 0.0
+    submit_phase = "prepare"
     try:
         if task["kind"] == "generation":
+            submit_phase = "newapi_submit"
+            newapi_started = time.time()
             resp = CLIENT.post(
                 NEWAPI_BASE + task["endpoint"],
                 headers=NEWAPI_HEADERS,
                 json=task["json_body"],
             )
+            newapi_submit_ms = round((time.time() - newapi_started) * 1000, 2)
         else:
             data = dict(task["form_fields"])
             files = []
             if USE_PANDA_ASSETS and task.get("files"):
+                submit_phase = "asset_upload"
+                asset_started = time.time()
                 asset_ids = upload_reference_assets(task["files"])
+                asset_upload_ms = round((time.time() - asset_started) * 1000, 2)
                 data["asset_ids"] = ",".join(asset_ids)
                 for idx, asset_id in enumerate(asset_ids, start=1):
                     files.append(
@@ -248,12 +259,15 @@ def submit_task(task: dict[str, Any]) -> dict[str, Any]:
                     )
             else:
                 files = [("image", (filename, content, mime)) for filename, content, mime in task.get("files") or []]
+            submit_phase = "newapi_submit"
+            newapi_started = time.time()
             resp = CLIENT.post(
                 NEWAPI_BASE + task["endpoint"],
                 headers=NEWAPI_HEADERS,
                 data=data,
                 files=files or None,
             )
+            newapi_submit_ms = round((time.time() - newapi_started) * 1000, 2)
         elapsed_ms = round((time.time() - started) * 1000, 2)
         body = resp.json() if resp.content else {}
         task_id = str(body.get("task_id") or body.get("id") or "").strip() if isinstance(body, dict) else ""
@@ -262,6 +276,8 @@ def submit_task(task: dict[str, Any]) -> dict[str, Any]:
             "ok": bool(ok),
             "status_code": resp.status_code,
             "elapsed_ms": elapsed_ms,
+            "asset_upload_ms": asset_upload_ms,
+            "newapi_submit_ms": newapi_submit_ms,
             "kind": task["kind"],
             "client_task_id": task["client_task_id"],
             "task_id": task_id,
@@ -274,6 +290,9 @@ def submit_task(task: dict[str, Any]) -> dict[str, Any]:
         return {
             "ok": False,
             "elapsed_ms": round((time.time() - started) * 1000, 2),
+            "asset_upload_ms": asset_upload_ms,
+            "newapi_submit_ms": newapi_submit_ms,
+            "failed_phase": submit_phase,
             "kind": task.get("kind"),
             "client_task_id": task.get("client_task_id"),
             "error": repr(exc),
@@ -285,6 +304,7 @@ def submit_task(task: dict[str, Any]) -> dict[str, Any]:
 def poll_task(task_id: str) -> dict[str, Any]:
     started = time.time()
     attempts = 0
+    next_interval = POLL_INTERVAL
     last: dict[str, Any] = {}
     while time.time() - started < POLL_TIMEOUT:
         attempts += 1
@@ -308,6 +328,8 @@ def poll_task(task_id: str) -> dict[str, Any]:
                         "status": "success",
                         "elapsed_ms": round((time.time() - started) * 1000, 2),
                         "attempts": attempts,
+                        "poll_interval_initial_sec": POLL_INTERVAL,
+                        "poll_interval_max_sec": POLL_INTERVAL_MAX,
                         "data_count": len(body.get("data") or []),
                     }
                 panda_task = body.get("panda_task") if isinstance(body.get("panda_task"), dict) else {}
@@ -319,17 +341,22 @@ def poll_task(task_id: str) -> dict[str, Any]:
                         "status": "error",
                         "elapsed_ms": round((time.time() - started) * 1000, 2),
                         "attempts": attempts,
+                        "poll_interval_initial_sec": POLL_INTERVAL,
+                        "poll_interval_max_sec": POLL_INTERVAL_MAX,
                         "error": str(body.get("error") or panda_task.get("error") or "")[:1000],
                     }
         except Exception as exc:
             last = {"exception": repr(exc)}
-        time.sleep(POLL_INTERVAL)
+        time.sleep(next_interval)
+        next_interval = min(POLL_INTERVAL_MAX, max(POLL_INTERVAL, next_interval * POLL_INTERVAL_FACTOR))
     return {
         "ok": False,
         "task_id": task_id,
         "status": "poll_timeout",
         "elapsed_ms": round((time.time() - started) * 1000, 2),
         "attempts": attempts,
+        "poll_interval_initial_sec": POLL_INTERVAL,
+        "poll_interval_max_sec": POLL_INTERVAL_MAX,
         "last": last,
     }
 
@@ -358,7 +385,18 @@ def run_round(round_no: int) -> dict[str, Any]:
             poll_results.append(fut.result())
     post_health = panda_health()
     submit_elapsed = [float(item.get("elapsed_ms") or 0) for item in submit_results if item.get("elapsed_ms")]
+    asset_upload_elapsed = [
+        float(item.get("asset_upload_ms") or 0)
+        for item in submit_results
+        if float(item.get("asset_upload_ms") or 0) > 0
+    ]
+    newapi_submit_elapsed = [
+        float(item.get("newapi_submit_ms") or 0)
+        for item in submit_results
+        if float(item.get("newapi_submit_ms") or 0) > 0
+    ]
     final_elapsed = [float(item.get("elapsed_ms") or 0) for item in poll_results if item.get("elapsed_ms")]
+    poll_attempts = [int(item.get("attempts") or 0) for item in poll_results]
     summary = {
         "round": round_no,
         "run_id": run_id,
@@ -372,9 +410,18 @@ def run_round(round_no: int) -> dict[str, Any]:
         "submit_p50_ms": statistics.median(submit_elapsed) if submit_elapsed else None,
         "submit_p95_ms": percentile(submit_elapsed, 0.95),
         "submit_max_ms": max(submit_elapsed) if submit_elapsed else None,
+        "asset_upload_p50_ms": statistics.median(asset_upload_elapsed) if asset_upload_elapsed else None,
+        "asset_upload_p95_ms": percentile(asset_upload_elapsed, 0.95),
+        "asset_upload_max_ms": max(asset_upload_elapsed) if asset_upload_elapsed else None,
+        "newapi_submit_p50_ms": statistics.median(newapi_submit_elapsed) if newapi_submit_elapsed else None,
+        "newapi_submit_p95_ms": percentile(newapi_submit_elapsed, 0.95),
+        "newapi_submit_max_ms": max(newapi_submit_elapsed) if newapi_submit_elapsed else None,
         "final_p50_ms": statistics.median(final_elapsed) if final_elapsed else None,
         "final_p95_ms": percentile(final_elapsed, 0.95),
         "final_max_ms": max(final_elapsed) if final_elapsed else None,
+        "poll_attempts_total": sum(poll_attempts),
+        "poll_attempts_p50": statistics.median(poll_attempts) if poll_attempts else None,
+        "poll_attempts_p95": percentile([float(item) for item in poll_attempts], 0.95),
         "pre_health": pre_health,
         "post_health": post_health,
         "submit_results": submit_results,
@@ -402,7 +449,10 @@ def aggregate(rounds: list[dict[str, Any]]) -> dict[str, Any]:
         "final_success_total": final_success,
         "final_failed_total": final_failed,
         "submit_p95_ms_max": max([float(r.get("submit_p95_ms") or 0) for r in rounds] or [0]),
+        "asset_upload_p95_ms_max": max([float(r.get("asset_upload_p95_ms") or 0) for r in rounds] or [0]),
+        "newapi_submit_p95_ms_max": max([float(r.get("newapi_submit_p95_ms") or 0) for r in rounds] or [0]),
         "final_p95_ms_max": max([float(r.get("final_p95_ms") or 0) for r in rounds] or [0]),
+        "poll_attempts_total": sum(int(r.get("poll_attempts_total") or 0) for r in rounds),
         "duration_sec_max": max([float(r.get("duration_sec") or 0) for r in rounds] or [0]),
         "pass_single_round": requested >= STAGE and submit_ok >= STAGE and final_success >= STAGE - 1,
         "pass_70_72_three_rounds": requested >= 72 and submit_ok >= 72 and final_success >= 70,
@@ -415,7 +465,10 @@ def aggregate(rounds: list[dict[str, Any]]) -> dict[str, Any]:
                 "final_failed": r.get("final_failed"),
                 "duration_sec": r.get("duration_sec"),
                 "submit_p95_ms": r.get("submit_p95_ms"),
+                "asset_upload_p95_ms": r.get("asset_upload_p95_ms"),
+                "newapi_submit_p95_ms": r.get("newapi_submit_p95_ms"),
                 "final_p95_ms": r.get("final_p95_ms"),
+                "poll_attempts_total": r.get("poll_attempts_total"),
             }
             for r in rounds
         ],

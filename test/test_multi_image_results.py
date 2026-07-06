@@ -334,11 +334,13 @@ class MultiImageResultTests(unittest.TestCase):
             mock.patch("services.protocol.conversation.account_service.get_available_access_token", side_effect=lambda **_kw: next(token_iter)),
             mock.patch("services.protocol.conversation.account_service.get_account", return_value={}),
             mock.patch("services.protocol.conversation.account_service.mark_image_result"),
+            mock.patch("services.protocol.conversation.account_service.record_image_transient_backoff") as transient_backoff,
         ):
             with self.assertRaises(ImageGenerationError):
                 list(stream_image_outputs_with_pool(ConversationRequest(prompt="draw", model="gpt-image-2")))
 
         self.assertEqual(attempts, ["token-1", "token-2"])
+        self.assertEqual(transient_backoff.call_count, 2)
 
 
 if __name__ == "__main__":
