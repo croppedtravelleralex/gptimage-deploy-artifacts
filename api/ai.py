@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
@@ -9,8 +11,12 @@ from api.image_inputs import parse_image_edit_request, read_image_sources, read_
 from api.support import require_identity, resolve_image_base_url
 from services.content_filter import check_request, request_shape, request_text
 from services.editable_file_task_service import editable_file_task_service
-from services.image_sync_adapter import run_edit_sync, run_generation_sync
-from services.image_task_service import ImageTaskQueueFullError, ImageTaskWaitTimeoutError
+from services.image_sync_adapter import build_openai_image_response, new_client_task_id, run_edit_sync, run_generation_sync
+from services.image_task_service import (
+    ImageTaskQueueFullError,
+    ImageTaskWaitTimeoutError,
+    image_task_service,
+)
 from services.log_service import LoggedCall, _image_error_response
 from services.protocol import (
     anthropic_v1_messages,
@@ -22,8 +28,27 @@ from services.protocol import (
     openai_search,
 )
 
+PANDA_ASYNC_PROMPT_PREFIXES = ("panda-async:", "panda_async:")
+PANDA_TASK_PROMPT_PREFIXES = ("panda-task://", "panda_task://")
+
+
+def _parse_panda_prompt_tunnel(prompt: str) -> tuple[str, bool, str]:
+    text = str(prompt or "")
+    stripped = text.strip()
+    lowered = stripped.lower()
+    for prefix in PANDA_TASK_PROMPT_PREFIXES:
+        if lowered.startswith(prefix):
+            return "poll panda async image task", False, stripped[len(prefix):].strip()
+    for prefix in PANDA_ASYNC_PROMPT_PREFIXES:
+        if lowered.startswith(prefix):
+            clean_prompt = stripped[len(prefix):].strip()
+            return clean_prompt or text, True, ""
+    return text, False, ""
+
 
 class ImageGenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     prompt: str = Field(..., min_length=1)
     model: str = "gpt-image-2"
     n: int = Field(default=1, ge=1, le=4)
@@ -32,6 +57,9 @@ class ImageGenerationRequest(BaseModel):
     response_format: str = "b64_json"
     history_disabled: bool = True
     stream: bool | None = None
+    client_task_id: str | None = None
+    panda_async: bool | None = None
+    panda_task_id: str | None = None
 
 
 class ChatCompletionRequest(BaseModel):
@@ -113,6 +141,112 @@ async def _run_image_sync_call(call: LoggedCall, runner, **kwargs):
         return _image_error_response(exc)
 
 
+def _task_summary(task: dict[str, object]) -> dict[str, object]:
+    status = str(task.get("status") or "").strip()
+    data = task.get("data")
+    return {
+        "id": str(task.get("id") or task.get("task_id") or ""),
+        "task_id": str(task.get("id") or task.get("task_id") or ""),
+        "status": status,
+        "mode": str(task.get("mode") or ""),
+        "progress": str(task.get("progress") or ""),
+        "created_at": task.get("created_at"),
+        "updated_at": task.get("updated_at"),
+        "result_count": len(data) if isinstance(data, list) else 0,
+        "error": str(task.get("error") or ""),
+        "running_limit": task.get("running_limit"),
+        "accepted_limit": task.get("accepted_limit"),
+    }
+
+
+def _image_task_envelope(task: dict[str, object]) -> dict[str, object]:
+    summary = _task_summary(task)
+    payload: dict[str, object] = {
+        "created": int(time.time()),
+        "object": "image.task",
+        "id": summary["id"],
+        "task_id": summary["task_id"],
+        "status": summary["status"],
+        "mode": summary["mode"],
+        "progress": summary["progress"],
+        "data": [],
+        "panda_task": summary,
+    }
+    if summary.get("error"):
+        payload["error"] = {
+            "message": summary["error"],
+            "type": "image_task_error",
+            "code": "image_task_error",
+        }
+    return payload
+
+
+def _image_task_status_response(identity: dict[str, object], task_id: str) -> dict[str, object]:
+    task_id = str(task_id or "").strip()
+    if not task_id:
+        raise ValueError("panda_task_id is required")
+    result = image_task_service.list_tasks(identity, [task_id])
+    items = result.get("items") if isinstance(result, dict) else None
+    task = items[0] if isinstance(items, list) and items else None
+    if not isinstance(task, dict):
+        raise KeyError(f"image task not found: {task_id}")
+    if str(task.get("status") or "") == "success":
+        response = build_openai_image_response(task)
+        response["task_id"] = task_id
+        response["panda_task"] = _task_summary(task)
+        return response
+    return _image_task_envelope(task)
+
+
+async def _run_image_task_status_call(call: LoggedCall, identity: dict[str, object], task_id: str):
+    try:
+        result = await run_in_threadpool(_image_task_status_response, identity, task_id)
+        call.log("任务状态查询完成", result)
+        return result
+    except KeyError as exc:
+        call.log("任务状态查询失败", status="failed", error=str(exc))
+        raise HTTPException(status_code=404, detail={"error": str(exc)}) from exc
+    except ValueError as exc:
+        call.log("任务状态查询失败", status="failed", error=str(exc))
+        raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+
+
+async def _run_generation_async_submit_call(call: LoggedCall, identity: dict[str, object], **kwargs):
+    try:
+        task = await run_in_threadpool(image_task_service.submit_generation, identity, **kwargs)
+        result = _image_task_envelope(task)
+        call.log("异步任务已入队", result)
+        return result
+    except ValueError as exc:
+        call.log("异步任务入队失败", status="failed", error=str(exc))
+        raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+    except ImageTaskQueueFullError as exc:
+        call.log("异步任务入队失败", status="failed", error=str(exc))
+        raise HTTPException(
+            status_code=429,
+            detail={"error": str(exc)},
+            headers={"Retry-After": "5"},
+        ) from exc
+
+
+async def _run_edit_async_submit_call(call: LoggedCall, identity: dict[str, object], **kwargs):
+    try:
+        task = await run_in_threadpool(image_task_service.submit_edit, identity, **kwargs)
+        result = _image_task_envelope(task)
+        call.log("异步任务已入队", result)
+        return result
+    except ValueError as exc:
+        call.log("异步任务入队失败", status="failed", error=str(exc))
+        raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+    except ImageTaskQueueFullError as exc:
+        call.log("异步任务入队失败", status="failed", error=str(exc))
+        raise HTTPException(
+            status_code=429,
+            detail={"error": str(exc)},
+            headers={"Retry-After": "5"},
+        ) from exc
+
+
 def create_router() -> APIRouter:
     router = APIRouter()
 
@@ -133,14 +267,30 @@ def create_router() -> APIRouter:
         identity = require_identity(authorization)
         payload = body.model_dump(mode="python")
         payload["base_url"] = resolve_image_base_url(request)
-        call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
-        await filter_or_log(call, body.prompt)
+        prompt, prompt_async, prompt_task_id = _parse_panda_prompt_tunnel(body.prompt)
+        call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=prompt)
+        if body.panda_task_id or prompt_task_id:
+            return await _run_image_task_status_call(call, identity, body.panda_task_id or prompt_task_id)
+        await filter_or_log(call, prompt)
         if body.stream:
             return await call.run(openai_v1_image_generations.handle, payload)
+        if body.panda_async or prompt_async:
+            return await _run_generation_async_submit_call(
+                call,
+                identity,
+                client_task_id=(body.client_task_id or new_client_task_id()),
+                prompt=prompt,
+                model=body.model,
+                size=body.size,
+                quality=body.quality,
+                response_format=body.response_format,
+                base_url=payload["base_url"],
+                n=body.n,
+            )
         return await _run_image_sync_call(
             call,
             run_generation_sync,
-            prompt=body.prompt,
+            prompt=prompt,
             model=body.model,
             size=body.size,
             quality=body.quality,
@@ -156,9 +306,11 @@ def create_router() -> APIRouter:
     ):
         identity = require_identity(authorization)
         payload, image_sources, mask_sources = await parse_image_edit_request(request)
-        prompt = str(payload["prompt"])
+        prompt, prompt_async, prompt_task_id = _parse_panda_prompt_tunnel(str(payload["prompt"]))
         model = str(payload["model"])
         call = LoggedCall(identity, "/v1/images/edits", model, "图生图", request_text=prompt)
+        if payload.get("panda_task_id") or prompt_task_id:
+            return await _run_image_task_status_call(call, identity, str(payload.get("panda_task_id") or prompt_task_id or ""))
         await filter_or_log(call, prompt)
         asset_ids = [str(item).strip() for item in (payload.get("asset_ids") or []) if str(item).strip()]
         if image_sources:
@@ -176,6 +328,22 @@ def create_router() -> APIRouter:
             if asset_ids:
                 raise HTTPException(status_code=400, detail={"error": "asset_ids are not supported for stream image edits"})
             return await call.run(openai_v1_image_edit.handle, payload)
+        if payload.get("panda_async") or prompt_async:
+            return await _run_edit_async_submit_call(
+                call,
+                identity,
+                client_task_id=str(payload.get("client_task_id") or "").strip() or new_client_task_id(),
+                prompt=prompt,
+                model=model,
+                size=payload.get("size"),
+                quality=str(payload.get("quality") or "auto"),
+                response_format=str(payload.get("response_format") or "b64_json"),
+                base_url=payload["base_url"],
+                images=payload["images"],
+                masks=payload.get("mask") or None,
+                image_asset_ids=asset_ids,
+                n=int(payload.get("n") or 1),
+            )
         return await _run_image_sync_call(
             call,
             run_edit_sync,

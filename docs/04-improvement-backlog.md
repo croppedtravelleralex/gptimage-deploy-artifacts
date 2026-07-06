@@ -121,3 +121,10 @@ Panda 备份：`/root/gptimage/backups/img012-sync-over-async-20260706-*`
 - Panda 已验证 6/12 NewAPI 同步成功；24 同步失败主因是 NewAPI/closeapi/Cloudflare 约 175~210s 外层超时。
 - 当前主线应从“继续优化 Panda 同步等待”改为“NewAPI 侧异步 task/callback 适配，或同步入口 admission 限流”。
 - 已部署 `resume_polling` hard-timeout 止血；后续仍需做 slot 泄漏自愈指标。
+
+## IMG-014：pre-conversation hard-timeout 进程级治理（IMG-013 后续）
+
+- 背景：IMG-013 NewAPI async prompt tunnel 已解决 NewAPI 字段剥离和长同步 524，但 stage6 仍出现 1 个 `image task hard timeout before upstream completion (510.0s); no conversation_id captured`。
+- 风险：Python 线程 hard-timeout 只能把任务标 error，底层阻塞 I/O 仍可能短期占用 account inflight slot，需要 restart 才能立即清空运行态槽位。
+- 方向：把 pre-conversation 上游调用移到可 kill 的进程/子进程，或增加 slot 泄漏自愈指标与账号失败归因；完成后再恢复 24/30/36 NewAPI async 压测。
+- 验收：stage6 连续 2 轮无 hard-timeout；再跑 stage24，要求 24/24 submit_ok、>=23/24 final_success、收尾 image_inflight_count=0。

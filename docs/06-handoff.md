@@ -480,3 +480,12 @@ docs/08-image-pipeline-newapi-async-plan.md
 1. 不要继续盲跑 24/30 标准同步压测。
 2. 若用户要 24/30 体验，优先设计 NewAPI -> Panda `/api/image-tasks` 异步适配，而不是继续拉 Panda worker。
 3. 若必须走标准同步，先调整 closeapi/NewAPI/Cloudflare timeout；否则 Panda 再优化也会 524。
+
+## 2026-07-06 IMG-013 handoff
+
+- 当前代码：`/v1/images/generations` 支持 prompt tunnel：`panda-async:` 异步提交，`panda-task://<task_id>` 通过 NewAPI 查询结果；`/v1/images/edits` 支持 form `panda_async=true` 和 prompt tunnel。
+- 生产已部署，备份 `/root/gptimage/backups/img013-newapi-async-tunnel-20260706-203319/`。
+- 生产配置已开启保守 burst8：base=6、burst=8、dispatchable>=120、backoff=0、per_user_queue_max=48。
+- NewAPI stage6 报告：`reports/img013-newapi-async-stage6-1rounds-20260706-205344/`；6/6 submit_ok，5/6 success，1 个 generation pre-conversation hard-timeout。
+- 收尾状态：Panda healthy=true，image_inflight_count=0。
+- 不要直接继续 24/30/36，先处理 IMG-014 hard-timeout/slot 自愈；否则大压测会被上游尾流污染。

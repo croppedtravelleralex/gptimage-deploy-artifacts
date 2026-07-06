@@ -553,3 +553,62 @@ HTTP/1.1 + pointer，24 同时提交：客户端 14/24 success，10 个 Cloudfla
 - 24 同步入口失败主因不是 Panda 生成失败，而是 NewAPI/closeapi/Cloudflare 同步长连接约 175~210s 超时或断流。
 - Panda 对“已入库任务”的完成率高；但 NewAPI 标准同步接口无法稳定承载 24 个长等待请求。
 - 想要 24/30 的用户体验，不能继续强压 `/v1/images/*` 长同步；需要 NewAPI 侧接异步 task/callback，或把公共同步入口 admission 控制在能低于 Cloudflare 超时的窗口内。
+
+## 2026-07-06 IMG-013 追加：NewAPI async prompt tunnel 已部署
+
+状态：**已部署 Panda；NewAPI 小档验收通过入队与轮询通路，未进入 24/30/36 大档**。
+
+背景：
+
+- NewAPI/closeapi 对非 `/v1` 路径 `/api/image-tasks/status` 返回 `403`，不能直接把 Panda 原生异步接口暴露给 NewAPI baseurl。
+- NewAPI 会剥掉 `/v1/images/generations` JSON 里的未知字段；`panda_async` / `panda_task_id` 不能可靠穿透。
+- multipart edits 的额外 form 字段可穿透，但 generations/status 必须走稳定字段。
+
+新增实现：
+
+- `/v1/images/generations` 支持 prompt tunnel：
+  - `panda-async: <真实提示词>`：提交异步任务并立即返回 `object=image.task` / `task_id`。
+  - `panda-task://<task_id>`：查询任务；成功时返回标准 OpenAI image response，并附带 `panda_task`。
+- `/v1/images/edits` 同时支持 form 字段 `panda_async=true` 和 prompt tunnel。
+- `ImageTaskService` burst 条件配置化：默认 `burst_min_dispatchable_candidates=120`、`burst_min_queued=6`、`burst_max_preflight_backoff=0`。
+- 新增 `scripts/img013_newapi_async_loadgen.py`：提交和轮询均走 NewAPI `/v1/images/*`。
+
+生产部署：
+
+```text
+备份：/root/gptimage/backups/img013-newapi-async-tunnel-20260706-203319/
+回滚：/root/gptimage/backups/img013-newapi-async-tunnel-20260706-203319/ROLLBACK.sh
+部署文件：api/ai.py, api/image_inputs.py, services/config.py, services/image_task_service.py, scripts/img013_newapi_async_loadgen.py
+配置：burst_enabled=true, base=6, burst=8, per_user_queue_max=48, global_queue_max=240, image_return_window_size=3
+最终收尾 health：healthy=true, image_inflight_count=0, dispatchable_candidate_count=148, preflight_backoff_count=0, verified_total_quota≈692
+```
+
+本地验证：
+
+```text
+python -m py_compile api/ai.py api/image_inputs.py services/config.py services/image_task_service.py scripts/img013_newapi_async_loadgen.py
+python -m pytest test/test_image_task_service.py test/test_image_tasks_api.py test/test_v1_images_generations.py test/test_v1_images_edits_api.py test/test_v1_images_edits_json.py test/test_v1_images_sync_async.py test/test_account_image_capabilities.py test/test_config.py -q
+# 67 passed
+
+git diff --check
+# 通过，仅 LF/CRLF warning
+```
+
+NewAPI 验收：
+
+```text
+报告：reports/img013-newapi-async-stage6-1rounds-20260706-205344/
+入口：https://sub2api.closeapi.top/v1/images/*
+提交：6/6 submit_ok，submit_p95≈19.0s，无 524、无 busy_6
+最终：5/6 success，1 个 generation hard-timeout
+总时长：675.9s（被 1 个 hard-timeout 拖长）
+成功任务轮询耗时：约 30s、44s、55s、55s、69s
+失败原因：image task hard timeout before upstream completion (510.0s); no conversation_id captured
+```
+
+判断：
+
+- IMG-013 已解决 NewAPI 无法穿透异步字段的问题；异步入队不再依赖会被剥掉的 JSON unknown fields。
+- NewAPI 长同步 524 问题在提交层已绕开：stage6 提交全部成功，最长约 19s，而不是 175~210s 长等。
+- 本轮未进入 24/30/36 大压测，因为 stage6 已出现 1 个上游 pre-conversation hard-timeout；继续扩大只会把异步链路验收污染成上游/账号尾流压测。
+- 下一步应单独处理 pre-conversation hard-timeout 的进程级 kill / slot 自愈 / 账号失败归因，再重新跑 24/30/36。

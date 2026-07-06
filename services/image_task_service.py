@@ -618,6 +618,18 @@ class ImageTaskService:
             return base
         queued_count = sum(1 for task in self._tasks.values() if task.get("status") == TASK_STATUS_QUEUED)
         try:
+            min_queued = max(1, int(settings.get("burst_min_queued") or base))
+        except Exception:
+            min_queued = base
+        try:
+            min_dispatchable = max(1, int(settings.get("burst_min_dispatchable_candidates") or 120))
+        except Exception:
+            min_dispatchable = 120
+        try:
+            max_preflight_backoff = max(0, int(settings.get("burst_max_preflight_backoff") or 0))
+        except Exception:
+            max_preflight_backoff = 0
+        try:
             stats = account_service.get_image_candidate_runtime_stats()
         except Exception:
             return base
@@ -627,9 +639,9 @@ class ImageTaskService:
         if self._deadlock_guard_tripped_locked():
             return base
         if (
-            queued_count >= 6
-            and dispatchable >= 80
-            and preflight_backoff == 0
+            queued_count >= min_queued
+            and dispatchable >= min_dispatchable
+            and preflight_backoff <= max_preflight_backoff
             and inflight < burst
         ):
             return burst

@@ -103,6 +103,12 @@ def _payload_from_fields(fields: dict[str, Any]) -> dict[str, Any]:
     }
     if "client_task_id" in fields:
         payload["client_task_id"] = _clean(fields.get("client_task_id"))
+    if "panda_task_id" in fields:
+        payload["panda_task_id"] = _clean(fields.get("panda_task_id"))
+    if "panda_async" in fields:
+        parsed_async = _parse_bool(fields.get("panda_async"))
+        if parsed_async is not None:
+            payload["panda_async"] = parsed_async
     asset_ids: list[str] = []
     for key in ASSET_ID_FIELDS:
         if key in fields:
@@ -218,7 +224,18 @@ async def parse_image_edit_request(request: Request) -> tuple[dict[str, Any], li
 
     form = await request.form()
     fields: dict[str, Any] = {}
-    for key in ("client_task_id", "prompt", "model", "n", "size", "quality", "response_format", "stream"):
+    for key in (
+        "client_task_id",
+        "panda_task_id",
+        "panda_async",
+        "prompt",
+        "model",
+        "n",
+        "size",
+        "quality",
+        "response_format",
+        "stream",
+    ):
         value = form.get(key)
         if isinstance(value, str):
             fields[key] = value
