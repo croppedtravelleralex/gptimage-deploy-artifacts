@@ -196,7 +196,7 @@ class ImageGenerationsAsyncTunnelTests(unittest.TestCase):
             headers=AUTH_HEADERS,
             json={
                 "model": "gpt-image-2",
-                "prompt": "panda-task://async-gen-1",
+                "prompt": "panda status async-gen-1",
             },
         )
 
@@ -205,6 +205,43 @@ class ImageGenerationsAsyncTunnelTests(unittest.TestCase):
         self.assertEqual(payload["data"][0]["b64_json"], "b3V0")
         self.assertEqual(payload["task_id"], "async-gen-1")
         self.assertEqual(self.sync_calls, [])
+
+    def test_generation_prompt_tunnel_task_error_does_not_return_top_level_error(self):
+        def list_error_task(_identity, ids):
+            return {
+                "items": [
+                    {
+                        "id": ids[0],
+                        "status": "error",
+                        "mode": "generate",
+                        "progress": "failed",
+                        "created_at": "2026-01-01 00:00:00",
+                        "updated_at": "2026-01-01 00:08:30",
+                        "data": [],
+                        "error": "image task hard timeout before upstream completion (510.0s); no conversation_id captured",
+                    }
+                ],
+                "missing_ids": [],
+            }
+
+        self.fake_service.list_tasks = list_error_task
+
+        response = self.client.post(
+            "/v1/images/generations",
+            headers=AUTH_HEADERS,
+            json={
+                "model": "gpt-image-2",
+                "prompt": "panda status async-error-1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["object"], "image.task")
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("panda_error", payload)
+        self.assertNotIn("error", payload)
+
     def test_edit_panda_async_returns_task_without_sync_wait(self):
         response = self.client.post(
             "/v1/images/edits",

@@ -1496,3 +1496,37 @@ NewAPI 验收：
 - NewAPI 长同步 524 问题在提交层已绕开：stage6 提交全部成功，最长约 19s，而不是 175~210s 长等。
 - 本轮未进入 24/30/36 大压测，因为 stage6 已出现 1 个上游 pre-conversation hard-timeout；继续扩大只会把异步链路验收污染成上游/账号尾流压测。
 - 下一步应单独处理 pre-conversation hard-timeout 的进程级 kill / slot 自愈 / 账号失败归因，再重新跑 24/30/36。
+
+## 2026-07-06 IMG-014：任务错误状态响应去 NewAPI 错误化
+
+状态：**已部署 Panda，并用 NewAPI baseurl/key 验证**。
+
+问题：
+
+- NewAPI/CloseAPI 日志出现大量 `status_code=200, image task hard timeout before upstream completion (510.0s); no conversation_id captured`。
+- 根因不是新的 524，而是 IMG-013 的任务状态查询在 task `status=error` 时返回了顶层 `error` 字段；NewAPI 即使 HTTP 200 也会把顶层 `error` 记为渠道错误。
+- `panda-task://...` / `panda-task:...` 形式会触发 closeapi Cloudflare `1010`；状态查询 tunnel 改为纯文本 `panda status <task_id>`。
+
+修复：
+
+- `/v1/images/*` task 状态查询遇到失败任务时返回：
+  - `object=image.task`
+  - `status=error`
+  - `panda_error={message,type,code}`
+  - **不再返回顶层 `error`**
+- `scripts/img013_newapi_async_loadgen.py` 轮询 prompt 改为 `panda status <task_id>`，并默认带浏览器 User-Agent，避免 closeapi 1010。
+
+验证：
+
+```text
+本地：py_compile api/ai.py scripts/img013_newapi_async_loadgen.py
+本地：pytest test/test_v1_images_sync_async.py test/test_v1_images_edits_api.py test/test_image_task_service.py test/test_config.py -q = 28 passed
+生产备份：/root/gptimage/backups/img014-task-error-envelope-20260706-211820/
+生产 health：healthy=true, image_inflight_count=0, dispatchable_candidate_count≈154, preflight_backoff_count=0
+NewAPI 查询已知 error task：HTTP 200, object=image.task, status=error, has_top_error=false, has_panda_error=true
+```
+
+结论：
+
+- NewAPI 不应再因为任务状态 error 被刷 `status_code=200 + hard timeout` 错误日志。
+- hard-timeout 的上游根因仍未根治；后续继续处理 pre-conversation 可 kill 执行与 slot 自愈。

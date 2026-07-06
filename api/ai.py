@@ -29,7 +29,16 @@ from services.protocol import (
 )
 
 PANDA_ASYNC_PROMPT_PREFIXES = ("panda-async:", "panda_async:")
-PANDA_TASK_PROMPT_PREFIXES = ("panda-task://", "panda_task://")
+PANDA_TASK_PROMPT_PREFIXES = (
+    "panda status ",
+    "panda-status ",
+    "panda_task ",
+    "panda-task ",
+    "panda-task:",
+    "panda_task:",
+    "panda-task://",
+    "panda_task://",
+)
 
 
 def _parse_panda_prompt_tunnel(prompt: str) -> tuple[str, bool, str]:
@@ -173,7 +182,11 @@ def _image_task_envelope(task: dict[str, object]) -> dict[str, object]:
         "panda_task": summary,
     }
     if summary.get("error"):
-        payload["error"] = {
+        # NewAPI treats a top-level "error" field as a failed channel call even
+        # when HTTP status is 200.  For async task status polling, keep the
+        # transport successful and expose the task failure under panda_error so
+        # pollers can stop without creating a NewAPI error-log storm.
+        payload["panda_error"] = {
             "message": summary["error"],
             "type": "image_task_error",
             "code": "image_task_error",

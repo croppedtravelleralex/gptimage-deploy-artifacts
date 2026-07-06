@@ -71,6 +71,11 @@ CLIENT = httpx.Client(
     timeout=httpx.Timeout(connect=CONNECT_TIMEOUT, read=READ_TIMEOUT, write=READ_TIMEOUT, pool=60.0),
 )
 ASSET_SEM = threading.BoundedSemaphore(ASSET_UPLOAD_WINDOW)
+NEWAPI_HEADERS = {
+    "Authorization": f"Bearer {NEWAPI_KEY}",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36",
+    "Accept": "application/json",
+}
 
 
 def write_json(path: Path, obj: Any) -> None:
@@ -221,7 +226,7 @@ def submit_task(task: dict[str, Any]) -> dict[str, Any]:
         if task["kind"] == "generation":
             resp = CLIENT.post(
                 NEWAPI_BASE + task["endpoint"],
-                headers={"Authorization": f"Bearer {NEWAPI_KEY}"},
+                headers=NEWAPI_HEADERS,
                 json=task["json_body"],
             )
         else:
@@ -245,7 +250,7 @@ def submit_task(task: dict[str, Any]) -> dict[str, Any]:
                 files = [("image", (filename, content, mime)) for filename, content, mime in task.get("files") or []]
             resp = CLIENT.post(
                 NEWAPI_BASE + task["endpoint"],
-                headers={"Authorization": f"Bearer {NEWAPI_KEY}"},
+                headers=NEWAPI_HEADERS,
                 data=data,
                 files=files or None,
             )
@@ -286,10 +291,10 @@ def poll_task(task_id: str) -> dict[str, Any]:
         try:
             resp = CLIENT.post(
                 NEWAPI_BASE + "/v1/images/generations",
-                headers={"Authorization": f"Bearer {NEWAPI_KEY}"},
+                headers=NEWAPI_HEADERS,
                 json={
                     "model": "gpt-image-2",
-                    "prompt": f"panda-task://{task_id}",
+                    "prompt": f"panda status {task_id}",
                     "response_format": "url",
                 },
             )
