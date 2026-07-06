@@ -646,3 +646,54 @@ NewAPI 查询已知 error task：HTTP 200, object=image.task, status=error, has_
 
 - NewAPI 不应再因为任务状态 error 被刷 `status_code=200 + hard timeout` 错误日志。
 - hard-timeout 的上游根因仍未根治；后续继续处理 pre-conversation 可 kill 执行与 slot 自愈。
+
+## 2026-07-06 IMG-016：同步入口过载自动异步 + hard-timeout 强制释放 slot
+
+状态：本地已实现并通过受影响测试，待生产部署验收。
+
+变更点：
+- `/v1/images/generations` 与 `/v1/images/edits` 的非 stream 同步兼容入口新增 admission gate。
+- 当同步等待席位已满，或账号侧 `image_inflight_count >= image_global_concurrency_limit` 时，不再继续占用公网长连接等待，而是复用现有 ImageTaskService 入队并返回 `object=image.task` / `task_id`。
+- 显式 `panda-async:` / `panda status <task_id>` tunnel 保持不变。
+- `conversation.py` 在成功获取图片账号 token 后通过 progress callback 回传 runtime `access_token`，仅用于内存态 slot 释放，不写入公开任务响应。
+- `ImageTaskService._run_task()` 在 hard timeout 时会对已租用 token 执行 `account_service.release_image_slot()`，并记录 `force_released_inflight_count`，避免 DB 已 error 但 `image_inflight_count` 长期残留必须重启。
+
+验证命令：
+```bash
+python -m py_compile api/ai.py services/image_task_service.py services/protocol/conversation.py test/test_image_task_service.py test/test_v1_images_sync_async.py
+python -m pytest test/test_image_task_service.py test/test_v1_images_sync_async.py test/test_v1_images_edits_api.py test/test_v1_images_edits_json.py test/test_image_tasks_api.py -q
+```
+
+验证结果：`44 passed`。
+
+下一步生产验收：
+- 部署前备份 Panda 生产文件与必要数据。
+- 部署后 health 应保持 `healthy=true`、`image_inflight_count=0`。
+- NewAPI 小档验证：普通同步请求在满载时返回 `image.task`；`panda status <task_id>` 能查回终态。
+- 后续 24/30/36 压测改为异步 submit + status polling，不再用 24 条同步长连接硬等。
+
+### IMG-016 生产后 NewAPI 异步 24 压测结果（2026-07-06 23:48 +08）
+
+入口：`https://sub2api.closeapi.top/v1/images/*`，脚本：`scripts/img013_newapi_async_loadgen.py`，参数：`IMG013_STAGE=24, IMG013_ROUNDS=1, IMG013_HTTP2=0, IMG013_USE_PANDA_ASSETS=1`。
+
+结果：未通过，停止 30/36 升档。
+
+```text
+requested=24
+submit_ok=23
+submit_failed=1
+final_success=14
+final_failed=9
+submit_p95=70.24s
+final_p95=642.30s
+duration=763.51s
+```
+
+关键事实：
+- 提交阶段仍有 1 个 edit 请求被远端 reset，且 edit 提交 p95 仍高达 70s，说明参考图/asset pointer 穿 NewAPI 仍存在提交层长尾。
+- 失败集中为 `upstream connection timed out, please retry later` 与 3 个 generation hard-timeout。
+- 本轮 3 个 hard-timeout 均记录 `force_released_inflight_count=1`，IMG-016 对 hard-timeout slot 释放生效。
+- 压测后曾出现 `image_inflight_count=1` 且 DB unfinished=0，60s 后自然回到 `image_inflight_count=0`；剩余问题来自非 hard-timeout 上游连接超时线程滞后，仍需二期 sweeper / 更细粒度 lease 覆盖。
+- 最终收尾：`healthy=true, image_inflight_count=0, unfinished=[]`。
+
+下一步：不要继续 30/36；先处理 edit 提交长尾、非 hard-timeout slot 滞后、上游 connection timeout 降级与重试策略。

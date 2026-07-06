@@ -303,6 +303,57 @@ class ImageTaskServiceTests(unittest.TestCase):
             self.assertEqual(task_after_late_return["status"], TASK_STATUS_ERROR)
             self.assertIn("hard timeout", task_after_late_return["error"])
 
+    def test_submit_hard_timeout_force_releases_leased_image_slot(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            release = threading.Event()
+            started = threading.Event()
+
+            def handler(payload):
+                started.set()
+                callback = payload.get("progress_callback")
+                if callable(callback):
+                    callback({"step": "getting_account", "access_token": "token-stuck"})
+                release.wait(timeout=3)
+                return {"data": [{"url": "http://example.test/late.png"}]}
+
+            service = self.make_service(
+                Path(tmp_dir) / "image_tasks.json",
+                handler,
+                submit_workers_getter=lambda: 1,
+                poll_workers_getter=lambda: 0,
+            )
+            key = "owner-1:hard-timeout-release-task"
+            with service._condition:
+                service._tasks[key] = {
+                    "id": "hard-timeout-release-task",
+                    "owner_id": "owner-1",
+                    "status": TASK_STATUS_RUNNING,
+                    "mode": "generate",
+                    "model": "gpt-image-2",
+                    "created_at": "2026-01-01 00:00:00",
+                    "updated_at": "2026-01-01 00:00:00",
+                    "created_ts": time.time(),
+                    "updated_ts": time.time(),
+                }
+                service._save_task_locked(key)
+
+            with mock.patch("services.image_task_service.account_service.release_image_slot") as release_slot:
+                service._run_task(
+                    key,
+                    "generate",
+                    {"prompt": "cat", "poll_timeout_secs": 0.05, "task_hard_timeout_secs": 0.2},
+                    OWNER,
+                    "gpt-image-2",
+                )
+
+            self.assertTrue(started.wait(timeout=1))
+            release_slot.assert_called_once_with("token-stuck")
+            with service._condition:
+                stored = service._tasks[key]
+                self.assertEqual(stored["status"], TASK_STATUS_ERROR)
+                self.assertEqual(stored["force_released_inflight_count"], 1)
+            release.set()
+
     def test_timeout_with_conversation_id_becomes_timeout_pending(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             class TimeoutWithConversation(RuntimeError):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -9,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api.image_inputs import parse_image_edit_request, read_image_sources, read_image_sources_with_asset_ids
 from api.support import require_identity, resolve_image_base_url
+from services.account_service import account_service
+from services.config import config
 from services.content_filter import check_request, request_shape, request_text
 from services.editable_file_task_service import editable_file_task_service
 from services.image_sync_adapter import build_openai_image_response, new_client_task_id, run_edit_sync, run_generation_sync
@@ -39,6 +42,45 @@ PANDA_TASK_PROMPT_PREFIXES = (
     "panda-task://",
     "panda_task://",
 )
+
+_IMAGE_SYNC_ADMISSION_LOCK = threading.Lock()
+_IMAGE_SYNC_WAIT_INFLIGHT = 0
+
+
+def _image_sync_admission_limit() -> int:
+    try:
+        return max(1, int(config.image_global_concurrency or 6))
+    except Exception:
+        return 6
+
+
+def _image_global_slots_busy(limit: int) -> bool:
+    try:
+        stats = account_service.get_image_candidate_runtime_stats()
+        global_limit = int(stats.get("image_global_concurrency_limit") or limit)
+        inflight = int(stats.get("image_inflight_count") or 0)
+        return global_limit > 0 and inflight >= min(limit, global_limit)
+    except Exception:
+        return False
+
+
+def _try_enter_image_sync_admission() -> bool:
+    """Limit public synchronous image waits; overloaded requests should become async tasks."""
+    global _IMAGE_SYNC_WAIT_INFLIGHT
+    limit = _image_sync_admission_limit()
+    if _image_global_slots_busy(limit):
+        return False
+    with _IMAGE_SYNC_ADMISSION_LOCK:
+        if _IMAGE_SYNC_WAIT_INFLIGHT >= limit:
+            return False
+        _IMAGE_SYNC_WAIT_INFLIGHT += 1
+        return True
+
+
+def _leave_image_sync_admission() -> None:
+    global _IMAGE_SYNC_WAIT_INFLIGHT
+    with _IMAGE_SYNC_ADMISSION_LOCK:
+        _IMAGE_SYNC_WAIT_INFLIGHT = max(0, _IMAGE_SYNC_WAIT_INFLIGHT - 1)
 
 
 def _parse_panda_prompt_tunnel(prompt: str) -> tuple[str, bool, str]:
@@ -148,6 +190,22 @@ async def _run_image_sync_call(call: LoggedCall, runner, **kwargs):
     except Exception as exc:
         call.log("调用失败", status="failed", error=str(exc))
         return _image_error_response(exc)
+
+
+async def _run_image_sync_or_auto_async_call(
+        call: LoggedCall,
+        sync_runner,
+        async_submitter,
+        *,
+        async_kwargs: dict[str, object],
+        sync_kwargs: dict[str, object],
+):
+    if not _try_enter_image_sync_admission():
+        return await async_submitter(call, call.identity, **async_kwargs)
+    try:
+        return await _run_image_sync_call(call, sync_runner, **sync_kwargs)
+    finally:
+        _leave_image_sync_admission()
 
 
 def _task_summary(task: dict[str, object]) -> dict[str, object]:
@@ -300,16 +358,24 @@ def create_router() -> APIRouter:
                 base_url=payload["base_url"],
                 n=body.n,
             )
-        return await _run_image_sync_call(
+        generation_kwargs = {
+            "prompt": prompt,
+            "model": body.model,
+            "size": body.size,
+            "quality": body.quality,
+            "response_format": body.response_format,
+            "base_url": payload["base_url"],
+            "n": body.n,
+        }
+        return await _run_image_sync_or_auto_async_call(
             call,
             run_generation_sync,
-            prompt=prompt,
-            model=body.model,
-            size=body.size,
-            quality=body.quality,
-            response_format=body.response_format,
-            base_url=payload["base_url"],
-            n=body.n,
+            _run_generation_async_submit_call,
+            sync_kwargs=generation_kwargs,
+            async_kwargs={
+                **generation_kwargs,
+                "client_task_id": (body.client_task_id or new_client_task_id()),
+            },
         )
 
     @router.post("/v1/images/edits")
@@ -357,19 +423,27 @@ def create_router() -> APIRouter:
                 image_asset_ids=asset_ids,
                 n=int(payload.get("n") or 1),
             )
-        return await _run_image_sync_call(
+        edit_kwargs = {
+            "prompt": prompt,
+            "model": model,
+            "size": payload.get("size"),
+            "quality": str(payload.get("quality") or "auto"),
+            "response_format": str(payload.get("response_format") or "b64_json"),
+            "base_url": payload["base_url"],
+            "images": payload["images"],
+            "masks": payload.get("mask") or None,
+            "image_asset_ids": asset_ids,
+            "n": int(payload.get("n") or 1),
+        }
+        return await _run_image_sync_or_auto_async_call(
             call,
             run_edit_sync,
-            prompt=prompt,
-            model=model,
-            size=payload.get("size"),
-            quality=str(payload.get("quality") or "auto"),
-            response_format=str(payload.get("response_format") or "b64_json"),
-            base_url=payload["base_url"],
-            images=payload["images"],
-            masks=payload.get("mask") or None,
-            image_asset_ids=asset_ids,
-            n=int(payload.get("n") or 1),
+            _run_edit_async_submit_call,
+            sync_kwargs=edit_kwargs,
+            async_kwargs={
+                **edit_kwargs,
+                "client_task_id": str(payload.get("client_task_id") or "").strip() or new_client_task_id(),
+            },
         )
 
     @router.post("/v1/chat/completions")

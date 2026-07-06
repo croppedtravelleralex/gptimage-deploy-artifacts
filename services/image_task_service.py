@@ -710,12 +710,23 @@ class ImageTaskService:
         cancelled = threading.Event()
         finished = threading.Event()
         outcome: dict[str, Any] = {"payload_for_run": dict(payload)}
+        leased_access_tokens: set[str] = set()
 
-        def progress_callback(step: str) -> None:
+        def progress_callback(step: object) -> None:
+            progress = ""
+            if isinstance(step, dict):
+                progress = _clean(step.get("step") or step.get("progress"))
+                access_token = _clean(step.get("access_token"))
+                if access_token:
+                    leased_access_tokens.add(access_token)
+            else:
+                progress = _clean(step)
             if cancelled.is_set():
                 return
-            updates: dict[str, Any] = {"progress": step}
-            if step == "image_stream_resolve_start":
+            if not progress:
+                return
+            updates: dict[str, Any] = {"progress": progress}
+            if progress == "image_stream_resolve_start":
                 updates["started_ts"] = time.time()
             self._update_task(key, **updates)
 
@@ -739,6 +750,7 @@ class ImageTaskService:
             duration_ms = int((time.time() - started) * 1000)
             payload_for_run = outcome.get("payload_for_run") if isinstance(outcome.get("payload_for_run"), dict) else payload
             error_message = f"image task hard timeout before upstream completion ({hard_timeout_secs:.1f}s); no conversation_id captured"
+            force_released = self._force_release_image_slots(leased_access_tokens)
             self._update_task(
                 key,
                 status=TASK_STATUS_ERROR,
@@ -747,6 +759,7 @@ class ImageTaskService:
                 data=[],
                 duration_ms=duration_ms,
                 hard_timeout_secs=hard_timeout_secs,
+                force_released_inflight_count=force_released,
             )
             self._log_call(
                 identity,
@@ -827,6 +840,21 @@ class ImageTaskService:
                 **({"conversation_id": conversation_id} if conversation_id else {}),
             )
             self._log_call(identity, mode, model, started, "调用失败", request_preview=request_text(payload_for_run.get("prompt")), status="failed", error=error_message, account_email=account_email)
+
+    def _force_release_image_slots(self, access_tokens: set[str] | list[str] | tuple[str, ...]) -> int:
+        released = 0
+        seen: set[str] = set()
+        for token in access_tokens:
+            access_token = _clean(token)
+            if not access_token or access_token in seen:
+                continue
+            seen.add(access_token)
+            try:
+                account_service.release_image_slot(access_token)
+                released += 1
+            except Exception:
+                pass
+        return released
 
     def _resolve_payload_assets(self, mode: str, payload: dict[str, Any], identity: dict[str, object]) -> dict[str, Any]:
         if mode != "edit":

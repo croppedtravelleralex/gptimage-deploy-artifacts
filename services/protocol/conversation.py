@@ -1366,6 +1366,8 @@ def _generate_single_image(
                 plan_types=("plus", "team", "pro") if codex_model and not plan_type else None,
                 skip_global_limit=bool(request.queue_coordinated),
             )
+            if request.progress_callback:
+                request.progress_callback({"step": "account_acquired", "access_token": token})
         except RuntimeError as exc:
             raise ImageGenerationError(str(exc) or "image generation failed", account_email=account_email) from exc
 

@@ -242,6 +242,28 @@ class ImageGenerationsAsyncTunnelTests(unittest.TestCase):
         self.assertIn("panda_error", payload)
         self.assertNotIn("error", payload)
 
+    def test_generation_busy_sync_request_auto_returns_async_task(self):
+        with mock.patch.object(ai_module, "_try_enter_image_sync_admission", return_value=False):
+            response = self.client.post(
+                "/v1/images/generations",
+                headers=AUTH_HEADERS,
+                json={
+                    "model": "gpt-image-2",
+                    "prompt": "普通同步但服务已满",
+                    "client_task_id": "auto-async-gen-1",
+                    "response_format": "url",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["object"], "image.task")
+        self.assertEqual(payload["task_id"], "auto-async-gen-1")
+        self.assertEqual(payload["status"], "queued")
+        self.assertEqual(self.sync_calls, [])
+        self.assertEqual(len(self.fake_service.generation_calls), 1)
+        self.assertEqual(self.fake_service.generation_calls[0]["prompt"], "普通同步但服务已满")
+
     def test_edit_panda_async_returns_task_without_sync_wait(self):
         response = self.client.post(
             "/v1/images/edits",
