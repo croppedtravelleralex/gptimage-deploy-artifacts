@@ -1,0 +1,1119 @@
+from __future__ import annotations
+
+import base64
+import json
+import sqlite3
+import threading
+import time
+from collections.abc import Callable
+from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from services.account_service import account_service
+from services.config import DATA_DIR, config
+from services.content_filter import request_text
+from services.log_service import LOG_TYPE_CALL, log_service
+from services.protocol import openai_v1_image_edit, openai_v1_image_generations
+
+TASK_STATUS_QUEUED = "queued"
+TASK_STATUS_RUNNING = "running"
+TASK_STATUS_TIMEOUT_PENDING = "timeout_pending"
+TASK_STATUS_SUCCESS = "success"
+TASK_STATUS_ERROR = "error"
+TERMINAL_STATUSES = {TASK_STATUS_SUCCESS, TASK_STATUS_ERROR}
+UNFINISHED_STATUSES = {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING, TASK_STATUS_TIMEOUT_PENDING}
+
+
+class ImageTaskQueueFullError(RuntimeError):
+    """异步生图队列已满或被熔断保护暂停。"""
+
+
+def _now_iso() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _iso_from_ts(value: float | None) -> str | None:
+    if not value:
+        return None
+    return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _timestamp(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str) or not value.strip():
+        return 0.0
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(value[:26], fmt).timestamp()
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def _clean(value: object, default: str = "") -> str:
+    text = str(value or default).strip()
+    return text or default
+
+
+def _owner_id(identity: dict[str, object]) -> str:
+    return _clean(identity.get("id")) or "anonymous"
+
+
+def _task_key(owner_id: str, task_id: str) -> str:
+    return f"{owner_id}:{task_id}"
+
+
+def _looks_like_timeout(message: str) -> bool:
+    lowered = message.lower()
+    return "timeout" in lowered or "timed out" in lowered or "超时" in message
+
+
+def _looks_like_token_invalid(message: str) -> bool:
+    lowered = str(message or "").lower()
+    return (
+        "token invalidated" in lowered
+        or "token_revoked" in lowered
+        or "invalidated oauth token" in lowered
+        or "authentication token has been invalidated" in lowered
+    )
+
+
+def _collect_image_urls(data: list[Any]) -> list[str]:
+    urls: list[str] = []
+    for item in data:
+        if isinstance(item, dict):
+            url = item.get("url")
+            if isinstance(url, str) and url:
+                urls.append(url)
+    return urls
+
+
+def _encode_for_json(value: Any) -> Any:
+    if isinstance(value, bytes):
+        return {"__bytes_b64__": base64.b64encode(value).decode("ascii")}
+    if isinstance(value, bytearray):
+        return {"__bytes_b64__": base64.b64encode(bytes(value)).decode("ascii")}
+    if isinstance(value, tuple):
+        return {"__tuple__": [_encode_for_json(item) for item in value]}
+    if isinstance(value, list):
+        return [_encode_for_json(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _encode_for_json(item) for key, item in value.items()}
+    return value
+
+
+def _decode_from_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        if set(value.keys()) == {"__bytes_b64__"}:
+            try:
+                return base64.b64decode(str(value["__bytes_b64__"]).encode("ascii"))
+            except Exception:
+                return b""
+        if set(value.keys()) == {"__tuple__"}:
+            items = value.get("__tuple__")
+            return tuple(_decode_from_json(item) for item in items) if isinstance(items, list) else tuple()
+        return {key: _decode_from_json(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_decode_from_json(item) for item in value]
+    return value
+
+
+def _public_task(task: dict[str, Any]) -> dict[str, Any]:
+    item = {
+        "id": task.get("id"),
+        "status": task.get("status"),
+        "mode": task.get("mode"),
+        "model": task.get("model"),
+        "size": task.get("size"),
+        "quality": task.get("quality"),
+        "created_at": task.get("created_at"),
+        "updated_at": task.get("updated_at"),
+    }
+    if task.get("conversation_id"):
+        item["conversation_id"] = task.get("conversation_id")
+    if task.get("data") is not None:
+        item["data"] = task.get("data")
+    if task.get("usage") is not None:
+        item["usage"] = task.get("usage")
+    if task.get("error"):
+        item["error"] = task.get("error")
+    if task.get("progress"):
+        item["progress"] = task.get("progress")
+    if task.get("duration_ms") is not None:
+        item["duration_ms"] = task.get("duration_ms")
+    if task.get("resume_attempts") is not None:
+        item["resume_attempts"] = int(task.get("resume_attempts") or 0)
+    if task.get("next_resume_ts"):
+        item["next_resume_at"] = _iso_from_ts(float(task.get("next_resume_ts") or 0.0))
+    if task.get("status") in UNFINISHED_STATUSES:
+        if task.get("status") == TASK_STATUS_RUNNING:
+            base_ts = task.get("started_ts") or task.get("updated_ts")
+        else:
+            base_ts = task.get("created_ts") or task.get("updated_ts")
+        if base_ts:
+            item["elapsed_secs"] = round(time.time() - float(base_ts), 1)
+    return item
+
+
+def _result_count(task: dict[str, Any]) -> int:
+    data = task.get("data")
+    if isinstance(data, list):
+        return len(data)
+    return 0
+
+
+def _task_elapsed_secs(task: dict[str, Any]) -> float | None:
+    status = task.get("status")
+    if status not in UNFINISHED_STATUSES:
+        return None
+    if status == TASK_STATUS_RUNNING:
+        base_ts = task.get("started_ts") or task.get("updated_ts")
+    else:
+        base_ts = task.get("created_ts") or task.get("updated_ts")
+    if not base_ts:
+        return None
+    try:
+        return round(time.time() - float(base_ts), 1)
+    except Exception:
+        return None
+
+
+def _status_task(
+    task: dict[str, Any],
+    *,
+    queue_position: int | None = None,
+    estimated_start_after_secs: int | None = None,
+    running_limit: int | None = None,
+    accepted_limit: int | None = None,
+) -> dict[str, Any]:
+    """轻量任务状态，不返回 data/payload/image/b64 等大字段。"""
+    item: dict[str, Any] = {
+        "id": task.get("id"),
+        "status": task.get("status"),
+        "mode": task.get("mode"),
+        "model": task.get("model"),
+        "created_at": task.get("created_at"),
+        "updated_at": task.get("updated_at"),
+        "result_count": _result_count(task),
+    }
+    if task.get("progress"):
+        item["progress"] = task.get("progress")
+    elapsed_secs = _task_elapsed_secs(task)
+    if elapsed_secs is not None:
+        item["elapsed_secs"] = elapsed_secs
+    if task.get("duration_ms") is not None:
+        item["duration_ms"] = task.get("duration_ms")
+    if task.get("error"):
+        item["error"] = task.get("error")
+    if task.get("resume_attempts") is not None:
+        item["resume_attempts"] = int(task.get("resume_attempts") or 0)
+    if task.get("next_resume_ts"):
+        item["next_resume_at"] = _iso_from_ts(float(task.get("next_resume_ts") or 0.0))
+    if queue_position is not None:
+        item["queue_position"] = queue_position
+    if estimated_start_after_secs is not None:
+        item["estimated_start_after_secs"] = estimated_start_after_secs
+    if running_limit is not None:
+        item["running_limit"] = running_limit
+    if accepted_limit is not None:
+        item["accepted_limit"] = accepted_limit
+    return item
+
+
+class ImageTaskService:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        generation_handler: Callable[[dict[str, Any]], dict[str, Any]] = openai_v1_image_generations.handle,
+        edit_handler: Callable[[dict[str, Any]], dict[str, Any]] = openai_v1_image_edit.handle,
+        retention_days_getter: Callable[[], int] | None = None,
+        submit_workers_getter: Callable[[], int] | None = None,
+        poll_workers_getter: Callable[[], int] | None = None,
+        global_queue_max_getter: Callable[[], int] | None = None,
+        per_user_running_max_getter: Callable[[], int] | None = None,
+        per_user_queue_max_getter: Callable[[], int] | None = None,
+        timeout_pending_poll_secs_getter: Callable[[], int] | None = None,
+        timeout_pending_max_attempts_getter: Callable[[], int] | None = None,
+        deadlock_guard: object | None = None,
+    ):
+        self.path = path
+        self.db_path = path if path.suffix.lower() == ".db" else path.with_suffix(".db")
+        self.generation_handler = generation_handler
+        self.edit_handler = edit_handler
+        self.retention_days_getter = retention_days_getter or (lambda: config.image_retention_days)
+        self.submit_workers_getter = submit_workers_getter or (lambda: int(self._queue_settings().get("submit_workers") or 6))
+        self.poll_workers_getter = poll_workers_getter or (lambda: int(self._queue_settings().get("poll_workers") or 24))
+        self.global_queue_max_getter = global_queue_max_getter or (lambda: int(self._queue_settings().get("global_queue_max") or 200))
+        self.per_user_running_max_getter = per_user_running_max_getter or (lambda: int(self._queue_settings().get("per_user_running_max") or 2))
+        self.per_user_queue_max_getter = per_user_queue_max_getter or (lambda: int(self._queue_settings().get("per_user_queue_max") or 36))
+        self.timeout_pending_poll_secs_getter = timeout_pending_poll_secs_getter or (lambda: int(self._queue_settings().get("timeout_pending_poll_secs") or 120))
+        self.timeout_pending_max_attempts_getter = timeout_pending_max_attempts_getter or (lambda: int(self._queue_settings().get("timeout_pending_max_attempts") or 3))
+        if deadlock_guard is None:
+            try:
+                from services.image_deadlock_guard_service import image_deadlock_guard_service
+                deadlock_guard = image_deadlock_guard_service
+            except Exception:
+                deadlock_guard = None
+        self.deadlock_guard = deadlock_guard
+        self._lock = threading.RLock()
+        self._condition = threading.Condition(self._lock)
+        self._stop_event = threading.Event()
+        self._submit_threads: list[threading.Thread] = []
+        self._poll_threads: list[threading.Thread] = []
+        self._tasks: dict[str, dict[str, Any]] = {}
+        self._runtime_recovered = False
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            self._init_db_locked()
+            self._tasks = self._load_locked()
+
+    def start_background(self) -> None:
+        with self._condition:
+            if self._stop_event.is_set():
+                self._stop_event = threading.Event()
+            self._recover_runtime_tasks_locked()
+            self._ensure_workers_locked()
+            self._condition.notify_all()
+
+    def _queue_settings(self) -> dict[str, object]:
+        getter = getattr(config, "get_image_task_queue_settings", None)
+        if callable(getter):
+            return getter()
+        return {}
+
+    def _recover_runtime_tasks_locked(self) -> None:
+        if self._runtime_recovered:
+            return
+        changed = self._recover_unfinished_locked()
+        changed = self._cleanup_locked() or changed
+        if changed:
+            self._save_locked()
+        self._runtime_recovered = True
+
+    def submit_generation(
+        self,
+        identity: dict[str, object],
+        *,
+        client_task_id: str,
+        prompt: str,
+        model: str,
+        size: str | None,
+        quality: str = "auto",
+        base_url: str = "",
+    ) -> dict[str, Any]:
+        payload = {
+            "prompt": prompt,
+            "model": model,
+            "n": 1,
+            "size": size,
+            "quality": quality,
+            "response_format": "url",
+            "base_url": base_url,
+            "poll_timeout_secs": float(config.image_generation_poll_timeout_secs),
+            "resume_timeout_secs": float(self.timeout_pending_poll_secs_getter()),
+        }
+        return self._submit(identity, client_task_id=client_task_id, mode="generate", payload=payload)
+
+    def submit_edit(
+        self,
+        identity: dict[str, object],
+        *,
+        client_task_id: str,
+        prompt: str,
+        model: str,
+        size: str | None,
+        quality: str = "auto",
+        base_url: str = "",
+        images: list[tuple[bytes, str, str]] | None = None,
+        masks: list[tuple[bytes, str, str]] | None = None,
+        image_asset_ids: list[str] | None = None,
+        mask_asset_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "prompt": prompt,
+            "images": images or [],
+            "mask": masks or [],
+            "image_asset_ids": image_asset_ids or [],
+            "mask_asset_ids": mask_asset_ids or [],
+            "model": model,
+            "n": 1,
+            "size": size,
+            "quality": quality,
+            "response_format": "url",
+            "base_url": base_url,
+        }
+        reference_count = len(payload["images"]) + len(payload["image_asset_ids"])
+        payload["poll_timeout_secs"] = float(
+            config.image_multi_reference_poll_timeout_secs
+            if reference_count > 1
+            else config.image_edit_poll_timeout_secs
+        )
+        payload["resume_timeout_secs"] = float(self.timeout_pending_poll_secs_getter())
+        return self._submit(identity, client_task_id=client_task_id, mode="edit", payload=payload)
+
+    def list_tasks(self, identity: dict[str, object], task_ids: list[str]) -> dict[str, Any]:
+        owner = _owner_id(identity)
+        requested_ids = [_clean(task_id) for task_id in task_ids if _clean(task_id)]
+        with self._lock:
+            if self._cleanup_locked():
+                self._save_locked()
+            items = []
+            missing_ids = []
+            for task_id in requested_ids:
+                task = self._tasks.get(_task_key(owner, task_id))
+                if task is None:
+                    missing_ids.append(task_id)
+                else:
+                    items.append(_public_task(task))
+            if not requested_ids:
+                items = [_public_task(task) for task in self._tasks.values() if task.get("owner_id") == owner]
+                items.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+                missing_ids = []
+            return {"items": items, "missing_ids": missing_ids}
+
+    def list_task_statuses(self, identity: dict[str, object], task_ids: list[str]) -> dict[str, Any]:
+        owner = _owner_id(identity)
+        requested_ids = [_clean(task_id) for task_id in task_ids if _clean(task_id)]
+        with self._lock:
+            if self._cleanup_locked():
+                self._save_locked()
+            try:
+                running_limit = max(1, int(self.per_user_running_max_getter()))
+            except Exception:
+                running_limit = 2
+            try:
+                accepted_limit = max(1, int(self.per_user_queue_max_getter()))
+            except Exception:
+                accepted_limit = 36
+            owner_tasks = [task for task in self._tasks.values() if task.get("owner_id") == owner]
+            queued = [
+                task for task in owner_tasks
+                if task.get("status") == TASK_STATUS_QUEUED
+            ]
+            queued.sort(
+                key=lambda task: (
+                    float(task.get("created_ts") or task.get("updated_ts") or 0.0),
+                    str(task.get("id") or ""),
+                )
+            )
+            positions = {str(task.get("id") or ""): index for index, task in enumerate(queued, start=1)}
+
+            def public_status(task: dict[str, Any]) -> dict[str, Any]:
+                task_id = str(task.get("id") or "")
+                position = positions.get(task_id)
+                estimated_start_after_secs = None
+                if position is not None:
+                    # 只做保守体验提示，不作为调度承诺。每批按 running_limit 平滑释放。
+                    estimated_start_after_secs = max(0, ((position - 1) // running_limit) * 90)
+                return _status_task(
+                    task,
+                    queue_position=position,
+                    estimated_start_after_secs=estimated_start_after_secs,
+                    running_limit=running_limit,
+                    accepted_limit=accepted_limit,
+                )
+
+            items = []
+            missing_ids = []
+            for task_id in requested_ids:
+                task = self._tasks.get(_task_key(owner, task_id))
+                if task is None:
+                    missing_ids.append(task_id)
+                else:
+                    items.append(public_status(task))
+            if not requested_ids:
+                items = [public_status(task) for task in owner_tasks]
+                items.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+                missing_ids = []
+            return {"items": items, "missing_ids": missing_ids}
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        with self._condition:
+            self._condition.notify_all()
+        for thread in [*self._submit_threads, *self._poll_threads]:
+            thread.join(timeout=1.0)
+
+    @contextmanager
+    def _connect(self):
+        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def _submit(self, identity: dict[str, object], *, client_task_id: str, mode: str, payload: dict[str, Any]) -> dict[str, Any]:
+        task_id = _clean(client_task_id)
+        if not task_id:
+            raise ValueError("client_task_id is required")
+        owner = _owner_id(identity)
+        key = _task_key(owner, task_id)
+        now = _now_iso()
+        now_ts = time.time()
+        with self._condition:
+            self._ensure_workers_locked()
+            cleaned = self._cleanup_locked()
+            task = self._tasks.get(key)
+            if task is not None:
+                if cleaned:
+                    self._save_locked()
+                return _public_task(task)
+            self._enforce_queue_limits_locked(owner)
+            task = {
+                "id": task_id,
+                "owner_id": owner,
+                "status": TASK_STATUS_QUEUED,
+                "mode": mode,
+                "model": _clean(payload.get("model"), "gpt-image-2"),
+                "size": _clean(payload.get("size")),
+                "quality": _clean(payload.get("quality"), "auto"),
+                "created_at": now,
+                "updated_at": now,
+                "created_ts": now_ts,
+                "updated_ts": now_ts,
+                "payload": payload,
+                "identity": dict(identity),
+                "resume_attempts": 0,
+                "progress": "queued",
+            }
+            self._tasks[key] = task
+            self._save_task_locked(key)
+            public = _public_task(task)
+            self._condition.notify_all()
+            return public
+
+    def _enforce_queue_limits_locked(self, owner: str) -> None:
+        if self._deadlock_guard_tripped_locked():
+            raise ImageTaskQueueFullError("image task queue is temporarily paused by deadlock guard")
+        unfinished = [task for task in self._tasks.values() if task.get("status") in UNFINISHED_STATUSES]
+        try:
+            global_limit = max(1, int(self.global_queue_max_getter()))
+        except Exception:
+            global_limit = 200
+        if len(unfinished) >= global_limit:
+            raise ImageTaskQueueFullError(f"image task queue is full ({len(unfinished)}/{global_limit})")
+        try:
+            owner_limit = max(1, int(self.per_user_queue_max_getter()))
+        except Exception:
+            owner_limit = 36
+        owner_unfinished = [task for task in unfinished if task.get("owner_id") == owner]
+        if len(owner_unfinished) >= owner_limit:
+            raise ImageTaskQueueFullError(f"image task queue is full for current user ({len(owner_unfinished)}/{owner_limit})")
+
+    def _deadlock_guard_tripped_locked(self) -> bool:
+        guard = self.deadlock_guard
+        if guard is None:
+            return False
+        try:
+            method = getattr(guard, "is_tripped", None)
+            if callable(method):
+                return bool(method())
+            return bool(getattr(guard, "tripped", False))
+        except Exception:
+            return False
+
+    def _target_submit_workers(self) -> int:
+        try:
+            return max(1, int(self.submit_workers_getter()))
+        except Exception:
+            return 6
+
+    def _target_poll_workers(self) -> int:
+        try:
+            return max(0, int(self.poll_workers_getter()))
+        except Exception:
+            return 24
+
+    def _ensure_workers_locked(self) -> None:
+        self._recover_runtime_tasks_locked()
+        self._submit_threads = [thread for thread in self._submit_threads if thread.is_alive()]
+        while len(self._submit_threads) < self._target_submit_workers():
+            index = len(self._submit_threads) + 1
+            thread = threading.Thread(target=self._submit_worker_loop, name=f"image-submit-worker-{index}", daemon=True)
+            self._submit_threads.append(thread)
+            thread.start()
+        self._poll_threads = [thread for thread in self._poll_threads if thread.is_alive()]
+        while len(self._poll_threads) < self._target_poll_workers():
+            index = len(self._poll_threads) + 1
+            thread = threading.Thread(target=self._poll_worker_loop, name=f"image-poll-worker-{index}", daemon=True)
+            self._poll_threads.append(thread)
+            thread.start()
+
+    def _owner_running_count_locked(self, owner: str) -> int:
+        return sum(1 for task in self._tasks.values() if task.get("owner_id") == owner and task.get("status") == TASK_STATUS_RUNNING)
+
+    def _next_submit_task_locked(self) -> tuple[str, str, dict[str, Any], dict[str, object], str] | None:
+        if self._deadlock_guard_tripped_locked():
+            return None
+        try:
+            per_user_running_max = max(1, int(self.per_user_running_max_getter()))
+        except Exception:
+            per_user_running_max = 2
+        candidates = sorted(
+            ((key, task) for key, task in self._tasks.items() if task.get("status") == TASK_STATUS_QUEUED),
+            key=lambda item: float(item[1].get("created_ts") or 0.0),
+        )
+        for key, task in candidates:
+            owner = _clean(task.get("owner_id"))
+            if self._owner_running_count_locked(owner) >= per_user_running_max:
+                continue
+            payload = task.get("payload")
+            identity = task.get("identity")
+            if not isinstance(payload, dict) or not isinstance(identity, dict):
+                task["status"] = TASK_STATUS_ERROR
+                task["error"] = "服务已重启，未完成的图片任务已中断"
+                task["updated_at"] = _now_iso()
+                task["updated_ts"] = time.time()
+                self._save_task_locked(key)
+                continue
+            now_ts = time.time()
+            task.update({"status": TASK_STATUS_RUNNING, "progress": "submitting", "error": "", "updated_at": _now_iso(), "updated_ts": now_ts})
+            self._save_task_locked(key)
+            return key, _clean(task.get("mode"), "generate"), dict(payload), dict(identity), _clean(task.get("model"), "gpt-image-2")
+        return None
+
+    def _submit_worker_loop(self) -> None:
+        while not self._stop_event.is_set():
+            with self._condition:
+                run_args = self._next_submit_task_locked()
+                if run_args is None:
+                    self._condition.wait(timeout=0.5)
+                    continue
+            key, mode, payload, identity, model = run_args
+            self._run_task(key, mode, payload, identity, model)
+            with self._condition:
+                self._condition.notify_all()
+
+    def _task_hard_timeout_secs(self, payload: dict[str, Any]) -> float:
+        explicit = payload.get("task_hard_timeout_secs")
+        if explicit is not None:
+            try:
+                return max(0.1, min(900.0, float(explicit)))
+            except Exception:
+                pass
+        try:
+            pre_conversation = max(0.0, float(getattr(config, "image_pre_conversation_timeout_secs", 60.0)))
+        except Exception:
+            pre_conversation = 60.0
+        try:
+            poll_timeout = max(0.0, float(payload.get("poll_timeout_secs") or config.image_generation_poll_timeout_secs))
+        except Exception:
+            poll_timeout = 180.0
+        # 真实生图需要给上游收尾、下载和日志回写留余量；测试可用极小 timeout 快速覆盖。
+        overhead = max(0.5, min(90.0, poll_timeout * 0.5))
+        return max(1.0, min(900.0, pre_conversation + poll_timeout + overhead))
+
+    def _run_task(self, key: str, mode: str, payload: dict[str, Any], identity: dict[str, object], model: str) -> None:
+        started = time.time()
+        cancelled = threading.Event()
+        finished = threading.Event()
+        outcome: dict[str, Any] = {"payload_for_run": dict(payload)}
+
+        def progress_callback(step: str) -> None:
+            if cancelled.is_set():
+                return
+            updates: dict[str, Any] = {"progress": step}
+            if step == "image_stream_resolve_start":
+                updates["started_ts"] = time.time()
+            self._update_task(key, **updates)
+
+        def run_handler() -> None:
+            try:
+                payload_for_run = self._resolve_payload_assets(mode, payload, identity)
+                outcome["payload_for_run"] = payload_for_run
+                payload_with_progress = {**payload_for_run, "progress_callback": progress_callback}
+                handler = self.edit_handler if mode == "edit" else self.generation_handler
+                outcome["result"] = handler(payload_with_progress)
+            except Exception as exc:
+                outcome["exception"] = exc
+            finally:
+                finished.set()
+
+        thread = threading.Thread(target=run_handler, name=f"image-task-runner-{key.replace(':', '-')}", daemon=True)
+        thread.start()
+        hard_timeout_secs = self._task_hard_timeout_secs(payload)
+        if not finished.wait(timeout=hard_timeout_secs):
+            cancelled.set()
+            duration_ms = int((time.time() - started) * 1000)
+            payload_for_run = outcome.get("payload_for_run") if isinstance(outcome.get("payload_for_run"), dict) else payload
+            error_message = f"image task hard timeout before upstream completion ({hard_timeout_secs:.1f}s); no conversation_id captured"
+            self._update_task(
+                key,
+                status=TASK_STATUS_ERROR,
+                progress="failed",
+                error=error_message,
+                data=[],
+                duration_ms=duration_ms,
+                hard_timeout_secs=hard_timeout_secs,
+            )
+            self._log_call(
+                identity,
+                mode,
+                model,
+                started,
+                "调用硬超时",
+                request_preview=request_text(payload_for_run.get("prompt")),
+                status="failed",
+                error=error_message,
+            )
+            return
+
+        payload_for_run = outcome.get("payload_for_run") if isinstance(outcome.get("payload_for_run"), dict) else payload
+        try:
+            if "exception" in outcome:
+                raise outcome["exception"]
+            result = outcome.get("result")
+            if not isinstance(result, dict):
+                raise RuntimeError("image task returned streaming result unexpectedly")
+            data = result.get("data")
+            account_email = _clean(result.get("_account_email") or result.get("account_email"))
+            if not isinstance(data, list) or not data:
+                upstream = _clean(result.get("message"))
+                message = upstream or "号池中没有可用账号或所有账号均被限流，请检查号池状态（账号额度、是否被封禁、是否到达生图上限）"
+                error = RuntimeError(message)
+                if account_email:
+                    setattr(error, "account_email", account_email)
+                raise error
+            usage = result.get("usage")
+            duration_ms = int((time.time() - started) * 1000)
+            self._update_task(key, status=TASK_STATUS_SUCCESS, progress="success", data=data, usage=usage, error="", duration_ms=duration_ms)
+            self._log_call(identity, mode, model, started, "调用完成", request_preview=request_text(payload_for_run.get("prompt")), urls=_collect_image_urls(data), account_email=account_email)
+        except Exception as exc:
+            error_message = str(exc) or "image task failed"
+            account_email = _clean(getattr(exc, "account_email", ""))
+            conversation_id = _clean(getattr(exc, "conversation_id", ""))
+            code = _clean(getattr(exc, "code", ""))
+            duration_ms = int((time.time() - started) * 1000)
+            if conversation_id and (code == "image_timeout_pending" or _looks_like_timeout(error_message)):
+                resume_timeout_secs = max(
+                    float(payload.get("resume_timeout_secs") or 0.0),
+                    float(payload.get("poll_timeout_secs") or 0.0),
+                    float(self.timeout_pending_poll_secs_getter()),
+                )
+                resume_access_token = _clean(getattr(exc, "access_token", ""))
+                self._update_task(
+                    key,
+                    status=TASK_STATUS_TIMEOUT_PENDING,
+                    progress="timeout_pending",
+                    error=error_message,
+                    data=[],
+                    duration_ms=duration_ms,
+                    conversation_id=conversation_id,
+                    resume_timeout_secs=resume_timeout_secs,
+                    **({"resume_access_token": resume_access_token} if resume_access_token else {}),
+                    next_resume_ts=time.time() + 1.0,
+                )
+                self._log_call(
+                    identity,
+                    mode,
+                    model,
+                    started,
+                    "调用超时待续轮询",
+                    request_preview=request_text(payload_for_run.get("prompt")),
+                    status="timeout_pending",
+                    error=error_message,
+                    account_email=account_email,
+                )
+                return
+            self._update_task(
+                key,
+                status=TASK_STATUS_ERROR,
+                progress="failed",
+                error=error_message,
+                data=[],
+                duration_ms=duration_ms,
+                **({"conversation_id": conversation_id} if conversation_id else {}),
+            )
+            self._log_call(identity, mode, model, started, "调用失败", request_preview=request_text(payload_for_run.get("prompt")), status="failed", error=error_message, account_email=account_email)
+
+    def _resolve_payload_assets(self, mode: str, payload: dict[str, Any], identity: dict[str, object]) -> dict[str, Any]:
+        if mode != "edit":
+            return dict(payload)
+        resolved = dict(payload)
+        image_asset_ids = [str(item).strip() for item in (resolved.get("image_asset_ids") or []) if str(item).strip()]
+        mask_asset_ids = [str(item).strip() for item in (resolved.get("mask_asset_ids") or []) if str(item).strip()]
+        if not image_asset_ids and not mask_asset_ids:
+            return resolved
+        from services.image_asset_service import image_asset_service
+
+        if image_asset_ids:
+            existing_images = resolved.get("images") if isinstance(resolved.get("images"), list) else []
+            resolved["images"] = [*existing_images, *image_asset_service.read_assets(identity, image_asset_ids)]
+        if mask_asset_ids:
+            existing_masks = resolved.get("mask") if isinstance(resolved.get("mask"), list) else []
+            resolved["mask"] = [*existing_masks, *image_asset_service.read_assets(identity, mask_asset_ids)]
+        resolved.pop("image_asset_ids", None)
+        resolved.pop("mask_asset_ids", None)
+        return resolved
+
+    def _next_poll_task_locked(self) -> tuple[str, str, float, dict[str, object], str, str, str] | None:
+        now = time.time()
+        try:
+            max_attempts = max(1, int(self.timeout_pending_max_attempts_getter()))
+        except Exception:
+            max_attempts = 3
+        candidates = sorted(
+            ((key, task) for key, task in self._tasks.items() if task.get("status") == TASK_STATUS_TIMEOUT_PENDING),
+            key=lambda item: float(item[1].get("next_resume_ts") or item[1].get("updated_ts") or 0.0),
+        )
+        for key, task in candidates:
+            conversation_id = _clean(task.get("conversation_id"))
+            if not conversation_id:
+                task.update(status=TASK_STATUS_ERROR, error="timeout_pending task has no conversation_id", updated_at=_now_iso(), updated_ts=now)
+                self._save_task_locked(key)
+                continue
+            if float(task.get("next_resume_ts") or 0.0) > now:
+                continue
+            attempts = int(task.get("resume_attempts") or 0)
+            if attempts >= max_attempts:
+                task.update(status=TASK_STATUS_ERROR, error="续轮询次数已耗尽", updated_at=_now_iso(), updated_ts=now)
+                self._save_task_locked(key)
+                continue
+            task.update(status=TASK_STATUS_RUNNING, progress="resume_polling", resume_attempts=attempts + 1, updated_at=_now_iso(), updated_ts=now)
+            self._save_task_locked(key)
+            timeout_secs = float(task.get("resume_timeout_secs") or self.timeout_pending_poll_secs_getter())
+            access_token = _clean(task.get("resume_access_token"))
+            identity = task.get("identity") if isinstance(task.get("identity"), dict) else {}
+            return key, conversation_id, timeout_secs, dict(identity), _clean(task.get("mode"), "generate"), _clean(task.get("model"), "gpt-image-2"), access_token
+        return None
+
+    def _poll_worker_loop(self) -> None:
+        while not self._stop_event.is_set():
+            with self._condition:
+                run_args = self._next_poll_task_locked()
+                if run_args is None:
+                    self._condition.wait(timeout=1.0)
+                    continue
+            key, conversation_id, timeout_secs, identity, mode, model, access_token = run_args
+            self._run_resume_poll(key, conversation_id, timeout_secs, identity, mode, model, access_token=access_token)
+            with self._condition:
+                self._condition.notify_all()
+
+    def resume_poll(self, identity: dict[str, object], task_id: str, extra_timeout_secs: float = 30.0) -> dict[str, Any]:
+        """把超时任务放回 timeout_pending 队列，后台继续轮询原 conversation_id。"""
+        owner = _owner_id(identity)
+        key = _task_key(owner, _clean(task_id))
+        with self._condition:
+            task = self._tasks.get(key)
+            if task is None:
+                raise ValueError("task not found")
+            status = _clean(task.get("status"))
+            if status not in {TASK_STATUS_ERROR, TASK_STATUS_TIMEOUT_PENDING}:
+                raise ValueError("task is not resumable")
+            error_text = _clean(task.get("error"))
+            if status == TASK_STATUS_ERROR and "超时" not in error_text and "timeout" not in error_text.lower():
+                raise ValueError("task error is not a timeout error")
+            conversation_id = _clean(task.get("conversation_id"))
+            if not conversation_id:
+                raise ValueError("task has no conversation_id")
+            task.update(
+                status=TASK_STATUS_TIMEOUT_PENDING,
+                progress="timeout_pending",
+                error="",
+                identity=dict(identity),
+                resume_timeout_secs=max(5.0, min(600.0, float(extra_timeout_secs))),
+                next_resume_ts=time.time(),
+                updated_at=_now_iso(),
+                updated_ts=time.time(),
+            )
+            self._save_task_locked(key)
+            self._ensure_workers_locked()
+            self._condition.notify_all()
+            return _public_task(task)
+
+    def _run_resume_poll(
+        self,
+        key: str,
+        conversation_id: str,
+        extra_timeout_secs: float,
+        identity: dict[str, object],
+        mode: str,
+        model: str,
+        *,
+        access_token: str = "",
+    ) -> None:
+        started = time.time()
+        try:
+            from services.openai_backend_api import OpenAIBackendAPI
+            from services.protocol.conversation import format_image_result
+
+            if not access_token:
+                with self._condition:
+                    task = self._tasks.get(key)
+                    access_token = _clean(task.get("resume_access_token")) if task else ""
+            backend = OpenAIBackendAPI(access_token=access_token) if access_token else OpenAIBackendAPI()
+            file_ids, sediment_ids = backend._poll_image_results(conversation_id, extra_timeout_secs)
+            if not file_ids and not sediment_ids:
+                raise RuntimeError(f"继续等待 {extra_timeout_secs} 秒后仍未找到图片结果。")
+            image_urls = backend.resolve_conversation_image_urls(conversation_id, file_ids, sediment_ids, poll=False)
+            if not image_urls:
+                raise RuntimeError("图片 URL 解析失败")
+            image_items = [{"b64_json": base64.b64encode(image_data).decode("ascii")} for image_data in backend.download_image_bytes(image_urls)]
+            data = format_image_result(image_items, "", "b64_json", "", int(time.time()))["data"]
+            self._update_task(key, status=TASK_STATUS_SUCCESS, progress="success", data=data, error="", duration_ms=int((time.time() - started) * 1000))
+            self._log_call(identity, mode, model, started, "调用完成（续轮询）", status="success", urls=_collect_image_urls(data))
+        except Exception as exc:
+            error_message = str(exc) or "resume poll failed"
+            with self._condition:
+                task = self._tasks.get(key)
+                attempts = int(task.get("resume_attempts") or 0) if task else 0
+                try:
+                    max_attempts = max(1, int(self.timeout_pending_max_attempts_getter()))
+                except Exception:
+                    max_attempts = 3
+                should_retry = _looks_like_timeout(error_message) or _looks_like_token_invalid(error_message)
+                if task and attempts < max_attempts and should_retry:
+                    if _looks_like_token_invalid(error_message):
+                        current_token = _clean(task.get("resume_access_token") or access_token)
+                        if current_token:
+                            refreshed_token = account_service.refresh_access_token(current_token, force=True, event="image_resume_poll")
+                            if refreshed_token and refreshed_token != current_token:
+                                task["resume_access_token"] = refreshed_token
+                    task.update(
+                        status=TASK_STATUS_TIMEOUT_PENDING,
+                        progress="timeout_pending",
+                        error=error_message,
+                        data=[],
+                        duration_ms=int((time.time() - started) * 1000),
+                        next_resume_ts=time.time() + min(300.0, 30.0 * max(1, attempts)),
+                        updated_at=_now_iso(),
+                        updated_ts=time.time(),
+                    )
+                    self._save_task_locked(key)
+                    self._condition.notify_all()
+                    return
+            self._update_task(key, status=TASK_STATUS_ERROR, progress="failed", error=error_message, data=[], duration_ms=int((time.time() - started) * 1000))
+            self._log_call(identity, mode, model, started, "调用失败（续轮询）", status="failed", error=error_message)
+
+    def _log_call(
+        self,
+        identity: dict[str, object],
+        mode: str,
+        model: str,
+        started: float,
+        suffix: str,
+        *,
+        request_preview: str = "",
+        status: str = "success",
+        error: str = "",
+        urls: list[str] | None = None,
+        account_email: str = "",
+    ) -> None:
+        endpoint = "/v1/images/edits" if mode == "edit" else "/v1/images/generations"
+        summary_prefix = "图生图" if mode == "edit" else "文生图"
+        detail = {
+            "key_id": identity.get("id"),
+            "key_name": identity.get("name"),
+            "role": identity.get("role"),
+            "endpoint": endpoint,
+            "model": model,
+            "started_at": datetime.fromtimestamp(started).strftime("%Y-%m-%d %H:%M:%S"),
+            "ended_at": _now_iso(),
+            "duration_ms": int((time.time() - started) * 1000),
+            "status": status,
+        }
+        if request_preview:
+            detail["request_text"] = request_preview
+        if error:
+            detail["error"] = error
+        if account_email:
+            detail["account_email"] = account_email
+        if urls:
+            detail["urls"] = list(dict.fromkeys(urls))
+        try:
+            log_service.add(LOG_TYPE_CALL, f"{summary_prefix}{suffix}", detail)
+        except Exception:
+            pass
+
+    def _update_task(self, key: str, **updates: Any) -> None:
+        with self._condition:
+            task = self._tasks.get(key)
+            if task is None:
+                return
+            task.update(updates)
+            task["updated_at"] = _now_iso()
+            task["updated_ts"] = time.time()
+            self._save_task_locked(key)
+            self._condition.notify_all()
+
+    def _init_db_locked(self) -> None:
+        with self._connect() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS image_tasks (
+                    key TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    updated_ts REAL,
+                    data TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_image_tasks_owner_status ON image_tasks(owner_id, status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_image_tasks_updated ON image_tasks(updated_ts)")
+            conn.commit()
+
+    def _load_locked(self) -> dict[str, dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT key, data FROM image_tasks").fetchall()
+        tasks: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            try:
+                task = _decode_from_json(json.loads(row["data"]))
+            except Exception:
+                continue
+            if not isinstance(task, dict):
+                continue
+            task_id = _clean(task.get("id"))
+            owner = _clean(task.get("owner_id"))
+            if task_id and owner:
+                tasks[_task_key(owner, task_id)] = task
+        if rows:
+            return tasks
+        if not self.path.exists():
+            return tasks
+        legacy_tasks = self._load_legacy_json_locked()
+        for key, task in legacy_tasks.items():
+            self._tasks[key] = task
+            self._save_task_locked(key)
+        return legacy_tasks
+
+    def _load_legacy_json_locked(self) -> dict[str, dict[str, Any]]:
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        raw_items = raw.get("tasks") if isinstance(raw, dict) else raw
+        if not isinstance(raw_items, list):
+            return {}
+        tasks: dict[str, dict[str, Any]] = {}
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            task_id = _clean(item.get("id"))
+            owner = _clean(item.get("owner_id"))
+            if not task_id or not owner:
+                continue
+            status = _clean(item.get("status"))
+            if status not in {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING, TASK_STATUS_TIMEOUT_PENDING, TASK_STATUS_SUCCESS, TASK_STATUS_ERROR}:
+                status = TASK_STATUS_ERROR
+            created_at = _clean(item.get("created_at"), _now_iso())
+            updated_at = _clean(item.get("updated_at"), created_at)
+            task = {
+                "id": task_id,
+                "owner_id": owner,
+                "status": status,
+                "mode": "edit" if item.get("mode") == "edit" else "generate",
+                "model": _clean(item.get("model"), "gpt-image-2"),
+                "size": _clean(item.get("size")),
+                "quality": _clean(item.get("quality"), "auto"),
+                "created_at": created_at,
+                "updated_at": updated_at,
+                "created_ts": item.get("created_ts") or _timestamp(created_at),
+                "updated_ts": item.get("updated_ts") or _timestamp(updated_at),
+                "started_ts": item.get("started_ts"),
+                "duration_ms": item.get("duration_ms"),
+                "progress": _clean(item.get("progress")),
+                "resume_attempts": int(item.get("resume_attempts") or 0),
+            }
+            for field in ("data", "usage", "error", "conversation_id", "next_resume_ts", "resume_timeout_secs", "resume_access_token"):
+                if item.get(field) is not None:
+                    task[field] = item.get(field)
+            tasks[_task_key(owner, task_id)] = task
+        return tasks
+
+    def _save_task_locked(self, key: str) -> None:
+        task = self._tasks.get(key)
+        if task is None:
+            with self._connect() as conn:
+                conn.execute("DELETE FROM image_tasks WHERE key = ?", (key,))
+                conn.commit()
+            return
+        payload = json.dumps(_encode_for_json(task), ensure_ascii=False, separators=(",", ":"))
+        with self._connect() as conn:
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute(
+                """
+                INSERT INTO image_tasks(key, owner_id, task_id, status, updated_ts, data)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    owner_id=excluded.owner_id,
+                    task_id=excluded.task_id,
+                    status=excluded.status,
+                    updated_ts=excluded.updated_ts,
+                    data=excluded.data
+                """,
+                (key, _clean(task.get("owner_id")), _clean(task.get("id")), _clean(task.get("status"), TASK_STATUS_ERROR), float(task.get("updated_ts") or time.time()), payload),
+            )
+            conn.commit()
+
+    def _save_locked(self) -> None:
+        for key in list(self._tasks.keys()):
+            self._save_task_locked(key)
+
+    def _recover_unfinished_locked(self) -> bool:
+        changed = False
+        for key, task in list(self._tasks.items()):
+            status = task.get("status")
+            task_changed = False
+            if status == TASK_STATUS_QUEUED:
+                if not isinstance(task.get("payload"), dict) or not isinstance(task.get("identity"), dict):
+                    task["status"] = TASK_STATUS_ERROR
+                    task["error"] = "服务已重启，未完成的图片任务已中断"
+                    task_changed = True
+            elif status == TASK_STATUS_RUNNING:
+                if _clean(task.get("conversation_id")):
+                    task["status"] = TASK_STATUS_TIMEOUT_PENDING
+                    task["progress"] = "timeout_pending"
+                    task["next_resume_ts"] = time.time() + 1.0
+                    task["error"] = task.get("error") or "服务已重启，任务进入续轮询"
+                elif isinstance(task.get("payload"), dict) and isinstance(task.get("identity"), dict):
+                    task["status"] = TASK_STATUS_QUEUED
+                    task["progress"] = "queued"
+                    task["error"] = "服务已重启，任务已重新排队"
+                else:
+                    task["status"] = TASK_STATUS_ERROR
+                    task["error"] = "服务已重启，未完成的图片任务已中断"
+                task_changed = True
+            elif status == TASK_STATUS_TIMEOUT_PENDING and not _clean(task.get("conversation_id")):
+                task["status"] = TASK_STATUS_ERROR
+                task["error"] = "timeout_pending task has no conversation_id"
+                task_changed = True
+            if task_changed:
+                task["updated_at"] = _now_iso()
+                task["updated_ts"] = time.time()
+                self._save_task_locked(key)
+                changed = True
+        return changed
+
+    def _cleanup_locked(self) -> bool:
+        try:
+            retention_days = max(1, int(self.retention_days_getter()))
+        except Exception:
+            retention_days = 30
+        cutoff = time.time() - retention_days * 86400
+        removed_keys = [
+            key
+            for key, task in self._tasks.items()
+            if task.get("status") in TERMINAL_STATUSES and _timestamp(task.get("updated_at")) < cutoff
+        ]
+        for key in removed_keys:
+            self._tasks.pop(key, None)
+            self._save_task_locked(key)
+        return bool(removed_keys)
+
+
+image_task_service = ImageTaskService(DATA_DIR / "image_tasks.json")
