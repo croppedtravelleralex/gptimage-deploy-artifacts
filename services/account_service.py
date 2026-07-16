@@ -9,9 +9,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Condition, Lock, RLock, Thread
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlencode
 
+from services.account_identity import (
+    merge_account_identity,
+    normalize_account_identity,
+)
 from services.config import config
 from services.log_service import (
     LOG_TYPE_ACCOUNT,
@@ -110,6 +114,13 @@ class AccountService:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)
 
+    @classmethod
+    def _day_key(cls, value: object) -> str | None:
+        parsed = cls._parse_time(value)
+        if parsed is None:
+            return None
+        return parsed.astimezone(timezone(timedelta(hours=8))).date().isoformat()
+
     @staticmethod
     def _timestamp_to_iso(value: object) -> str:
         try:
@@ -143,6 +154,36 @@ class AccountService:
             except Exception:
                 pass
         return normalized_accounts
+
+    def reload_from_storage(self) -> dict[str, int]:
+        """重新加载持久化账号快照，并清理已不存在 token 的运行态。
+
+        该入口用于受控的外部恢复进程完成 SQLite 原子替换后，让当前
+        API 进程无需重启即可看到新 token。调用方必须确保外部写入已经结束。
+        """
+        with self._image_slot_condition:
+            accounts = self._load_accounts()
+            valid_tokens = set(accounts)
+            self._accounts = accounts
+            self._image_inflight = {
+                token: count
+                for token, count in self._image_inflight.items()
+                if token in valid_tokens and int(count or 0) > 0
+            }
+            self._image_preflight_failed_until = {
+                token: until
+                for token, until in self._image_preflight_failed_until.items()
+                if token in valid_tokens
+            }
+            self._token_aliases = {
+                alias: target
+                for alias, target in self._token_aliases.items()
+                if alias in valid_tokens and target in valid_tokens
+            }
+            self._index = self._index % max(1, len(accounts))
+            self._cumulative_total = max(self._cumulative_total, len(accounts))
+            self._image_slot_condition.notify_all()
+            return {"total": len(accounts)}
 
     def _save_accounts(self) -> None:
         self.storage.save_accounts(list(self._accounts.values()))
@@ -245,6 +286,33 @@ class AccountService:
             return True
         return (datetime.now(timezone.utc) - refreshed_at) <= timedelta(hours=max_age_hours)
 
+    def _active_proxy_binding_duplicate(self, account: dict) -> bool:
+        """同一活跃 proxy_binding_hash 绑定多个账号时禁止进入调度。"""
+        from services.account_identity import proxy_binding_hash
+
+        if not isinstance(account, dict):
+            return True
+        binding = str(account.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(account.get("proxy"))
+        if not binding:
+            return False
+        peers = 0
+        for item in self._accounts.values():
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status") or "")
+            if status == "禁用":
+                continue
+            if str(item.get("outlook_recovery_state") or "").strip().lower() == "terminal":
+                continue
+            other_binding = str(item.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(
+                item.get("proxy")
+            )
+            if other_binding == binding:
+                peers += 1
+                if peers > 1:
+                    return True
+        return False
+
     def _is_image_account_schedulable(self, account: dict) -> bool:
         if not self._is_image_account_available(account):
             return False
@@ -253,6 +321,8 @@ class AccountService:
         if self._requires_panda_receive_verification(account):
             return False
         if config.image_require_recent_quota_refresh and not self._is_recent_image_quota(account):
+            return False
+        if self._active_proxy_binding_duplicate(account):
             return False
         return True
 
@@ -301,13 +371,32 @@ class AccountService:
             return False
         return receive_state not in {"verified_ready", "verified", "local_verified"}
 
-    def _image_candidate_sort_key(self, account: dict) -> tuple[int, float, int, float]:
+    @classmethod
+    def _is_panda_upload_eligible(cls, account: dict) -> bool:
+        state = str((account or {}).get("panda_sync_state") or "").strip().lower()
+        if state != "ready":
+            return False
+        if not cls._is_image_account_available(account):
+            return False
+        if cls._has_image_account_failure_evidence(account):
+            return False
+        if cls._parse_time(account.get("last_quota_refresh_at")) is None:
+            return False
+        if str(account.get("panda_probe_last_error") or "").strip():
+            return False
+        return True
+
+    def _image_candidate_sort_key(self, account: dict) -> tuple[int, int, float, int, float]:
         refreshed_at = self._image_quota_refresh_time(account)
         last_used_at = self._parse_time(account.get("last_used_at"))
         refresh_ts = refreshed_at.timestamp() if refreshed_at is not None else 0.0
         used_ts = last_used_at.timestamp() if last_used_at is not None else 0.0
         quota = int(account.get("quota") or 0)
-        return (0 if refreshed_at is not None else 1, -refresh_ts, -quota, used_ts)
+        # Prefer spreading load across unused / least recently used accounts.
+        # Putting newest quota refresh first repeatedly hammers the account that
+        # was just verified/relogged, which is exactly the wrong behavior after a
+        # recovery batch where many accounts are refreshed within seconds.
+        return (0 if refreshed_at is not None else 1, 0 if last_used_at is None else 1, used_ts, -quota, -refresh_ts)
 
     def _is_image_preflight_backed_off(self, access_token: str) -> bool:
         token = self._resolve_access_token_locked(access_token)
@@ -427,6 +516,24 @@ class AccountService:
                     return plan
         return None
 
+    @staticmethod
+    def _is_terminal_outlook_recovery(account: dict | None) -> bool:
+        if not isinstance(account, dict):
+            return False
+        state = str(account.get("outlook_recovery_state") or "").strip().lower()
+        reason = str(account.get("outlook_recovery_terminal_reason") or "").strip().lower()
+        if state == "terminal" or reason == "account_deactivated":
+            return True
+        error_text = " ".join(
+            str(account.get(key) or "")
+            for key in (
+                "outlook_recovery_last_error",
+                "last_refresh_error",
+                "panda_verify_last_error",
+            )
+        ).lower()
+        return "account_deactivated" in error_text or "deleted or deactivated" in error_text
+
     def _normalize_account(self, item: dict) -> dict | None:
         if not isinstance(item, dict):
             return None
@@ -453,7 +560,11 @@ class AccountService:
         limits_progress = normalized.get("limits_progress")
         normalized["limits_progress"] = limits_progress if isinstance(limits_progress, list) else []
         derived_quota_state = self._extract_image_quota_state(normalized["limits_progress"])
-        if derived_quota_state is not None and not self._is_true_unlimited_image_account(normalized):
+        if (
+            derived_quota_state is not None
+            and normalized["status"] == "正常"
+            and not self._is_true_unlimited_image_account(normalized)
+        ):
             derived_quota, derived_restore_at = derived_quota_state
             normalized["quota"] = derived_quota
             normalized["restore_at"] = derived_restore_at
@@ -462,6 +573,16 @@ class AccountService:
         normalized["restore_at"] = normalized.get("restore_at") or None
         normalized["success"] = int(normalized.get("success") or 0)
         normalized["fail"] = int(normalized.get("fail") or 0)
+        for traffic_key in ("traffic_uploaded_bytes", "traffic_downloaded_bytes", "traffic_total_bytes"):
+            traffic_value = normalized.get(traffic_key)
+            if traffic_value is None:
+                normalized[traffic_key] = None
+                continue
+            try:
+                normalized[traffic_key] = max(0, int(traffic_value))
+            except (TypeError, ValueError):
+                normalized[traffic_key] = None
+        normalized["traffic_updated_at"] = normalized.get("traffic_updated_at") or None
         normalized["invalid_count"] = int(normalized.get("invalid_count") or 0)
         normalized["last_used_at"] = normalized.get("last_used_at")
         normalized["last_invalid_at"] = normalized.get("last_invalid_at") or None
@@ -487,6 +608,22 @@ class AccountService:
         normalized["panda_verified_at"] = normalized.get("panda_verified_at") or None
         normalized["panda_rejected_at"] = normalized.get("panda_rejected_at") or None
         normalized["panda_verify_last_error"] = normalized.get("panda_verify_last_error") or None
+        # 统一补齐可本地推导的 proxy binding / 持久 fp；普通 update 的写保护在 merge 层处理。
+        before_fp = normalized.get("fp")
+        normalized = normalize_account_identity(normalized)
+        if not str(normalized.get("fp_origin") or "").strip():
+            if isinstance(before_fp, dict) and before_fp:
+                normalized["fp_origin"] = "imported"
+            else:
+                normalized["fp_origin"] = "generated_on_normalize"
+                normalized.setdefault(
+                    "fp_persisted_at",
+                    datetime.now(timezone.utc).isoformat(),
+                )
+        normalized["identity_conflict_count"] = max(0, int(normalized.get("identity_conflict_count") or 0))
+        conflict_fields = normalized.get("identity_last_conflict_fields")
+        if not isinstance(conflict_fields, list):
+            normalized["identity_last_conflict_fields"] = []
         return normalized
 
     @staticmethod
@@ -730,7 +867,8 @@ class AccountService:
     def _password_re_login_thread(self, access_token: str, email: str, password: str, event: str, progress_id: str | None = None) -> None:
         """密码重新登录线程入口"""
         try:
-            result = self._login_with_password(email, password)
+            account = self.get_account(access_token) or {}
+            result = self._login_with_password(email, password, account=account)
             if result.get("ok"):
                 # 登录成功，更新账号
                 new_access_token = result.get("access_token", "")
@@ -839,7 +977,15 @@ class AccountService:
             if progress_id:
                 self.update_relogin_progress(progress_id, access_token, "异常", str(exc))
 
-    def _login_with_password(self, email: str, password: str) -> dict:
+    def _login_with_password(
+        self,
+        email: str,
+        password: str,
+        otp_resolver: Callable[[], str | None] | None = None,
+        *,
+        account: dict | None = None,
+        proxy: str = "",
+    ) -> dict:
         """通过邮箱+密码登录，返回 {access_token, refresh_token, id_token, ...}"""
         from curl_cffi import requests
 
@@ -849,22 +995,24 @@ class AccountService:
         platform_auth0_client = "eyJuYW1lIjoiYXV0aDAtc3BhLWpzIiwidmVyc2lvbiI6IjEuMjEuMCJ9"
         platform_oauth_client_id = self._OAUTH_CLIENT_ID
         platform_oauth_redirect_uri = "https://platform.openai.com/auth/callback"
-        user_agent = self._OAUTH_USER_AGENT
 
+        from services.account_fingerprint import build_aligned_chrome_fp
         from services.proxy_service import proxy_settings
+
+        fp = build_aligned_chrome_fp()
+        user_agent = fp["user-agent"]
+        device_id = fp["oai-device-id"]
 
         # 创建 session：OpenAI 登录/换 token 链路不能直连，必须走 upstream 代理运行时。
         session = requests.Session(**proxy_settings.build_session_kwargs(
-            impersonate="chrome110",
+            account=account,
+            proxy=proxy,
+            impersonate=fp["impersonate"],
             verify=False,
             upstream=True,
         ))
 
         try:
-            device_id = str(uuid.uuid4())
-
-            # ─── 方式2: OAuth authorize 流程 ──────────────────────────
-            # 使用 Platform Client + PKCE（与注册流程相同）
 
             from utils.pkce import generate_pkce
             code_verifier, code_challenge = generate_pkce()
@@ -897,7 +1045,7 @@ class AccountService:
                     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
                     "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
                     "user-agent": user_agent,
-                    "sec-ch-ua": '"Chromium";v="145", "Google Chrome";v="145", "Not/A)Brand";v="99"',
+                    "sec-ch-ua": fp["sec-ch-ua"],
                     "sec-ch-ua-mobile": "?0",
                     "sec-ch-ua-platform": '"Windows"',
                     "sec-fetch-dest": "document",
@@ -939,7 +1087,7 @@ class AccountService:
                 "origin": auth_base,
                 "priority": "u=1, i",
                 "user-agent": user_agent,
-                "sec-ch-ua": '"Chromium";v="145", "Google Chrome";v="145", "Not/A)Brand";v="99"',
+                "sec-ch-ua": fp["sec-ch-ua"],
                 "sec-ch-ua-mobile": "?0",
                 "sec-ch-ua-platform": '"Windows"',
                 "sec-fetch-dest": "empty",
@@ -999,8 +1147,60 @@ class AccountService:
                     page_type = str(page_info.get("type") or "")
 
                 if page_type == "email_otp_verification":
-                    # 需要验证码才能登录，直接标记为账号异常
-                    return {"ok": False, "error": "need_verification_code", "detail": login_data}
+                    if otp_resolver is None:
+                        # 旧行为保持不变：没有外部验证码读取器时只报告需要 OTP。
+                        return {"ok": False, "error": "need_verification_code", "detail": login_data}
+
+                    code = str(otp_resolver() or "").strip()
+                    if not code:
+                        return {"ok": False, "error": "otp_code_timeout", "detail": login_data}
+
+                    otp_headers = {
+                        "accept": "application/json",
+                        "accept-language": "zh-CN,zh;q=0.9",
+                        "content-type": "application/json",
+                        "origin": auth_base,
+                        "priority": "u=1, i",
+                        "referer": f"{auth_base}/email-verification",
+                        "user-agent": user_agent,
+                        "sec-ch-ua": fp["sec-ch-ua"],
+                        "sec-ch-ua-mobile": "?0",
+                        "sec-ch-ua-platform": '"Windows"',
+                        "sec-fetch-dest": "empty",
+                        "sec-fetch-mode": "cors",
+                        "sec-fetch-site": "same-origin",
+                        "oai-device-id": device_id,
+                    }
+                    try:
+                        from utils.sentinel import build_sentinel_token
+                        sentinel_val, oai_sc_val = build_sentinel_token(session, device_id, "authorize_continue")
+                        otp_headers["openai-sentinel-token"] = sentinel_val
+                        if oai_sc_val:
+                            session.cookies.set("oai-sc", oai_sc_val, domain=".openai.com")
+                    except Exception:
+                        pass
+
+                    otp_resp = session.post(
+                        f"{auth_base}/api/accounts/email-otp/validate",
+                        headers=otp_headers,
+                        json={"code": code},
+                        timeout=30,
+                    )
+                    otp_data = {}
+                    try:
+                        otp_data = otp_resp.json() if otp_resp.text else {}
+                    except Exception:
+                        pass
+                    if otp_resp.status_code != 200:
+                        return {"ok": False, "error": f"otp_validate_failed_{otp_resp.status_code}", "detail": otp_data}
+
+                    continue_url = str(otp_data.get("continue_url") or getattr(otp_resp, "url", "") or "").strip()
+                    if continue_url:
+                        from urllib.parse import parse_qs, urlparse
+                        parsed_params = parse_qs(urlparse(continue_url).query)
+                        auth_code = str((parsed_params.get("code") or [""])[0]).strip()
+                    if not auth_code:
+                        return {"ok": False, "error": "no_auth_code_after_otp", "detail": otp_data}
                 else:
                     return {"ok": False, "error": "no_auth_code", "detail": login_data}
 
@@ -1018,7 +1218,7 @@ class AccountService:
                     "pragma": "no-cache",
                     "priority": "u=1, i",
                     "referer": f"{platform_base}/",
-                    "sec-ch-ua": '"Chromium";v="145", "Google Chrome";v="145", "Not/A)Brand";v="99"',
+                    "sec-ch-ua": fp["sec-ch-ua"],
                     "sec-ch-ua-mobile": "?0",
                     "sec-ch-ua-platform": '"Windows"',
                     "sec-fetch-dest": "empty",
@@ -1085,6 +1285,7 @@ class AccountService:
                 "id_token": id_token,
                 "expires_at": jwt_payload.get("exp"),
                 "source_type": "password",
+                "fp": dict(fp),
             }
 
             return result
@@ -1402,6 +1603,45 @@ class AccountService:
             self._accounts[access_token] = account
             self._persist_upsert_accounts([account])
 
+    def record_account_traffic(
+            self,
+            access_token: str,
+            *,
+            uploaded_bytes: int = 0,
+            downloaded_bytes: int = 0,
+    ) -> bool:
+        """累计账号应用层传输量。
+
+        该计数用于账号页观察文本/生图请求的应用载荷，不代表代理商计费流量；
+        TLS、HTTP/2、重传和代理隧道开销仍应以代理商账单为准。
+        """
+        if not access_token:
+            return False
+        uploaded = max(0, int(uploaded_bytes or 0))
+        downloaded = max(0, int(downloaded_bytes or 0))
+        if uploaded <= 0 and downloaded <= 0:
+            return False
+        with self._lock:
+            access_token = self._resolve_access_token_locked(access_token)
+            current = self._accounts.get(access_token)
+            if current is None:
+                return False
+            next_item = dict(current)
+            previous_uploaded = max(0, int(next_item.get("traffic_uploaded_bytes") or 0))
+            previous_downloaded = max(0, int(next_item.get("traffic_downloaded_bytes") or 0))
+            total_uploaded = previous_uploaded + uploaded
+            total_downloaded = previous_downloaded + downloaded
+            next_item["traffic_uploaded_bytes"] = total_uploaded
+            next_item["traffic_downloaded_bytes"] = total_downloaded
+            next_item["traffic_total_bytes"] = total_uploaded + total_downloaded
+            next_item["traffic_updated_at"] = self._now()
+            account = self._normalize_account(next_item)
+            if account is None:
+                return False
+            self._accounts[access_token] = account
+            self._persist_upsert_accounts([account])
+            return True
+
     def remove_invalid_token(self, access_token: str, event: str, quiet: bool = False) -> bool:
         if not config.auto_remove_invalid_accounts:
             self.update_account(access_token, {"status": "异常", "quota": 0}, quiet=quiet)
@@ -1421,6 +1661,48 @@ class AccountService:
             access_token = self._resolve_access_token_locked(access_token)
             account = self._accounts.get(access_token)
             return dict(account) if account else None
+
+    def ensure_account_identity_ready(
+        self,
+        access_token: str,
+        *,
+        purpose: str = "request",
+        require_panda_reachable: bool = False,
+    ) -> dict:
+        """统一身份门禁：规范化 → 持久化 → 重读校验，再允许创建上游 Session。
+
+        失败时抛出 ``ValueError('account_identity_persist_failed: ...')`` 或
+        ``ValueError('account_identity_incomplete: ...')``。
+        """
+        from services.account_identity import missing_panda_identity_fields
+
+        token = str(access_token or "").strip()
+        if not token:
+            raise ValueError("account_identity_incomplete: access_token")
+        with self._lock:
+            token = self._resolve_access_token_locked(token)
+            current = self._accounts.get(token)
+            if current is None:
+                raise ValueError("account_identity_incomplete: account_missing")
+            normalized = self._normalize_account(dict(current))
+            if normalized is None:
+                raise ValueError("account_identity_persist_failed: normalize")
+            if normalized != current:
+                self._accounts[token] = normalized
+                try:
+                    self._persist_upsert_accounts([normalized])
+                except Exception as exc:
+                    raise ValueError(f"account_identity_persist_failed: {exc}") from exc
+            reread = self._accounts.get(token) or {}
+            if normalize_account_identity(dict(reread)).get("fp") != normalized.get("fp"):
+                raise ValueError("account_identity_persist_failed: fp_mismatch_after_reread")
+            if require_panda_reachable:
+                missing = missing_panda_identity_fields(normalized)
+                if missing:
+                    raise ValueError("account_identity_incomplete: " + ",".join(missing))
+            ready = dict(normalized)
+            ready["identity_ready_purpose"] = str(purpose or "request")
+            return ready
 
     def list_accounts(self) -> list[dict]:
         """返回所有账号的副本，并为每个账号附加当前图片在途数 image_inflight。
@@ -1513,7 +1795,20 @@ class AccountService:
             for item in items
             if (payload := self._prepare_account_payload(item)) is not None
         ]
-        return self._add_account_payloads(payloads, include_items=include_items)
+        result = self._add_account_payloads(payloads, include_items=include_items)
+        received = int(result.get("added") or 0) + int(result.get("updated") or 0) + int(result.get("skipped") or 0)
+        if received:
+            log_service.add(
+                LOG_TYPE_ACCOUNT,
+                "Panda 接收账号",
+                {
+                    "received": received,
+                    "added": int(result.get("added") or 0),
+                    "updated": int(result.get("updated") or 0),
+                    "skipped": int(result.get("skipped") or 0),
+                },
+            )
+        return result
 
     def add_accounts(self, tokens: list[str], source_type: str = "web", include_items: bool = True) -> dict:
         tokens = list(dict.fromkeys(token for token in tokens if token))
@@ -1561,6 +1856,13 @@ class AccountService:
                 incoming = dict(payload)
                 if not incoming.get("created_at"):
                     incoming.pop("created_at", None)
+                if existed:
+                    protected, conflicts = merge_account_identity(current, incoming, allow_rebind=False)
+                    incoming = {**incoming, **protected}
+                    if conflicts:
+                        incoming["identity_conflict_count"] = int(current.get("identity_conflict_count") or 0) + 1
+                        incoming["identity_last_conflict_fields"] = conflicts
+                        incoming["identity_last_conflict_at"] = datetime.now(timezone.utc).isoformat()
                 account = self._normalize_account(
                     {
                         **current,
@@ -1625,7 +1927,14 @@ class AccountService:
             current = self._accounts.get(access_token)
             if current is None:
                 return None
-            account = self._normalize_account({**current, **updates, "access_token": access_token})
+            incoming = dict(updates or {})
+            protected, conflicts = merge_account_identity(current, incoming, allow_rebind=False)
+            merged = {**current, **incoming, **protected, "access_token": access_token}
+            if conflicts:
+                merged["identity_conflict_count"] = int(current.get("identity_conflict_count") or 0) + 1
+                merged["identity_last_conflict_fields"] = conflicts
+                merged["identity_last_conflict_at"] = datetime.now(timezone.utc).isoformat()
+            account = self._normalize_account(merged)
             if account is None:
                 return None
             if account.get("status") == "限流" and config.auto_remove_rate_limited_accounts:
@@ -1643,6 +1952,52 @@ class AccountService:
                                 {"token": anonymize_token(access_token), "status": account.get("status")})
             return dict(account)
         return None
+
+    def update_account_identity(
+        self,
+        access_token: str,
+        updates: dict,
+        *,
+        reason: str = "",
+        quiet: bool = True,
+    ) -> dict | None:
+        """显式身份修复/迁移入口：允许改绑 proxy / fp，并写审计字段。"""
+
+        if not access_token:
+            return None
+        with self._lock:
+            access_token = self._resolve_access_token_locked(access_token)
+            current = self._accounts.get(access_token)
+            if current is None:
+                return None
+            incoming = dict(updates or {})
+            protected, _ = merge_account_identity(current, incoming, allow_rebind=True)
+            merged = {
+                **current,
+                **incoming,
+                **protected,
+                "access_token": access_token,
+                "identity_revision": int(current.get("identity_revision") or 0) + 1,
+                "identity_update_reason": str(reason or "").strip() or "identity_update",
+                "identity_updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            account = self._normalize_account(merged)
+            if account is None:
+                return None
+            self._accounts[access_token] = account
+            if account != current:
+                self._persist_upsert_accounts([account])
+            if not quiet:
+                log_service.add(
+                    LOG_TYPE_ACCOUNT,
+                    "更新账号身份",
+                    {
+                        "token": anonymize_token(access_token),
+                        "reason": account.get("identity_update_reason"),
+                        "revision": account.get("identity_revision"),
+                    },
+                )
+            return dict(account)
 
     def _record_refresh_success(self, access_token: str) -> None:
         with self._lock:
@@ -1916,11 +2271,27 @@ class AccountService:
         defer_invalid_removal: bool = True,
         include_items: bool = True,
     ) -> dict[str, Any]:
-        access_tokens = list(dict.fromkeys(token for token in access_tokens if token))
+        requested_tokens = list(dict.fromkeys(token for token in access_tokens if token))
+        access_tokens: list[str] = []
+        skipped_terminal = 0
         with self._lock:
+            for token in requested_tokens:
+                resolved = self._resolve_access_token_locked(token)
+                account = self._accounts.get(resolved)
+                if self._is_terminal_outlook_recovery(account):
+                    skipped_terminal += 1
+                    continue
+                access_tokens.append(token)
             self._last_refresh_tokens = list(access_tokens)
+        if progress_id:
+            self.init_refresh_progress(progress_id, len(access_tokens))
         if not access_tokens:
-            result = {"refreshed": 0, "errors": [], "relogined": 0}
+            result = {
+                "refreshed": 0,
+                "errors": [],
+                "relogined": 0,
+                "skipped_terminal": skipped_terminal,
+            }
             if include_items:
                 result["items"] = self.list_accounts()
             if progress_id:
@@ -1930,9 +2301,6 @@ class AccountService:
         refreshed = 0
         errors = []
         max_workers = min(10, len(access_tokens))
-
-        if progress_id:
-            self.init_refresh_progress(progress_id, len(access_tokens))
 
         executor = ThreadPoolExecutor(max_workers=max_workers)
         try:
@@ -1993,6 +2361,7 @@ class AccountService:
             "refreshed": refreshed,
             "errors": errors,
             "relogined": relogined,
+            "skipped_terminal": skipped_terminal,
         }
         if include_items:
             result["items"] = self.list_accounts()
@@ -2010,7 +2379,13 @@ class AccountService:
         """
         access_tokens = list(dict.fromkeys(token for token in access_tokens if token))
         if not access_tokens:
-            result = {"relogined": 0, "skipped": 0, "errors": [], "items": self.list_accounts()}
+            result = {
+                "relogined": 0,
+                "skipped": 0,
+                "skipped_terminal": 0,
+                "errors": [],
+                "items": self.list_accounts(),
+            }
             if progress_id:
                 self.finish_relogin_progress(progress_id, result)
             return result
@@ -2020,6 +2395,7 @@ class AccountService:
 
         relogined = 0
         skipped = 0
+        skipped_terminal = 0
         errors = []
 
         for token in access_tokens:
@@ -2028,6 +2404,12 @@ class AccountService:
                 errors.append({"token": anonymize_token(token), "error": "账号不存在"})
                 if progress_id:
                     self.update_relogin_progress(progress_id, token, "跳过", "账号不存在")
+                continue
+            if self._is_terminal_outlook_recovery(account):
+                skipped += 1
+                skipped_terminal += 1
+                if progress_id:
+                    self.update_relogin_progress(progress_id, token, "跳过", "账号已删除或停用")
                 continue
 
             email = str(account.get("email") or "").strip()
@@ -2050,6 +2432,7 @@ class AccountService:
         result = {
             "relogined": relogined,
             "skipped": skipped,
+            "skipped_terminal": skipped_terminal,
             "errors": errors,
             "items": self.list_accounts(),
         }
@@ -2127,6 +2510,13 @@ class AccountService:
         panda_staging = sum(1 for a in items if str(a.get("panda_sync_state") or "").lower() == "staging")
         panda_ready = sum(1 for a in items if str(a.get("panda_sync_state") or "").lower() == "ready")
         panda_synced = sum(1 for a in items if str(a.get("panda_sync_state") or "").lower() == "synced")
+        panda_upload_eligible = sum(1 for a in items if self._is_panda_upload_eligible(a))
+        panda_upload_blocked = sum(
+            1
+            for a in items
+            if str(a.get("panda_sync_state") or "").lower() == "ready"
+            and not self._is_panda_upload_eligible(a)
+        )
         schedulable = sum(1 for a in items if self._is_image_account_schedulable(a))
         tainted = sum(1 for a in items if self._has_image_account_failure_evidence(a))
         panda_incoming = sum(1 for a in items if str(a.get("panda_receive_state") or "").lower() == "incoming")
@@ -2166,6 +2556,14 @@ class AccountService:
             "panda_staging_count": panda_staging,
             "panda_ready_count": panda_ready,
             "panda_synced_count": panda_synced,
+            "panda_upload_queue_count": panda_ready,
+            "panda_upload_eligible_count": panda_upload_eligible,
+            "panda_upload_unsynced_eligible_count": panda_upload_eligible,
+            "panda_upload_blocked_count": panda_upload_blocked,
+            "panda_upload_retained_count": panda_synced,
+            "panda_upload_remote_pending_count": panda_incoming,
+            "panda_upload_remote_verified_count": panda_verified,
+            "panda_upload_remote_rejected_count": panda_rejected,
             "schedulable": schedulable,
             "tainted_count": tainted,
             "panda_incoming_count": panda_incoming,
@@ -2178,6 +2576,66 @@ class AccountService:
             "total_success": total_success,
             "total_fail": total_fail,
             "by_type": by_type,
+        }
+
+    def get_activity_daily(self, days: int = 14) -> dict[str, Any]:
+        days = max(1, min(int(days or 14), 90))
+        today = datetime.now(timezone(timedelta(hours=8))).date()
+        start = today - timedelta(days=days - 1)
+        buckets: dict[str, dict[str, int]] = {
+            (start + timedelta(days=offset)).isoformat(): {
+                "registered": 0,
+                "uploaded": 0,
+                "received": 0,
+                "deleted": 0,
+            }
+            for offset in range(days)
+        }
+
+        def add(day: str | None, key: str, count: int = 1) -> None:
+            if day in buckets and count > 0:
+                buckets[day][key] += count
+
+        live_uploaded: dict[str, int] = {}
+        live_received: dict[str, int] = {}
+        with self._lock:
+            accounts = [dict(item) for item in self._accounts.values()]
+        for account in accounts:
+            add(self._day_key(account.get("created_at")), "registered")
+            if day := self._day_key(account.get("panda_synced_at")):
+                live_uploaded[day] = live_uploaded.get(day, 0) + 1
+            if day := self._day_key(account.get("panda_imported_at")):
+                live_received[day] = live_received.get(day, 0) + 1
+
+        for item in log_service.list(type=LOG_TYPE_ACCOUNT, start_date=start.isoformat(), end_date=today.isoformat(), limit=10000):
+            day = str(item.get("time") or "")[:10]
+            summary = str(item.get("summary") or "")
+            detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+            if summary == "上传到 Panda":
+                add(day, "uploaded", int(detail.get("accepted") or detail.get("uploaded") or 0))
+            elif summary == "Panda 接收账号":
+                # Current live accounts already carry panda_imported_at. Logs cover rows later deleted by verify.
+                add(day, "received", int(detail.get("received") or 0))
+            elif summary.startswith("删除 ") or summary.startswith("自动移除"):
+                add(day, "deleted", int(detail.get("removed") or 1))
+
+        for day, count in live_uploaded.items():
+            if day in buckets and buckets[day]["uploaded"] == 0:
+                buckets[day]["uploaded"] = count
+        for day, count in live_received.items():
+            if day in buckets and buckets[day]["received"] == 0:
+                buckets[day]["received"] = count
+
+        panda_settings = config.get_panda_sync_settings()
+        sync_label = "上传" if str(panda_settings.get("base_url") or "").strip() else "接收"
+        series = [
+            {"date": day, **values}
+            for day, values in sorted(buckets.items())
+        ]
+        return {
+            "days": days,
+            "sync_label": sync_label,
+            "items": series,
         }
 
     def account_health(self) -> dict:

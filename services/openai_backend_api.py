@@ -2,6 +2,7 @@ import base64
 import json
 import mimetypes
 import os
+import queue
 import random
 import re
 import threading
@@ -18,6 +19,7 @@ from typing import Any, Dict, Iterator, Optional
 from urllib.parse import unquote, urlparse
 
 from curl_cffi import requests
+from curl_cffi.requests.models import RequestException, STREAM_END
 from PIL import Image
 
 from services.account_service import account_service
@@ -42,61 +44,234 @@ class ImageContentPolicyError(RuntimeError):
     pass
 
 
-def iter_sse_payloads_until_first_payload(response: requests.Response, timeout_secs: float) -> Iterator[str]:
-    """迭代 SSE payload，并对首个有效 payload 施加墙钟硬超时。
+class ImageStreamCancelledError(RuntimeError):
+    pass
 
-    requests 的 timeout 是 socket read timeout。若上游持续发送空行/心跳，
-    read timeout 会不断被重置，导致图片任务在拿到 conversation_id 前长期占用
-    running 槽位。这里用墙钟时间限制首个 `data:` payload 出现时间。
-    """
+
+def _abort_curl_stream_without_waiting(response: requests.Response) -> None:
+    """请求 curl_cffi 流停止，但不在当前任务线程等待底层 Future。"""
+    quit_now = getattr(response, "quit_now", None)
+    if quit_now is not None:
+        try:
+            quit_now.set()
+        except Exception:
+            pass
+
+    if bool(getattr(response, "_stream_closed", False)):
+        return
+    try:
+        response._stream_closed = True
+    except Exception:
+        pass
+
+    stream_task = getattr(response, "stream_task", None)
+    curl = getattr(response, "curl", None)
+
+    def finalize() -> None:
+        try:
+            if stream_task is not None:
+                stream_task.result()
+        except Exception:
+            pass
+        try:
+            if curl is not None:
+                curl.close()
+        except Exception:
+            pass
+
+    cleanup = threading.Thread(target=finalize, name="image-sse-abort-cleanup", daemon=True)
+    cleanup.start()
+
+
+def _iter_queue_backed_sse_payloads(
+    response: requests.Response,
+    timeout_secs: float,
+    *,
+    ready_predicate: Callable[[str], bool],
+    ready_label: str,
+    cancel_event: threading.Event | None = None,
+    post_ready_timeout_secs: float | None = None,
+) -> Iterator[str]:
+    response_queue = getattr(response, "queue", None)
+    if response_queue is None:
+        raise TypeError("queue-backed response is required")
+
     started = time.monotonic()
-    first_payload_seen = False
-    timeout_secs = max(0.001, float(timeout_secs or 1.0))
-    timed_out = False
+    ready_deadline = started + timeout_secs
+    post_ready_deadline: float | None = None
+    ready_seen = False
+    pending = b""
 
-    def close_on_deadline() -> None:
-        nonlocal timed_out
-        if first_payload_seen:
-            return
-        timed_out = True
+    def timeout_error() -> TimeoutError:
+        elapsed_secs = time.monotonic() - started
         try:
             logger.warning({
-                "event": "image_pre_conversation_sse_first_payload_deadline",
+                "event": "image_pre_conversation_sse_ready_deadline",
+                "ready_label": ready_label,
                 "timeout_secs": timeout_secs,
+                "elapsed_secs": round(elapsed_secs, 3),
             })
         except Exception:
             pass
+        _abort_curl_stream_without_waiting(response)
+        return TimeoutError(
+            f"image pre-conversation SSE {ready_label} timeout after {timeout_secs:.0f}s"
+        )
+
+    def cancelled_error() -> ImageStreamCancelledError:
+        _abort_curl_stream_without_waiting(response)
+        return ImageStreamCancelledError("image SSE stream cancelled")
+
+    def mark_ready(payload: str) -> None:
+        nonlocal ready_seen, post_ready_deadline
+        if ready_seen:
+            return
         try:
-            response.close()
+            ready = bool(ready_predicate(payload))
+        except Exception:
+            ready = False
+        if not ready:
+            return
+        ready_seen = True
+        now = time.monotonic()
+        if post_ready_timeout_secs is not None:
+            post_ready_deadline = now + max(0.001, float(post_ready_timeout_secs))
+        try:
+            logger.info({
+                "event": "image_pre_conversation_sse_ready",
+                "ready_label": ready_label,
+                "elapsed_secs": round(now - started, 3),
+                "post_ready_timeout_secs": post_ready_timeout_secs,
+            })
         except Exception:
             pass
 
-    timer = threading.Timer(timeout_secs, close_on_deadline)
+    def iter_payloads(lines: list[bytes]) -> Iterator[str]:
+        for raw_line in lines:
+            line = raw_line.rstrip(b"\r").decode("utf-8", errors="ignore")
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload:
+                continue
+            mark_ready(payload)
+            yield payload
+
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            raise cancelled_error()
+
+        now = time.monotonic()
+        if not ready_seen:
+            remaining = ready_deadline - now
+            if remaining <= 0:
+                raise timeout_error()
+        elif post_ready_deadline is not None:
+            remaining = post_ready_deadline - now
+            if remaining <= 0:
+                try:
+                    logger.warning({
+                        "event": "image_sse_post_ready_deadline",
+                        "ready_label": ready_label,
+                        "timeout_secs": post_ready_timeout_secs,
+                    })
+                except Exception:
+                    pass
+                _abort_curl_stream_without_waiting(response)
+                return
+        else:
+            remaining = 0.1 if cancel_event is not None else None
+
+        wait_timeout = min(0.1, remaining) if remaining is not None else None
+        try:
+            chunk = response_queue.get(timeout=wait_timeout) if wait_timeout is not None else response_queue.get()
+        except queue.Empty:
+            continue
+
+        if isinstance(chunk, RequestException):
+            raise chunk
+        if chunk is STREAM_END:
+            break
+        if isinstance(chunk, str):
+            chunk_bytes = chunk.encode("utf-8", errors="ignore")
+        elif isinstance(chunk, (bytes, bytearray, memoryview)):
+            chunk_bytes = bytes(chunk)
+        else:
+            chunk_bytes = str(chunk).encode("utf-8", errors="ignore")
+
+        pending += chunk_bytes
+        lines = pending.split(b"\n")
+        pending = lines.pop()
+        yield from iter_payloads(lines)
+
+    if pending:
+        yield from iter_payloads([pending])
+
+    if not ready_seen:
+        _abort_curl_stream_without_waiting(response)
+        raise TimeoutError(f"image pre-conversation SSE ended before {ready_label}")
+
+
+def iter_sse_payloads_until_first_payload(
+    response: requests.Response,
+    timeout_secs: float,
+    *,
+    ready_predicate: Callable[[str], bool] | None = None,
+    cancel_event: threading.Event | None = None,
+    post_ready_timeout_secs: float | None = None,
+) -> Iterator[str]:
+    """迭代 SSE，并在真正可继续处理的 payload 出现前施加墙钟 deadline。
+
+    默认兼容旧语义：任意非空 ``data:`` 即 ready。图片链路会传入
+    conversation_id predicate，防止 ping/control payload 过早解除 deadline。
+    """
+    timeout_secs = max(0.001, float(timeout_secs or 1.0))
+    predicate = ready_predicate or (lambda payload: bool(payload))
+    ready_label = "conversation metadata" if ready_predicate is not None else "first payload"
+    if getattr(response, "queue", None) is not None:
+        yield from _iter_queue_backed_sse_payloads(
+            response,
+            timeout_secs,
+            ready_predicate=predicate,
+            ready_label=ready_label,
+            cancel_event=cancel_event,
+            post_ready_timeout_secs=post_ready_timeout_secs,
+        )
+        return
+
+    ready_seen = False
+    timed_out = False
+
+    def mark_deadline() -> None:
+        nonlocal timed_out
+        if not ready_seen:
+            timed_out = True
+
+    timer = threading.Timer(timeout_secs, mark_deadline)
     timer.daemon = True
     timer.start()
     try:
         for raw_line in response.iter_lines():
-            if timed_out and not first_payload_seen:
-                raise TimeoutError(f"image pre-conversation SSE first payload timeout after {timeout_secs:.0f}s")
+            if cancel_event is not None and cancel_event.is_set():
+                raise ImageStreamCancelledError("image SSE stream cancelled")
+            if timed_out and not ready_seen:
+                raise TimeoutError(f"image pre-conversation SSE {ready_label} timeout after {timeout_secs:.0f}s")
             if not raw_line:
                 continue
             line = raw_line.decode("utf-8", errors="ignore") if isinstance(raw_line, bytes) else str(raw_line)
             if not line.startswith("data:"):
                 continue
             payload = line[5:].strip()
-            if payload:
-                first_payload_seen = True
+            if not payload:
+                continue
+            if not ready_seen and predicate(payload):
+                ready_seen = True
                 timer.cancel()
-                yield payload
-        if timed_out and not first_payload_seen:
-            raise TimeoutError(f"image pre-conversation SSE first payload timeout after {timeout_secs:.0f}s")
-    except Exception as exc:
-        if timed_out and not first_payload_seen:
-            raise TimeoutError(f"image pre-conversation SSE first payload timeout after {timeout_secs:.0f}s") from exc
-        raise
+            yield payload
+        if timed_out and not ready_seen:
+            raise TimeoutError(f"image pre-conversation SSE {ready_label} timeout after {timeout_secs:.0f}s")
     finally:
         timer.cancel()
-
 
 def _is_invalid_access_token_error(exc: Exception) -> bool:
     text = f"{exc!r} {exc}".lower()
@@ -226,17 +401,45 @@ class OpenAIBackendAPI:
         self.client_version = DEFAULT_CLIENT_VERSION
         self.client_build_number = DEFAULT_CLIENT_BUILD_NUMBER
         self.access_token = access_token
-        self.account = account_service.get_account(self.access_token) if self.access_token else {}
+        self.account = {}
+        if self.access_token:
+            ensure_ready = getattr(account_service, "ensure_account_identity_ready", None)
+            if callable(ensure_ready):
+                try:
+                    self.account = ensure_ready(
+                        self.access_token,
+                        purpose="backend_session",
+                    )
+                except ValueError as exc:
+                    message = str(exc)
+                    # 账号不在池中时（单测/临时 token）降级为 get_account，不阻断 Session 构造。
+                    if "account_missing" in message:
+                        self.account = account_service.get_account(self.access_token) or {}
+                    else:
+                        logger.error(
+                            {
+                                "event": "account_identity_ready_failed",
+                                "error": message[:240],
+                            }
+                        )
+                        raise
+            else:
+                self.account = account_service.get_account(self.access_token) or {}
         self.account = self.account if isinstance(self.account, dict) else {}
         self.fp = self._build_fp()
+        self._persist_fp_if_needed()
         self.user_agent = self.fp["user-agent"]
         self.device_id = self.fp["oai-device-id"]
         self.session_id = self.fp["oai-session-id"]
         self.pow_script_sources: list[str] = []
         self.pow_data_build = ""
-        self.progress_callback: Callable[[str], None] | None = None
+        self.progress_callback: Callable[[object], None] | None = None
+        self.cancel_event: threading.Event | None = None
         self._progress_started_at = time.time()
         self._progress_last_at = self._progress_started_at
+        self._closed = False
+        self._resource_session: requests.Session | None = None
+        self._resource_session_lock = threading.Lock()
         self.session = requests.Session(**proxy_settings.build_session_kwargs(
             account=self.account,
             impersonate=self.fp["impersonate"],
@@ -244,6 +447,127 @@ class OpenAIBackendAPI:
             upstream=True,
         ))
         self.session.headers.update({
+            "User-Agent": self.user_agent,
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7",
+        })
+
+    def close(self) -> None:
+        """幂等关闭 API/resource session，并停止流式请求 executor。"""
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+
+        lock = getattr(self, "_resource_session_lock", None)
+        if lock is not None:
+            with lock:
+                resource_session = getattr(self, "_resource_session", None)
+                self._resource_session = None
+        else:
+            resource_session = getattr(self, "_resource_session", None)
+
+        self._close_session(getattr(self, "session", None))
+        self._close_session(resource_session)
+
+    @staticmethod
+    def _close_session(session: Any) -> None:
+        if session is None:
+            return
+        executor = getattr(session, "_executor", None)
+        try:
+            session.close()
+        except Exception:
+            pass
+        if executor is not None:
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+            try:
+                session._executor = None
+            except Exception:
+                pass
+
+    def _get_resource_session(self) -> requests.Session:
+        """惰性创建同代理的资源 session，避免 API 凭据传播到跨域 URL。"""
+        if getattr(self, "_closed", False):
+            raise RuntimeError("backend session is closed")
+        resource_session = getattr(self, "_resource_session", None)
+        if resource_session is not None:
+            return resource_session
+
+        lock = getattr(self, "_resource_session_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._resource_session_lock = lock
+        with lock:
+            if getattr(self, "_closed", False):
+                raise RuntimeError("backend session is closed")
+            resource_session = getattr(self, "_resource_session", None)
+            if resource_session is None:
+                resource_session = requests.Session(**proxy_settings.build_session_kwargs(
+                    account=self.account,
+                    impersonate=self.fp["impersonate"],
+                    verify=True,
+                    resource=True,
+                    upstream=True,
+                ))
+                resource_session.headers.clear()
+                resource_session.headers.update({
+                    "User-Agent": self.user_agent,
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7",
+                })
+                self._resource_session = resource_session
+            return resource_session
+
+    def _resource_headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        """构造跨域资源请求头；不注入 bearer、OAI 标识或 clearance cookie。"""
+        headers = {
+            "User-Agent": self.user_agent,
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7",
+        }
+        if extra:
+            headers.update(extra)
+        return headers
+
+    def __del__(self) -> None:
+        self.close()
+
+    def __enter__(self) -> "OpenAIBackendAPI":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+        self.close()
+        return False
+
+    def _build_fp(self) -> Dict[str, str]:
+        from services.account_fingerprint import ensure_complete_fp
+
+        fp, _ = ensure_complete_fp(self.account)
+        return fp
+
+    def _persist_fp_if_needed(self) -> None:
+        """把 ensure 后的完整指纹写回账号，保证后续请求复用同一组字段。"""
+        if not self.access_token or not isinstance(self.account, dict):
+            return
+        from services.account_fingerprint import normalize_fp
+
+        existing = normalize_fp(self.account.get("fp"))
+        ensured = normalize_fp(self.fp)
+        if existing == ensured:
+            return
+        try:
+            account_service.update_account(self.access_token, {"fp": dict(ensured)}, quiet=True)
+            self.account["fp"] = dict(ensured)
+        except Exception as exc:
+            logger.warning({
+                "event": "account_fp_persist_failed",
+                "error_type": type(exc).__name__,
+                "field_count": len(ensured),
+            })
+
+    def _api_headers(self) -> Dict[str, str]:
+        """构造仅用于 chatgpt.com API 的完整浏览器请求头。"""
+        headers = {
             "User-Agent": self.user_agent,
             "Origin": self.base_url,
             "Referer": self.base_url + "/",
@@ -268,65 +592,14 @@ class OpenAIBackendAPI:
             "OAI-Language": "zh-CN",
             "OAI-Client-Version": self.client_version,
             "OAI-Client-Build-Number": self.client_build_number,
-        })
+        }
         if self.access_token:
-            self.session.headers["Authorization"] = f"Bearer {self.access_token}"
-
-    def close(self) -> None:
-        """关闭底层 curl_cffi session，避免高并发探活后遗留 CLOSE_WAIT 连接。"""
-        try:
-            self.session.close()
-        except Exception:
-            pass
-
-    def __enter__(self) -> "OpenAIBackendAPI":
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        self.close()
-
-    def _build_fp(self) -> Dict[str, str]:
-        account = self.account
-        raw_fp = account.get("fp")
-        fp = {str(k).lower(): str(v) for k, v in raw_fp.items()} if isinstance(raw_fp, dict) else {}
-        for key in (
-                "user-agent",
-                "impersonate",
-                "oai-device-id",
-                "oai-session-id",
-                "sec-ch-ua",
-                "sec-ch-ua-arch",
-                "sec-ch-ua-bitness",
-                "sec-ch-ua-full-version",
-                "sec-ch-ua-full-version-list",
-                "sec-ch-ua-mobile",
-                "sec-ch-ua-platform",
-                "sec-ch-ua-platform-version",
-        ):
-            value = str(account.get(key) or "").strip()
-            if value:
-                fp[key] = value
-        fp.setdefault(
-            "user-agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0",
-        )
-        fp.setdefault("impersonate", "chrome110")
-        fp.setdefault("oai-device-id", new_uuid())
-        fp.setdefault("oai-session-id", new_uuid())
-        fp.setdefault("sec-ch-ua", '"Microsoft Edge";v="143", "Chromium";v="143", "Not A(Brand";v="24"')
-        fp.setdefault("sec-ch-ua-arch", '"x86"')
-        fp.setdefault("sec-ch-ua-bitness", '"64"')
-        fp.setdefault("sec-ch-ua-full-version", '"143.0.3650.96"')
-        fp.setdefault("sec-ch-ua-full-version-list", '"Microsoft Edge";v="143.0.3650.96", "Chromium";v="143.0.7499.147", "Not A(Brand";v="24.0.0.0"')
-        fp.setdefault("sec-ch-ua-mobile", "?0")
-        fp.setdefault("sec-ch-ua-platform", '"Windows"')
-        fp.setdefault("sec-ch-ua-platform-version", '"19.0.0"')
-        return fp
+            headers["Authorization"] = f"Bearer {self.access_token}"
+        return headers
 
     def _headers(self, path: str, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         """构造请求头，并补上 web 端要求的 target path/route。"""
-        headers = dict(self.session.headers)
+        headers = self._api_headers()
         headers["X-OpenAI-Target-Path"] = path
         headers["X-OpenAI-Target-Route"] = path
         if extra:
@@ -398,20 +671,13 @@ class OpenAIBackendAPI:
         """获取当前 token 的账号信息。"""
         if not self.access_token:
             raise RuntimeError("access_token is required")
-        executor = ThreadPoolExecutor(max_workers=3)
-        try:
-            me_future = executor.submit(self._get_me)
+        # /me 是最小鉴权探针；失败时不再并发发起额外账号请求。
+        me_payload = self._get_me()
+        with ThreadPoolExecutor(max_workers=2) as executor:
             init_future = executor.submit(self._get_conversation_init)
             account_future = executor.submit(self._get_default_account)
-            me_payload, init_payload, default_account = me_future.result(), init_future.result(), account_future.result()
-        except (KeyboardInterrupt, SystemExit):
-            executor.shutdown(wait=False, cancel_futures=True)
-            raise
-        except BaseException:
-            executor.shutdown(wait=False, cancel_futures=True)
-            raise
-        else:
-            executor.shutdown(wait=True, cancel_futures=True)
+            init_payload = init_future.result()
+            default_account = account_future.result()
 
         plan_type = str(default_account.get("plan_type") or "free")
 
@@ -448,9 +714,9 @@ class OpenAIBackendAPI:
             "User-Agent": self.user_agent,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Sec-Ch-Ua": self.session.headers["Sec-Ch-Ua"],
-            "Sec-Ch-Ua-Mobile": self.session.headers["Sec-Ch-Ua-Mobile"],
-            "Sec-Ch-Ua-Platform": self.session.headers["Sec-Ch-Ua-Platform"],
+            "Sec-Ch-Ua": self.fp["sec-ch-ua"],
+            "Sec-Ch-Ua-Mobile": self.fp["sec-ch-ua-mobile"],
+            "Sec-Ch-Ua-Platform": self.fp["sec-ch-ua-platform"],
             "Sec-Fetch-Dest": "document",
             "Sec-Fetch-Mode": "navigate",
             "Sec-Fetch-Site": "none",
@@ -500,7 +766,21 @@ class OpenAIBackendAPI:
             headers["OpenAI-Sentinel-Turnstile-Token"] = requirements.turnstile_token
         if requirements.so_token:
             headers["OpenAI-Sentinel-SO-Token"] = requirements.so_token
-        return self._headers(path, headers)
+        built = self._headers(path, headers)
+        try:
+            from services.request_shape import header_shape
+
+            logger.info(
+                {
+                    "event": "request_shape",
+                    "purpose": "conversation",
+                    "path": path,
+                    **header_shape(built),
+                }
+            )
+        except Exception:
+            pass
+        return built
 
     def _api_messages_to_conversation_messages(self, messages: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
         """把标准 chat messages 转成 web conversation 所需的 messages。"""
@@ -649,11 +929,29 @@ class OpenAIBackendAPI:
         }
         if requirements.proof_token:
             headers["OpenAI-Sentinel-Proof-Token"] = requirements.proof_token
+        if requirements.turnstile_token:
+            headers["OpenAI-Sentinel-Turnstile-Token"] = requirements.turnstile_token
+        if requirements.so_token:
+            headers["OpenAI-Sentinel-SO-Token"] = requirements.so_token
         if conduit_token:
             headers["X-Conduit-Token"] = conduit_token
         if accept == "text/event-stream":
             headers["X-Oai-Turn-Trace-Id"] = new_uuid()
-        return self._headers(path, headers)
+        built = self._headers(path, headers)
+        try:
+            from services.request_shape import header_shape
+
+            logger.info(
+                {
+                    "event": "request_shape",
+                    "purpose": "image",
+                    "path": path,
+                    **header_shape(built),
+                }
+            )
+        except Exception:
+            pass
+        return built
 
     def _codex_responses_headers(self) -> Dict[str, str]:
         return {
@@ -952,7 +1250,10 @@ class OpenAIBackendAPI:
             timeout=60,
         )
         ensure_ok(response, path)
-        return response.json().get("conduit_token", "")
+        conduit_token = str(response.json().get("conduit_token") or "")
+        if not conduit_token:
+            raise RuntimeError("image_prepare: missing conduit_token")
+        return conduit_token
 
     def _decode_image_base64(self, image: str) -> bytes:
         """把 base64 图片字符串或本地路径解码成二进制。"""
@@ -995,18 +1296,16 @@ class OpenAIBackendAPI:
         )
         ensure_ok(response, path)
         upload_meta = response.json()
-        response = self.session.put(
+        response = self._get_resource_session().put(
             upload_meta["upload_url"],
-            headers={
+            headers=self._resource_headers({
                 "Content-Type": mime_type,
                 "x-ms-blob-type": "BlockBlob",
                 "x-ms-version": "2020-04-08",
                 "Origin": self.base_url,
                 "Referer": self.base_url + "/",
-                "User-Agent": self.user_agent,
                 "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "en-US,en;q=0.8",
-            },
+            }),
             data=data,
             timeout=120,
         )
@@ -1031,6 +1330,8 @@ class OpenAIBackendAPI:
     def _start_image_generation(self, prompt: str, requirements: ChatRequirements, conduit_token: str, model: str,
                                 references: Optional[list[Dict[str, Any]]] = None) -> requests.Response:
         """启动图片生成或编辑的 SSE 请求。"""
+        if not conduit_token:
+            raise RuntimeError("image_start: missing conduit_token")
         references = references or []
         parts = [{
             "content_type": "image_asset_pointer",
@@ -1184,17 +1485,13 @@ class OpenAIBackendAPI:
                 "match_score": round(best_score, 2),
             })
             return best_match
-        # 如果没有标题匹配，返回最新的对话（时间最近的）
-        for item in items:
-            conv_id = str(item.get("id") or item.get("conversation_id") or "")
-            updated_at = float(item.get("update_time") or item.get("updated_at") or 0)
-            if conv_id and updated_at and started_at and updated_at >= started_at - 30:
-                logger.info({
-                    "event": "conversation_latest_match",
-                    "conversation_id": conv_id,
-                    "updated_at": updated_at,
-                })
-                return conv_id
+        # 禁止“取最新对话”兜底：同账号并发时会串会话；无 prompt/时间匹配则放弃恢复。
+        logger.info({
+            "event": "conversation_prompt_match_missed",
+            "started_at": started_at,
+            "candidates": len(items),
+            "best_score": round(best_score, 2),
+        })
         return ""
 
     @staticmethod
@@ -1267,8 +1564,6 @@ class OpenAIBackendAPI:
             raise RuntimeError("access_token is required for editable file export")
         self.client_version = EDITABLE_FILE_CLIENT_VERSION
         self.client_build_number = EDITABLE_FILE_CLIENT_BUILD_NUMBER
-        self.session.headers["OAI-Client-Version"] = EDITABLE_FILE_CLIENT_VERSION
-        self.session.headers["OAI-Client-Build-Number"] = EDITABLE_FILE_CLIENT_BUILD_NUMBER
         output_path = Path(output_dir).expanduser().resolve()
         output_path.mkdir(parents=True, exist_ok=True)
         uploaded = [self._upload_editable_base64_image(item, index) for index, item in enumerate(base64_images, start=1)]
@@ -1321,18 +1616,16 @@ class OpenAIBackendAPI:
         file_id = str(payload.get("file_id") or "")
         if not upload_url or not file_id:
             raise RuntimeError(f"invalid upload response: {payload}")
-        response = self.session.put(
+        response = self._get_resource_session().put(
             upload_url,
-            headers={
+            headers=self._resource_headers({
                 "Content-Type": mime_type,
                 "x-ms-blob-type": "BlockBlob",
                 "x-ms-version": "2020-04-08",
                 "Origin": self.base_url,
                 "Referer": self.base_url + "/",
-                "User-Agent": self.user_agent,
                 "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "en-US,en;q=0.8",
-            },
+            }),
             data=data,
             timeout=120,
         )
@@ -1628,7 +1921,11 @@ class OpenAIBackendAPI:
         download_url = self._resolve_editable_download_url(conversation_id, artifact)
         if not download_url:
             raise RuntimeError(f"download url not found for artifact: {artifact}")
-        response = self.session.get(download_url, timeout=300)
+        response = self._get_resource_session().get(
+            download_url,
+            headers=self._resource_headers({"Accept": "*/*"}),
+            timeout=300,
+        )
         ensure_ok(response, "artifact_download")
         content_type = self._clean_editable_mime_type(response.headers.get("Content-Type") or artifact.mime_type)
         file_name = self._resolve_editable_output_name(artifact, response.url, response.headers.get("Content-Disposition"), content_type, primary_mime_types, primary_mime_keywords, primary_default_extension)
@@ -2181,6 +2478,24 @@ class OpenAIBackendAPI:
           (capped at 16s, +jitter) honoring Retry-After when present.
         - All sleeps stay within timeout_secs; on exhaustion raises ImagePollTimeoutError.
         """
+        def _raise_if_cancelled() -> None:
+            cancel_event = getattr(self, "cancel_event", None)
+            if cancel_event is not None and cancel_event.is_set():
+                raise ImageStreamCancelledError("image poll cancelled")
+
+        def _cancel_aware_sleep(seconds: float) -> None:
+            sleep_for = max(0.0, float(seconds))
+            if sleep_for <= 0:
+                _raise_if_cancelled()
+                return
+            cancel_event = getattr(self, "cancel_event", None)
+            if cancel_event is not None:
+                if cancel_event.wait(timeout=sleep_for):
+                    raise ImageStreamCancelledError("image poll cancelled")
+                return
+            time.sleep(sleep_for)
+
+        _raise_if_cancelled()
         start = time.time()
         attempt = 0
         interval = float(config.image_poll_interval_secs)
@@ -2209,12 +2524,12 @@ class OpenAIBackendAPI:
         if has_initial_ids and config.image_settle_enabled:
             settle_for = min(config.image_settle_secs, max(0.0, _remaining()))
             if settle_for > 0:
-                time.sleep(settle_for)
+                _cancel_aware_sleep(settle_for)
         elif initial_wait > 0:
             jitter = random.uniform(0, min(2.0, initial_wait * 0.2))
             sleep_for = min(initial_wait + jitter, max(0.0, _remaining()))
             if sleep_for > 0:
-                time.sleep(sleep_for)
+                _cancel_aware_sleep(sleep_for)
 
         def _retry_sleep(reason: str, status_code: int | None, error: str | None, retry_after: int | None) -> bool:
             # retry_after=0 means "retry immediately" — must not be coerced via falsy check.
@@ -2236,11 +2551,12 @@ class OpenAIBackendAPI:
             if error is not None:
                 log_payload["error"] = error
             logger.warning(log_payload)
-            time.sleep(sleep_for)
+            _cancel_aware_sleep(sleep_for)
             return True
 
         last_task_error = ""
         while _remaining() > 0:
+            _raise_if_cancelled()
             attempt += 1
             # 在每次轮询时，检查 /backend-api/tasks/ 是否有错误（仅记录，不中断）
             # 内容政策违规检测通过对话文本进行（在 _find_content_policy_error_in_conversation 中）
@@ -2282,6 +2598,7 @@ class OpenAIBackendAPI:
                     "error": error_text,
                 })
 
+            _raise_if_cancelled()
             try:
                 conversation = self._get_conversation(conversation_id)
             except UpstreamHTTPError as exc:
@@ -2301,6 +2618,7 @@ class OpenAIBackendAPI:
                     continue
                 break
 
+            _raise_if_cancelled()
             for record in self._extract_image_tool_records(conversation):
                 for file_id in record["file_ids"]:
                     if file_id not in file_ids:
@@ -2348,14 +2666,14 @@ class OpenAIBackendAPI:
                              "settle_secs": config.image_settle_secs})
                 wait = min(config.image_settle_secs, max(0.0, _remaining()))
                 if wait > 0:
-                    time.sleep(wait)
+                    _cancel_aware_sleep(wait)
                     continue
                 return file_ids, sediment_ids
             logger.debug({"event": "image_poll_wait", "conversation_id": conversation_id,
                           "elapsed_secs": round(time.time() - start, 1)})
             wait = min(interval, max(0.0, _remaining()))
             if wait > 0:
-                time.sleep(wait)
+                _cancel_aware_sleep(wait)
         logger.info({
             "event": "image_poll_timeout",
             "conversation_id": conversation_id,
@@ -2625,7 +2943,11 @@ class OpenAIBackendAPI:
     def download_image_bytes(self, urls: list[str]) -> list[bytes]:
         images = []
         for url in urls:
-            response = self.session.get(url, timeout=120)
+            response = self._get_resource_session().get(
+                url,
+                headers=self._resource_headers({"Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"}),
+                timeout=120,
+            )
             ensure_ok(response, "image_download")
             if response.content not in images:
                 images.append(response.content)
@@ -2701,8 +3023,37 @@ class OpenAIBackendAPI:
         self._report_progress("starting_generation")
         response = self._start_image_generation(prompt, requirements, conduit_token, model, references)
         self._report_progress("generating")
+        captured_conversation_id = ""
+
+        def conversation_ready(payload: str) -> bool:
+            return bool(re.search(r'"conversation_id"\s*:\s*"[^"]+"', payload))
+
         try:
-            yield from iter_sse_payloads_until_first_payload(response, config.image_pre_conversation_timeout_secs)
+            for payload in iter_sse_payloads_until_first_payload(
+                response,
+                config.image_pre_conversation_timeout_secs,
+                ready_predicate=conversation_ready,
+                cancel_event=self.cancel_event,
+                post_ready_timeout_secs=15.0,
+            ):
+                if not captured_conversation_id:
+                    match = re.search(r'"conversation_id"\s*:\s*"([^"]+)"', payload)
+                    if match:
+                        captured_conversation_id = match.group(1)
+                        logger.info({
+                            "event": "image_sse_conversation_id_captured",
+                            "conversation_id": captured_conversation_id,
+                        })
+                        if self.progress_callback:
+                            try:
+                                self.progress_callback({
+                                    "step": "conversation_id_captured",
+                                    "conversation_id": captured_conversation_id,
+                                    "access_token": self.access_token,
+                                })
+                            except Exception:
+                                pass
+                yield payload
         finally:
             response.close()
 

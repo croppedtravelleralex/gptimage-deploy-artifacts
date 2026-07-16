@@ -36,8 +36,39 @@ export type Account = {
   fail: number;
   /** 当前图片在途数(正在生成、尚未结束的图片数)。号池空闲时持续 > 0 表示并发槽位泄漏。 */
   image_inflight?: number;
+  panda_sync_state?: string | null;
+  panda_probe_count?: number;
+  panda_probe_next_at?: string | null;
+  panda_probe_last_at?: string | null;
+  panda_probe_last_error?: string | null;
+  panda_ready_at?: string | null;
+  panda_synced_at?: string | null;
+  panda_receive_state?: string | null;
+  panda_imported_at?: string | null;
+  panda_verified_at?: string | null;
+  panda_rejected_at?: string | null;
+  panda_verify_last_error?: string | null;
+  last_quota_refresh_at?: string | null;
+  last_quota_refresh_error?: string | null;
+  quota_refresh_fail_count?: number;
+  quota_refresh_failure_kind?: string | null;
   last_used_at?: string | null;
   proxy?: string | null;
+  proxy_provider?: string | null;
+  proxy_scope?: string | null;
+  proxy_node_id?: string | null;
+  proxy_egress_ip?: string | null;
+  proxy_egress_hash?: string | null;
+  traffic_total_bytes?: number | null;
+  traffic_uploaded_bytes?: number | null;
+  traffic_downloaded_bytes?: number | null;
+  traffic_updated_at?: string | null;
+  created_at?: string | null;
+  outlook_recovery_state?: string | null;
+  outlook_recovery_terminal_reason?: string | null;
+  outlook_recovery_terminal_at?: string | null;
+  outlook_recovery_last_attempt_at?: string | null;
+  outlook_recovery_last_error?: string | null;
 };
 
 export type AccountImportPayload = {
@@ -74,6 +105,22 @@ type AccountListResponse = {
       total_quota: number;
       unlimited_quota_count?: number;
       unknown_quota_count?: number;
+      panda_staging_count?: number;
+      panda_ready_count?: number;
+      panda_synced_count?: number;
+      panda_upload_queue_count?: number;
+      panda_upload_eligible_count?: number;
+      panda_upload_unsynced_eligible_count?: number;
+      panda_upload_blocked_count?: number;
+      panda_upload_retained_count?: number;
+      panda_upload_remote_pending_count?: number;
+      panda_upload_remote_verified_count?: number;
+      panda_upload_remote_rejected_count?: number;
+      panda_incoming_count?: number;
+      panda_verified_count?: number;
+      panda_rejected_count?: number;
+      schedulable?: number;
+      tainted_count?: number;
       total_success?: number;
       total_fail?: number;
       by_type?: Record<string, number>;
@@ -105,6 +152,50 @@ export type PandaAccountSyncResponse = {
   batch_size: number;
   max_accounts_per_run: number;
   timeout_seconds: number;
+  synced?: number;
+  failed?: number;
+  queued?: number;
+  details?: {
+    scanned?: number;
+    eligible?: number;
+    remote_missing_reupload?: number;
+    already_remote?: number;
+    blocked_by_config?: number;
+    blocked_by_watermark?: number;
+    blocked_by_state?: number;
+    blocked_by_quota_or_status?: number;
+    blocked_by_failure_evidence?: number;
+    blocked_by_missing_quota_refresh?: number;
+    blocked_by_probe_error?: number;
+    deleted_local?: number;
+    remote_token_snapshot?: string;
+  };
+  stats?: AccountListResponse["stats"];
+};
+
+export type AccountActivityDailyResponse = {
+  days: number;
+  sync_label: string;
+  items: Array<{
+    date: string;
+    registered: number;
+    uploaded: number;
+    received: number;
+    deleted: number;
+  }>;
+};
+
+export type PandaSyncPublicSettings = {
+  enabled: boolean;
+  base_url: string;
+  batch_size: number;
+  timeout_seconds: number;
+  remove_local_on_success: boolean;
+  queue_on_failure: boolean;
+  staging_enabled: boolean;
+  upload_max_batch?: number;
+  public_import_min_interval_sec?: number;
+  has_auth_key?: boolean;
 };
 
 export type AccountRefreshResponse = {
@@ -192,6 +283,48 @@ export type AccountMaintenanceLoopStatus = {
     image_inflight?: number | null;
   };
   settings?: AccountMaintenanceLoopSettings;
+};
+
+export type OutlookAutoRecoverySettings = {
+  enabled?: boolean;
+  interval_sec?: number;
+  max_per_cycle?: number;
+  startup_delay_sec?: number;
+  progress_poll_sec?: number;
+};
+
+export type OutlookAutoRecoveryStatus = {
+  state: string;
+  enabled: boolean;
+  started_at?: string | null;
+  last_update_at?: string | null;
+  last_run_at?: string | null;
+  next_run_at?: string | null;
+  seconds_until_next_run?: number | null;
+  pause_reason?: string;
+  candidate_count?: number;
+  terminal_count?: number;
+  current?: {
+    email?: string;
+    stage?: string;
+    message?: string;
+    progress_id?: string;
+  } | null;
+  last_result?: {
+    at?: string;
+    ok?: boolean;
+    email?: string;
+    stage?: string;
+    error?: string;
+    quota?: number | null;
+    skipped?: boolean;
+    reason?: string;
+    attempted?: number;
+    candidate_count?: number;
+  } | null;
+  totals?: Record<string, number>;
+  recent?: Array<Record<string, unknown>>;
+  settings?: OutlookAutoRecoverySettings;
 };
 
 export type AccountRefreshAllStartOptions = {
@@ -499,6 +632,8 @@ export type RegisterConfig = {
     providers: Array<Record<string, unknown>>;
   };
   proxy: string;
+  proxy_count?: number;
+  proxy_preview?: string[];
   total: number;
   threads: number;
   mode: "total" | "quota" | "available";
@@ -509,6 +644,7 @@ export type RegisterConfig = {
     job_id?: string;
     success: number;
     fail: number;
+    skipped?: number;
     done: number;
     running: number;
     threads: number;
@@ -555,6 +691,21 @@ export async function syncAccountsToPanda() {
   });
 }
 
+export async function fetchAccountActivityDaily(days = 14) {
+  return httpRequest<AccountActivityDailyResponse>(`/api/accounts/activity/daily?days=${days}`);
+}
+
+export async function fetchPandaSyncSettings() {
+  return httpRequest<{ panda_sync: PandaSyncPublicSettings }>("/api/accounts/panda-sync");
+}
+
+export async function updatePandaSyncSettings(updates: Partial<Pick<PandaSyncPublicSettings, "enabled">>) {
+  return httpRequest<{ panda_sync: PandaSyncPublicSettings }>("/api/accounts/panda-sync", {
+    method: "POST",
+    body: updates,
+  });
+}
+
 export async function fetchModels() {
   return httpRequest<ModelListResponse>("/v1/models");
 }
@@ -594,6 +745,40 @@ export async function deleteAccounts(tokens: string[]) {
   });
 }
 
+export type OutlookAccountRecoveryProgress = {
+  progress_id: string;
+  done: boolean;
+  ok: boolean;
+  stage: string;
+  message: string;
+  email: string;
+  error?: string;
+  result?: {
+    email: string;
+    quota: number;
+    status: string;
+    schedulable: boolean;
+    old_removed: boolean;
+    old_fp_inherited: boolean;
+    login_via_chatgpt_email_otp: boolean;
+    report_dir: string;
+    backup_dir: string;
+  } | null;
+};
+
+export async function recoverOutlookAccount(accessToken: string) {
+  return httpRequest<{ progress_id: string }>("/api/accounts/recover-outlook", {
+    method: "POST",
+    body: { access_token: accessToken },
+  });
+}
+
+export async function fetchOutlookAccountRecoveryProgress(progressId: string) {
+  return httpRequest<OutlookAccountRecoveryProgress>(
+    `/api/accounts/recover-outlook/progress/${progressId}`,
+  );
+}
+
 export async function refreshAccounts(accessTokens: string[]) {
   return httpRequest<{ progress_id: string }>("/api/accounts/refresh", {
     method: "POST",
@@ -629,6 +814,17 @@ export async function fetchAccountMaintenanceLoopStatus() {
 
 export async function updateAccountMaintenanceLoop(settings: AccountMaintenanceLoopSettings) {
   return httpRequest<AccountMaintenanceLoopStatus>("/api/accounts/maintenance-loop", {
+    method: "POST",
+    body: settings,
+  });
+}
+
+export async function fetchOutlookAutoRecoveryStatus() {
+  return httpRequest<OutlookAutoRecoveryStatus>("/api/accounts/outlook-auto-recovery/status");
+}
+
+export async function updateOutlookAutoRecovery(settings: OutlookAutoRecoverySettings) {
+  return httpRequest<OutlookAutoRecoveryStatus>("/api/accounts/outlook-auto-recovery", {
     method: "POST",
     body: settings,
   });

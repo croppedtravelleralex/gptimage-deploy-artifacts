@@ -10,12 +10,15 @@ from pathlib import Path
 
 from services.image_task_service import (
     ImageTaskService,
+    ImageTaskQueueFullError,
     ImageTaskWaitTimeoutError,
     TASK_STATUS_ERROR,
+    TASK_STATUS_QUEUED,
     TASK_STATUS_RUNNING,
     TASK_STATUS_SUCCESS,
     TASK_STATUS_TIMEOUT_PENDING,
 )
+from services.config import config
 from services.openai_backend_api import InvalidAccessTokenError
 
 
@@ -36,6 +39,26 @@ def wait_for_task(service: ImageTaskService, identity: dict[str, object], task_i
 
 
 class ImageTaskServiceTests(unittest.TestCase):
+    def setUp(self):
+        self._original_image_generation_paused = config.data.get("image_generation_paused")
+        self._original_image_task_queue = config.data.get("image_task_queue")
+        config.data["image_generation_paused"] = False
+        config.data["image_task_queue"] = {
+            **(self._original_image_task_queue if isinstance(self._original_image_task_queue, dict) else {}),
+            "enabled": True,
+        }
+        self.addCleanup(self._restore_config)
+
+    def _restore_config(self):
+        if self._original_image_generation_paused is None:
+            config.data.pop("image_generation_paused", None)
+        else:
+            config.data["image_generation_paused"] = self._original_image_generation_paused
+        if self._original_image_task_queue is None:
+            config.data.pop("image_task_queue", None)
+        else:
+            config.data["image_task_queue"] = self._original_image_task_queue
+
     def make_service(self, path: Path, handler=None, **kwargs) -> ImageTaskService:
         service = ImageTaskService(
             path,
@@ -46,6 +69,21 @@ class ImageTaskServiceTests(unittest.TestCase):
         )
         self.addCleanup(service.stop)
         return service
+
+    def test_submit_rejects_when_image_generation_paused(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config.data["image_generation_paused"] = True
+            service = self.make_service(Path(tmp_dir) / "image_tasks.json")
+
+            with self.assertRaisesRegex(ImageTaskQueueFullError, "paused"):
+                service.submit_generation(
+                    OWNER,
+                    client_task_id="paused-task",
+                    prompt="cat",
+                    model="gpt-image-2",
+                    size=None,
+                    base_url="http://local.test",
+                )
 
     def test_duplicate_submit_uses_existing_task(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -119,6 +157,92 @@ class ImageTaskServiceTests(unittest.TestCase):
             self.assertEqual(result["missing_ids"], [])
             self.assertEqual(result["items"][0]["status"], "success")
             self.assertEqual(result["items"][0]["data"][0]["url"], "http://example.test/image.png")
+
+    def test_reloaded_service_lazy_loads_terminal_task_results(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "image_tasks.json"
+            service = self.make_service(path)
+            service.submit_generation(
+                OWNER,
+                client_task_id="large-success-task",
+                prompt="cat",
+                model="gpt-image-2",
+                size=None,
+                base_url="http://local.test",
+            )
+            wait_for_task(service, OWNER, "large-success-task", "success")
+
+            reloaded = self.make_service(path)
+
+            self.assertNotIn("owner-1:large-success-task", reloaded._tasks)
+            status = reloaded.list_task_statuses(OWNER, ["large-success-task"])["items"][0]
+            self.assertEqual(status["status"], "success")
+            self.assertNotIn("data", status)
+            result = reloaded.list_tasks(OWNER, ["large-success-task"])
+            self.assertEqual(result["missing_ids"], [])
+            self.assertEqual(result["items"][0]["data"][0]["url"], "http://example.test/image.png")
+            self.assertNotIn("owner-1:large-success-task", reloaded._tasks)
+
+    def test_resume_poll_closes_backend_session(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = self.make_service(Path(tmp_dir) / "image_tasks.json")
+            key = "owner-1:resume-close-task"
+            with service._condition:
+                service._tasks[key] = {
+                    "id": "resume-close-task",
+                    "owner_id": "owner-1",
+                    "status": TASK_STATUS_TIMEOUT_PENDING,
+                    "mode": "generate",
+                    "model": "gpt-image-2",
+                    "created_at": "2026-01-01 00:00:00",
+                    "updated_at": "2026-01-01 00:00:00",
+                    "created_ts": time.time(),
+                    "updated_ts": time.time(),
+                }
+                service._save_task_locked(key)
+
+            instances = []
+
+            class FakeBackend:
+                def __init__(self, access_token: str = ""):
+                    self.access_token = access_token
+                    self.closed = False
+                    self.downloaded_urls = []
+                    instances.append(self)
+
+                def _poll_image_results(self, _conversation_id, _timeout_secs):
+                    return ["file-1"], []
+
+                def resolve_conversation_image_urls(self, *_args, **_kwargs):
+                    return [
+                        "https://example.test/image.png",
+                        "https://example.test/unexpected-second.png",
+                    ]
+
+                def download_image_bytes(self, urls):
+                    self.downloaded_urls = list(urls)
+                    return [b"image-bytes" for _url in urls]
+
+                def close(self):
+                    self.closed = True
+
+            with mock.patch("services.openai_backend_api.OpenAIBackendAPI", FakeBackend):
+                service._run_resume_poll(
+                    key,
+                    "conv-1",
+                    1,
+                    OWNER,
+                    "generate",
+                    "gpt-image-2",
+                    access_token="token-1",
+                )
+
+            self.assertEqual(len(instances), 1)
+            self.assertTrue(instances[0].closed)
+            self.assertEqual(instances[0].downloaded_urls, ["https://example.test/image.png"])
+            task = service.list_tasks(OWNER, ["resume-close-task"])["items"][0]
+            self.assertEqual(task["status"], TASK_STATUS_SUCCESS)
+            self.assertEqual(len(task["data"]), 1)
 
     def test_constructor_does_not_recover_unfinished_tasks_until_runtime_start(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -251,6 +375,52 @@ class ImageTaskServiceTests(unittest.TestCase):
             release.set()
             service.stop()
 
+    def test_resume_polling_tasks_do_not_block_submit_slots(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = self.make_service(
+                Path(tmp_dir) / "image_tasks.json",
+                submit_workers_getter=lambda: 1,
+                poll_workers_getter=lambda: 0,
+                per_user_running_max_getter=lambda: 1,
+            )
+            with service._condition:
+                for index in range(3):
+                    key = f"owner-1:resume-{index}"
+                    service._tasks[key] = {
+                        "id": f"resume-{index}",
+                        "owner_id": "owner-1",
+                        "status": TASK_STATUS_RUNNING,
+                        "progress": "resume_polling",
+                        "conversation_id": f"conv-{index}",
+                        "mode": "generate",
+                        "model": "gpt-image-2",
+                        "created_at": "2026-01-01 00:00:00",
+                        "updated_at": "2026-01-01 00:00:00",
+                        "created_ts": time.time(),
+                        "updated_ts": time.time(),
+                    }
+                queued_key = "owner-1:queued-after-resume"
+                service._tasks[queued_key] = {
+                    "id": "queued-after-resume",
+                    "owner_id": "owner-1",
+                    "status": TASK_STATUS_QUEUED,
+                    "mode": "generate",
+                    "model": "gpt-image-2",
+                    "payload": {"prompt": "cat"},
+                    "identity": dict(OWNER),
+                    "created_at": "2026-01-01 00:00:00",
+                    "updated_at": "2026-01-01 00:00:00",
+                    "created_ts": time.time(),
+                    "updated_ts": time.time(),
+                }
+
+                self.assertEqual(service._owner_running_count_locked("owner-1"), 0)
+                run_args = service._next_submit_task_locked()
+
+            self.assertIsNotNone(run_args)
+            self.assertEqual(run_args[0], queued_key)
+            self.assertEqual(service.list_tasks(OWNER, ["queued-after-resume"])["items"][0]["status"], TASK_STATUS_RUNNING)
+
 
     def test_submit_hard_timeout_marks_error_and_late_handler_does_not_overwrite(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -352,7 +522,120 @@ class ImageTaskServiceTests(unittest.TestCase):
                 stored = service._tasks[key]
                 self.assertEqual(stored["status"], TASK_STATUS_ERROR)
                 self.assertEqual(stored["force_released_inflight_count"], 1)
+                self.assertNotIn("resume_access_token", stored)
             release.set()
+
+    def test_submit_hard_timeout_releases_account_acquired_after_cancel(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            allow_account_acquired = threading.Event()
+            callback_finished = threading.Event()
+
+            def handler(payload):
+                allow_account_acquired.wait(timeout=2)
+                callback = payload.get("progress_callback")
+                if callable(callback):
+                    callback({"step": "account_acquired", "access_token": "token-late"})
+                callback_finished.set()
+                payload["cancel_event"].wait(timeout=1)
+                raise RuntimeError("image stream cancelled")
+
+            service = self.make_service(
+                Path(tmp_dir) / "image_tasks.json",
+                handler,
+                submit_workers_getter=lambda: 1,
+                poll_workers_getter=lambda: 0,
+            )
+            key = "owner-1:hard-timeout-late-account-task"
+            with service._condition:
+                service._tasks[key] = {
+                    "id": "hard-timeout-late-account-task",
+                    "owner_id": "owner-1",
+                    "status": TASK_STATUS_RUNNING,
+                    "mode": "generate",
+                    "model": "gpt-image-2",
+                    "created_at": "2026-01-01 00:00:00",
+                    "updated_at": "2026-01-01 00:00:00",
+                    "created_ts": time.time(),
+                    "updated_ts": time.time(),
+                }
+                service._save_task_locked(key)
+
+            with mock.patch("services.image_task_service.account_service.release_image_slot") as release_slot:
+                service._run_task(
+                    key,
+                    "generate",
+                    {"prompt": "cat", "poll_timeout_secs": 0.05, "task_hard_timeout_secs": 0.05},
+                    OWNER,
+                    "gpt-image-2",
+                )
+                allow_account_acquired.set()
+                self.assertTrue(callback_finished.wait(timeout=1))
+
+            release_slot.assert_called_once_with("token-late")
+
+    def test_hard_timeout_with_captured_conversation_cancels_runner_and_becomes_timeout_pending(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            started = threading.Event()
+            cancelled_seen = threading.Event()
+
+            def handler(payload):
+                started.set()
+                callback = payload.get("progress_callback")
+                if callable(callback):
+                    callback(
+                        {
+                            "step": "conversation_id_captured",
+                            "access_token": "token-stuck",
+                            "conversation_id": "conv-captured-1",
+                        }
+                    )
+                cancel_event = payload["cancel_event"]
+                if cancel_event.wait(timeout=1):
+                    cancelled_seen.set()
+                    raise RuntimeError("image stream cancelled")
+                return {"data": [{"url": "http://example.test/late.png"}]}
+
+            service = self.make_service(
+                Path(tmp_dir) / "image_tasks.json",
+                handler,
+                submit_workers_getter=lambda: 1,
+                poll_workers_getter=lambda: 0,
+            )
+            key = "owner-1:hard-timeout-conversation-task"
+            with service._condition:
+                service._tasks[key] = {
+                    "id": "hard-timeout-conversation-task",
+                    "owner_id": "owner-1",
+                    "status": TASK_STATUS_RUNNING,
+                    "mode": "generate",
+                    "model": "gpt-image-2",
+                    "created_at": "2026-01-01 00:00:00",
+                    "updated_at": "2026-01-01 00:00:00",
+                    "created_ts": time.time(),
+                    "updated_ts": time.time(),
+                }
+                service._save_task_locked(key)
+
+            with mock.patch("services.image_task_service.account_service.release_image_slot") as release_slot:
+                service._run_task(
+                    key,
+                    "generate",
+                    {"prompt": "cat", "poll_timeout_secs": 0.05, "task_hard_timeout_secs": 0.05},
+                    OWNER,
+                    "gpt-image-2",
+                )
+
+            self.assertTrue(started.is_set())
+            self.assertTrue(cancelled_seen.wait(timeout=1))
+            release_slot.assert_called_once_with("token-stuck")
+            task = service.list_tasks(OWNER, ["hard-timeout-conversation-task"])["items"][0]
+            self.assertEqual(task["status"], TASK_STATUS_TIMEOUT_PENDING)
+            self.assertEqual(task["conversation_id"], "conv-captured-1")
+            with service._condition:
+                stored = service._tasks[key]
+                self.assertFalse(stored["runner_alive_after_cancel"])
+                self.assertEqual(stored["force_released_inflight_count"], 1)
+                self.assertEqual(stored["resume_access_token"], "token-stuck")
 
     def test_timeout_with_conversation_id_becomes_timeout_pending(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

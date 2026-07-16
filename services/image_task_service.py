@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import sqlite3
 import threading
 import time
@@ -24,6 +25,11 @@ TASK_STATUS_SUCCESS = "success"
 TASK_STATUS_ERROR = "error"
 TERMINAL_STATUSES = {TASK_STATUS_SUCCESS, TASK_STATUS_ERROR}
 UNFINISHED_STATUSES = {TASK_STATUS_QUEUED, TASK_STATUS_RUNNING, TASK_STATUS_TIMEOUT_PENDING}
+
+_SUCCESS_DURATION_EWMA_INITIAL_SECS = 60.0
+_SUCCESS_DURATION_EWMA_MIN_SECS = 30.0
+_SUCCESS_DURATION_EWMA_MAX_SECS = 180.0
+_SUCCESS_DURATION_EWMA_ALPHA = 0.2
 
 
 class ImageTaskQueueFullError(RuntimeError):
@@ -92,6 +98,16 @@ def _looks_like_token_invalid(message: str) -> bool:
         or "invalidated oauth token" in lowered
         or "authentication token has been invalidated" in lowered
     )
+
+
+def _image_generation_paused() -> bool:
+    if bool(config.data.get("image_generation_paused")):
+        return True
+    try:
+        settings = config.get_image_task_queue_settings()
+        return not bool(settings.get("enabled", True))
+    except Exception:
+        return False
 
 
 def _collect_image_urls(data: list[Any]) -> list[str]:
@@ -279,6 +295,8 @@ class ImageTaskService:
         self._poll_threads: list[threading.Thread] = []
         self._tasks: dict[str, dict[str, Any]] = {}
         self._runtime_recovered = False
+        self._success_duration_ewma_secs = _SUCCESS_DURATION_EWMA_INITIAL_SECS
+        self._last_submit_start_ts = 0.0
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
@@ -375,6 +393,52 @@ class ImageTaskService:
         payload["queue_coordinated"] = True
         return self._submit(identity, client_task_id=client_task_id, mode="edit", payload=payload)
 
+    def success_duration_ewma_secs(self) -> float:
+        with self._lock:
+            return float(self._success_duration_ewma_secs)
+
+    def note_success_duration_ms(self, duration_ms: object) -> None:
+        try:
+            secs = max(1.0, float(duration_ms) / 1000.0)
+        except Exception:
+            return
+        with self._lock:
+            previous = float(self._success_duration_ewma_secs or _SUCCESS_DURATION_EWMA_INITIAL_SECS)
+            updated = ((1.0 - _SUCCESS_DURATION_EWMA_ALPHA) * previous) + (_SUCCESS_DURATION_EWMA_ALPHA * secs)
+            self._success_duration_ewma_secs = max(
+                _SUCCESS_DURATION_EWMA_MIN_SECS,
+                min(_SUCCESS_DURATION_EWMA_MAX_SECS, updated),
+            )
+
+    def estimate_sync_eta_secs(self, identity: dict[str, object], *, extra_waiters: int = 0) -> int:
+        """Estimate wall-clock wait for a new sync request from this owner."""
+        owner = _owner_id(identity)
+        with self._lock:
+            unfinished = [
+                task
+                for task in self._tasks.values()
+                if task.get("owner_id") == owner and self._uses_submit_capacity(task)
+            ]
+            ahead = len(unfinished) + max(0, int(extra_waiters or 0))
+            try:
+                global_slots = max(1, int(getattr(config, "image_global_concurrency", 6) or 6))
+            except Exception:
+                global_slots = 6
+            per_user_slots = max(1, int(self._effective_per_user_running_max_locked()))
+            running_slots = max(1, min(global_slots, per_user_slots))
+            ewma = float(self._success_duration_ewma_secs or _SUCCESS_DURATION_EWMA_INITIAL_SECS)
+        if ahead <= 0:
+            return 0
+        batches = int(math.ceil(ahead / float(running_slots)))
+        return int(max(0, batches * ewma))
+
+    def queue_snapshot_for_task(self, identity: dict[str, object], task_id: str) -> dict[str, Any]:
+        result = self.list_task_statuses(identity, [task_id])
+        items = result.get("items") if isinstance(result, dict) else None
+        if isinstance(items, list) and items and isinstance(items[0], dict):
+            return dict(items[0])
+        return {}
+
     def wait_for_result(
         self,
         identity: dict[str, object],
@@ -401,7 +465,7 @@ class ImageTaskService:
             while True:
                 if self._cleanup_locked():
                     self._save_locked()
-                task = self._tasks.get(key)
+                task = self._tasks.get(key) or self._load_task_from_db_locked(key)
                 if task is None:
                     raise KeyError(f"image task not found: {task_id}")
                 status = _clean(task.get("status"))
@@ -421,7 +485,7 @@ class ImageTaskService:
             items = []
             missing_ids = []
             for task_id in requested_ids:
-                task = self._tasks.get(_task_key(owner, task_id))
+                task = self._tasks.get(_task_key(owner, task_id)) or self._load_task_from_db_locked(_task_key(owner, task_id))
                 if task is None:
                     missing_ids.append(task_id)
                 else:
@@ -477,7 +541,10 @@ class ImageTaskService:
             items = []
             missing_ids = []
             for task_id in requested_ids:
-                task = self._tasks.get(_task_key(owner, task_id))
+                key = _task_key(owner, task_id)
+                task = self._tasks.get(key)
+                if task is None:
+                    task = self._load_task_status_from_db_locked(key)
                 if task is None:
                     missing_ids.append(task_id)
                 else:
@@ -505,6 +572,8 @@ class ImageTaskService:
             conn.close()
 
     def _submit(self, identity: dict[str, object], *, client_task_id: str, mode: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if _image_generation_paused():
+            raise ImageTaskQueueFullError("image generation is paused to preserve the account pool")
         task_id = _clean(client_task_id)
         if not task_id:
             raise ValueError("client_task_id is required")
@@ -558,7 +627,11 @@ class ImageTaskService:
             owner_limit = max(1, int(self.per_user_queue_max_getter()))
         except Exception:
             owner_limit = 36
-        owner_unfinished = [task for task in unfinished if task.get("owner_id") == owner]
+        owner_unfinished = [
+            task
+            for task in unfinished
+            if task.get("owner_id") == owner and self._uses_submit_capacity(task)
+        ]
         if len(owner_unfinished) >= owner_limit:
             raise ImageTaskQueueFullError(f"image task queue is full for current user ({len(owner_unfinished)}/{owner_limit})")
 
@@ -588,6 +661,10 @@ class ImageTaskService:
 
     def _ensure_workers_locked(self) -> None:
         self._recover_runtime_tasks_locked()
+        if _image_generation_paused():
+            self._submit_threads = [thread for thread in self._submit_threads if thread.is_alive()]
+            self._poll_threads = [thread for thread in self._poll_threads if thread.is_alive()]
+            return
         self._submit_threads = [thread for thread in self._submit_threads if thread.is_alive()]
         while len(self._submit_threads) < self._target_submit_workers():
             index = len(self._submit_threads) + 1
@@ -602,7 +679,28 @@ class ImageTaskService:
             thread.start()
 
     def _owner_running_count_locked(self, owner: str) -> int:
-        return sum(1 for task in self._tasks.values() if task.get("owner_id") == owner and task.get("status") == TASK_STATUS_RUNNING)
+        return sum(
+            1
+            for task in self._tasks.values()
+            if task.get("owner_id") == owner
+            and task.get("status") == TASK_STATUS_RUNNING
+            and not self._is_resume_polling_task(task)
+        )
+
+    @staticmethod
+    def _is_resume_polling_task(task: dict[str, Any]) -> bool:
+        return (
+            task.get("status") == TASK_STATUS_RUNNING
+            and _clean(task.get("progress")) == "resume_polling"
+            and bool(_clean(task.get("conversation_id")))
+        )
+
+    @classmethod
+    def _uses_submit_capacity(cls, task: dict[str, Any]) -> bool:
+        status = task.get("status")
+        if status == TASK_STATUS_QUEUED:
+            return True
+        return status == TASK_STATUS_RUNNING and not cls._is_resume_polling_task(task)
 
     def _effective_per_user_running_max_locked(self) -> int:
         settings = self._queue_settings()
@@ -650,6 +748,14 @@ class ImageTaskService:
     def _next_submit_task_locked(self) -> tuple[str, str, dict[str, Any], dict[str, object], str] | None:
         if self._deadlock_guard_tripped_locked():
             return None
+        try:
+            interval_ms = max(0, int(self._queue_settings().get("submit_start_min_interval_ms") or 0))
+        except Exception:
+            interval_ms = 0
+        if interval_ms > 0 and self._last_submit_start_ts > 0:
+            elapsed = time.time() - float(self._last_submit_start_ts)
+            if elapsed < (interval_ms / 1000.0):
+                return None
         per_user_running_max = self._effective_per_user_running_max_locked()
         candidates = sorted(
             ((key, task) for key, task in self._tasks.items() if task.get("status") == TASK_STATUS_QUEUED),
@@ -671,6 +777,7 @@ class ImageTaskService:
             now_ts = time.time()
             task.update({"status": TASK_STATUS_RUNNING, "progress": "submitting", "error": "", "updated_at": _now_iso(), "updated_ts": now_ts})
             self._save_task_locked(key)
+            self._last_submit_start_ts = now_ts
             return key, _clean(task.get("mode"), "generate"), dict(payload), dict(identity), _clean(task.get("model"), "gpt-image-2")
         return None
 
@@ -679,7 +786,16 @@ class ImageTaskService:
             with self._condition:
                 run_args = self._next_submit_task_locked()
                 if run_args is None:
-                    self._condition.wait(timeout=0.5)
+                    wait_secs = 0.5
+                    try:
+                        interval_ms = max(0, int(self._queue_settings().get("submit_start_min_interval_ms") or 0))
+                    except Exception:
+                        interval_ms = 0
+                    if interval_ms > 0 and self._last_submit_start_ts > 0:
+                        remaining = (interval_ms / 1000.0) - (time.time() - float(self._last_submit_start_ts))
+                        if 0 < remaining < wait_secs:
+                            wait_secs = remaining
+                    self._condition.wait(timeout=max(0.05, wait_secs))
                     continue
             key, mode, payload, identity, model = run_args
             self._run_task(key, mode, payload, identity, model)
@@ -709,36 +825,95 @@ class ImageTaskService:
         started = time.time()
         cancelled = threading.Event()
         finished = threading.Event()
+        state_lock = threading.Lock()
         outcome: dict[str, Any] = {"payload_for_run": dict(payload)}
         leased_access_tokens: set[str] = set()
+        released_access_tokens: set[str] = set()
+
+        def claim_release(access_token: str) -> bool:
+            token = _clean(access_token)
+            if not token:
+                return False
+            with state_lock:
+                if token in released_access_tokens:
+                    return False
+                released_access_tokens.add(token)
+                leased_access_tokens.discard(token)
+                return True
+
+        def release_slot_once(access_token: str) -> bool:
+            token = _clean(access_token)
+            if not claim_release(token):
+                return False
+            try:
+                account_service.release_image_slot(token)
+                return True
+            except Exception:
+                with state_lock:
+                    released_access_tokens.discard(token)
+                return False
 
         def progress_callback(step: object) -> None:
             progress = ""
+            access_token = ""
+            conversation_id = ""
             if isinstance(step, dict):
                 progress = _clean(step.get("step") or step.get("progress"))
                 access_token = _clean(step.get("access_token"))
-                if access_token:
-                    leased_access_tokens.add(access_token)
+                conversation_id = _clean(step.get("conversation_id"))
             else:
                 progress = _clean(step)
+
+            late_cancelled_token = ""
+            with state_lock:
+                if access_token:
+                    leased_access_tokens.add(access_token)
+                    outcome["access_token"] = access_token
+                if cancelled.is_set():
+                    late_cancelled_token = access_token
+                else:
+                    if conversation_id:
+                        outcome["conversation_id"] = conversation_id
+
+                    updates: dict[str, Any] = {}
+                    if progress:
+                        updates["progress"] = progress
+                    if progress == "image_stream_resolve_start":
+                        updates["started_ts"] = time.time()
+                    if conversation_id:
+                        updates["conversation_id"] = conversation_id
+                    resume_access_token = _clean(outcome.get("access_token"))
+                    if conversation_id and resume_access_token:
+                        updates["resume_access_token"] = resume_access_token
+                    if updates:
+                        # 与 hard-timeout 分支共用 state_lock，防止迟到的进度回调
+                        # 在 timeout_pending/error 终态之后把 progress 覆盖回去。
+                        self._update_task(key, **updates)
+
+            # get_available_access_token 可能在 hard-timeout 之后才返回。
+            # 迟到 token 属于已经结束的任务，需立即归还其并发槽位。
+            if late_cancelled_token:
+                release_slot_once(late_cancelled_token)
             if cancelled.is_set():
                 return
-            if not progress:
-                return
-            updates: dict[str, Any] = {"progress": progress}
-            if progress == "image_stream_resolve_start":
-                updates["started_ts"] = time.time()
-            self._update_task(key, **updates)
 
         def run_handler() -> None:
             try:
                 payload_for_run = self._resolve_payload_assets(mode, payload, identity)
-                outcome["payload_for_run"] = payload_for_run
-                payload_with_progress = {**payload_for_run, "progress_callback": progress_callback}
+                with state_lock:
+                    outcome["payload_for_run"] = payload_for_run
+                payload_with_progress = {
+                    **payload_for_run,
+                    "progress_callback": progress_callback,
+                    "cancel_event": cancelled,
+                }
                 handler = self.edit_handler if mode == "edit" else self.generation_handler
-                outcome["result"] = handler(payload_with_progress)
+                result = handler(payload_with_progress)
+                with state_lock:
+                    outcome["result"] = result
             except Exception as exc:
-                outcome["exception"] = exc
+                with state_lock:
+                    outcome["exception"] = exc
             finally:
                 finished.set()
 
@@ -747,20 +922,101 @@ class ImageTaskService:
         hard_timeout_secs = self._task_hard_timeout_secs(payload)
         if not finished.wait(timeout=hard_timeout_secs):
             cancelled.set()
+            try:
+                cancel_grace_secs = max(0.0, min(5.0, float(payload.get("cancel_grace_secs") or 1.0)))
+            except Exception:
+                cancel_grace_secs = 1.0
+            finished.wait(timeout=cancel_grace_secs)
+            if finished.is_set():
+                thread.join(timeout=0.1)
+            runner_alive_after_cancel = thread.is_alive()
             duration_ms = int((time.time() - started) * 1000)
-            payload_for_run = outcome.get("payload_for_run") if isinstance(outcome.get("payload_for_run"), dict) else payload
+            with state_lock:
+                payload_for_run = outcome.get("payload_for_run") if isinstance(outcome.get("payload_for_run"), dict) else payload
+                conversation_id = _clean(outcome.get("conversation_id"))
+                resume_access_token = _clean(outcome.get("access_token"))
+                leased_tokens = set(leased_access_tokens)
+
+            if conversation_id:
+                error_message = (
+                    f"image task hard timeout after upstream conversation capture ({hard_timeout_secs:.1f}s); "
+                    "background resume polling scheduled"
+                )
+                for leased_token in leased_tokens:
+                    try:
+                        account_service.record_image_transient_backoff(leased_token, error_message)
+                    except Exception:
+                        pass
+                force_released = sum(1 for token in leased_tokens if release_slot_once(token))
+                resume_timeout_secs = max(
+                    float(payload.get("resume_timeout_secs") or 0.0),
+                    float(payload.get("poll_timeout_secs") or 0.0),
+                    float(self.timeout_pending_poll_secs_getter()),
+                )
+                with state_lock:
+                    self._update_task(
+                        key,
+                        status=TASK_STATUS_TIMEOUT_PENDING,
+                        progress="timeout_pending",
+                        error=error_message,
+                        data=[],
+                        duration_ms=duration_ms,
+                        hard_timeout_secs=hard_timeout_secs,
+                        cancel_grace_secs=cancel_grace_secs,
+                        runner_alive_after_cancel=runner_alive_after_cancel,
+                        force_released_inflight_count=force_released,
+                        conversation_id=conversation_id,
+                        resume_timeout_secs=resume_timeout_secs,
+                        **({"resume_access_token": resume_access_token} if resume_access_token else {}),
+                        next_resume_ts=time.time() + 1.0,
+                    )
+                self._log_call(
+                    identity,
+                    mode,
+                    model,
+                    started,
+                    "调用硬超时待续轮询",
+                    request_preview=request_text(payload_for_run.get("prompt")),
+                    status="timeout_pending",
+                    error=error_message,
+                )
+                return
+
             error_message = f"image task hard timeout before upstream completion ({hard_timeout_secs:.1f}s); no conversation_id captured"
-            force_released = self._force_release_image_slots(leased_access_tokens)
-            self._update_task(
-                key,
-                status=TASK_STATUS_ERROR,
-                progress="failed",
-                error=error_message,
-                data=[],
-                duration_ms=duration_ms,
-                hard_timeout_secs=hard_timeout_secs,
-                force_released_inflight_count=force_released,
-            )
+            released_count = 0
+            for leased_token in leased_tokens:
+                if not claim_release(leased_token):
+                    continue
+                try:
+                    account_service.record_image_transient_backoff(leased_token, error_message)
+                except Exception:
+                    pass
+                try:
+                    # mark_image_result() 已负责释放账号在途槽位。只有它抛错时，
+                    # 才交给后面的兜底强释，避免同一 token 被释放两次。
+                    account_service.mark_image_result(leased_token, False)
+                    released_count += 1
+                except Exception:
+                    try:
+                        account_service.release_image_slot(leased_token)
+                        released_count += 1
+                    except Exception:
+                        with state_lock:
+                            released_access_tokens.discard(leased_token)
+            force_released = released_count
+            with state_lock:
+                self._update_task(
+                    key,
+                    status=TASK_STATUS_ERROR,
+                    progress="failed",
+                    error=error_message,
+                    data=[],
+                    duration_ms=duration_ms,
+                    hard_timeout_secs=hard_timeout_secs,
+                    cancel_grace_secs=cancel_grace_secs,
+                    runner_alive_after_cancel=runner_alive_after_cancel,
+                    force_released_inflight_count=force_released,
+                )
             self._log_call(
                 identity,
                 mode,
@@ -773,11 +1029,13 @@ class ImageTaskService:
             )
             return
 
-        payload_for_run = outcome.get("payload_for_run") if isinstance(outcome.get("payload_for_run"), dict) else payload
-        try:
-            if "exception" in outcome:
-                raise outcome["exception"]
+        with state_lock:
+            payload_for_run = outcome.get("payload_for_run") if isinstance(outcome.get("payload_for_run"), dict) else payload
             result = outcome.get("result")
+            exception = outcome.get("exception")
+        try:
+            if exception is not None:
+                raise exception
             if not isinstance(result, dict):
                 raise RuntimeError("image task returned streaming result unexpectedly")
             data = result.get("data")
@@ -792,6 +1050,7 @@ class ImageTaskService:
             usage = result.get("usage")
             duration_ms = int((time.time() - started) * 1000)
             self._update_task(key, status=TASK_STATUS_SUCCESS, progress="success", data=data, usage=usage, error="", duration_ms=duration_ms)
+            self.note_success_duration_ms(duration_ms)
             self._log_call(identity, mode, model, started, "调用完成", request_preview=request_text(payload_for_run.get("prompt")), urls=_collect_image_urls(data), account_email=account_email)
         except Exception as exc:
             error_message = str(exc) or "image task failed"
@@ -1049,6 +1308,7 @@ class ImageTaskService:
         access_token: str = "",
     ) -> None:
         started = time.time()
+        backend = None
         try:
             from services.openai_backend_api import OpenAIBackendAPI
             from services.protocol.conversation import format_image_result
@@ -1064,9 +1324,14 @@ class ImageTaskService:
             image_urls = backend.resolve_conversation_image_urls(conversation_id, file_ids, sediment_ids, poll=False)
             if not image_urls:
                 raise RuntimeError("图片 URL 解析失败")
-            image_items = [{"b64_json": base64.b64encode(image_data).decode("ascii")} for image_data in backend.download_image_bytes(image_urls)]
+            image_items = [
+                {"b64_json": base64.b64encode(image_data).decode("ascii")}
+                for image_data in backend.download_image_bytes(image_urls[:1])
+            ]
             data = format_image_result(image_items, "", "b64_json", "", int(time.time()))["data"]
-            self._update_task(key, status=TASK_STATUS_SUCCESS, progress="success", data=data, error="", duration_ms=int((time.time() - started) * 1000))
+            duration_ms = int((time.time() - started) * 1000)
+            self._update_task(key, status=TASK_STATUS_SUCCESS, progress="success", data=data, error="", duration_ms=duration_ms)
+            self.note_success_duration_ms(duration_ms)
             self._log_call(identity, mode, model, started, "调用完成（续轮询）", status="success", urls=_collect_image_urls(data))
         except Exception as exc:
             error_message = str(exc) or "resume poll failed"
@@ -1100,6 +1365,10 @@ class ImageTaskService:
                     return
             self._update_task(key, status=TASK_STATUS_ERROR, progress="failed", error=error_message, data=[], duration_ms=int((time.time() - started) * 1000))
             self._log_call(identity, mode, model, started, "调用失败（续轮询）", status="failed", error=error_message)
+        finally:
+            close = getattr(backend, "close", None)
+            if callable(close):
+                close()
 
     def _log_call(
         self,
@@ -1173,16 +1442,32 @@ class ImageTaskService:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_image_tasks_updated ON image_tasks(updated_ts)")
             conn.commit()
 
+    def _task_from_row(self, row: sqlite3.Row) -> dict[str, Any] | None:
+        try:
+            task = _decode_from_json(json.loads(row["data"]))
+        except Exception:
+            return None
+        if not isinstance(task, dict):
+            return None
+        task_id = _clean(task.get("id"))
+        owner = _clean(task.get("owner_id"))
+        if not task_id or not owner:
+            return None
+        return task
+
     def _load_locked(self) -> dict[str, dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT key, data FROM image_tasks").fetchall()
+            rows = conn.execute(
+                """
+                SELECT key, data FROM image_tasks
+                WHERE status IN (?, ?, ?)
+                """,
+                (TASK_STATUS_QUEUED, TASK_STATUS_RUNNING, TASK_STATUS_TIMEOUT_PENDING),
+            ).fetchall()
         tasks: dict[str, dict[str, Any]] = {}
         for row in rows:
-            try:
-                task = _decode_from_json(json.loads(row["data"]))
-            except Exception:
-                continue
-            if not isinstance(task, dict):
+            task = self._task_from_row(row)
+            if task is None:
                 continue
             task_id = _clean(task.get("id"))
             owner = _clean(task.get("owner_id"))
@@ -1197,6 +1482,40 @@ class ImageTaskService:
             self._tasks[key] = task
             self._save_task_locked(key)
         return legacy_tasks
+
+    def _load_task_from_db_locked(self, key: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT key, data FROM image_tasks WHERE key = ?", (key,)).fetchone()
+        if row is None:
+            return None
+        task = self._task_from_row(row)
+        if task is None:
+            return None
+        if task.get("status") in UNFINISHED_STATUSES:
+            self._tasks[key] = task
+        return task
+
+    def _load_task_status_from_db_locked(self, key: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT owner_id, task_id, status, updated_ts
+                FROM image_tasks
+                WHERE key = ?
+                """,
+                (key,),
+            ).fetchone()
+        if row is None:
+            return None
+        updated_ts = float(row["updated_ts"] or 0.0)
+        updated_at = _iso_from_ts(updated_ts) if updated_ts > 0 else None
+        return {
+            "id": row["task_id"],
+            "owner_id": row["owner_id"],
+            "status": row["status"],
+            "updated_ts": updated_ts,
+            "updated_at": updated_at,
+        }
 
     def _load_legacy_json_locked(self) -> dict[str, dict[str, Any]]:
         try:
@@ -1320,7 +1639,20 @@ class ImageTaskService:
         for key in removed_keys:
             self._tasks.pop(key, None)
             self._save_task_locked(key)
-        return bool(removed_keys)
+        removed_db_rows = 0
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM image_tasks
+                WHERE status IN (?, ?)
+                  AND updated_ts IS NOT NULL
+                  AND updated_ts < ?
+                """,
+                (TASK_STATUS_SUCCESS, TASK_STATUS_ERROR, cutoff),
+            )
+            removed_db_rows = max(0, int(cursor.rowcount or 0))
+            conn.commit()
+        return bool(removed_keys or removed_db_rows)
 
 
 image_task_service = ImageTaskService(DATA_DIR / "image_tasks.json")

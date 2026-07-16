@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
@@ -10,6 +12,37 @@ from pydantic import BaseModel, ConfigDict
 from api.support import require_admin, require_identity, resolve_image_base_url
 from services.backup_service import BackupError, backup_service
 from services.config import config
+
+
+def _git_commit_short() -> str:
+    root = Path(__file__).resolve().parents[1]
+    try:
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=root,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            ).strip()
+            or ""
+        )
+    except Exception:
+        return ""
+
+
+def _frontend_build_id() -> str:
+    manifest = Path(__file__).resolve().parents[1] / "web_dist" / "web_dist-manifest.json"
+    if not manifest.exists():
+        return ""
+    try:
+        import json
+
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        return str(data.get("git_commit") or data.get("built_at") or "")
+    except Exception:
+        return ""
 from services.image_service import (
     compress_images,
     delete_images,
@@ -74,7 +107,19 @@ def create_router(app_version: str) -> APIRouter:
 
     @router.get("/version")
     async def get_version():
-        return {"version": app_version}
+        backend_commit = _git_commit_short()
+        frontend_build = _frontend_build_id()
+        return {
+            "version": app_version,
+            "backend_commit": backend_commit,
+            "frontend_build_id": frontend_build,
+            "build_drift": bool(
+                backend_commit
+                and frontend_build
+                and backend_commit not in frontend_build
+                and frontend_build not in backend_commit
+            ),
+        }
 
     @router.get("/api/settings")
     async def get_settings(authorization: str | None = Header(default=None)):

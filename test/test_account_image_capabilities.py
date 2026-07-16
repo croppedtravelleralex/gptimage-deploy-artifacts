@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ from services.account_service import AccountService
 from services.auth_service import AuthService
 from services.config import config
 from services.openai_backend_api import InvalidAccessTokenError
+from services.log_service import LOG_TYPE_ACCOUNT, LogService
 from services.storage.json_storage import JSONStorageBackend
 from utils.helper import anonymize_token, split_image_model
 
@@ -60,6 +62,29 @@ class AccountCapabilityTests(unittest.TestCase):
                 )
             )
 
+    def test_reload_from_storage_replaces_token_snapshot_and_cleans_runtime_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            storage = JSONStorageBackend(Path(tmp_dir) / "accounts.json")
+            service = AccountService(storage)
+            service.add_account_items(
+                [{"access_token": "old-token", "status": "异常", "quota": 0}]
+            )
+            service._image_inflight["old-token"] = 1
+            service._image_preflight_failed_until["old-token"] = 9999999999.0
+            service._token_aliases["old-token"] = "old-token"
+            storage.save_accounts(
+                [{"access_token": "new-token", "status": "正常", "quota": 20}]
+            )
+
+            result = service.reload_from_storage()
+
+            self.assertEqual(result["total"], 1)
+            self.assertIsNone(service.get_account("old-token"))
+            self.assertEqual(service.get_account("new-token")["quota"], 20)
+            self.assertNotIn("old-token", service._image_inflight)
+            self.assertNotIn("old-token", service._image_preflight_failed_until)
+            self.assertNotIn("old-token", service._token_aliases)
+
     def test_mark_image_result_does_not_consume_unknown_quota(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
@@ -104,6 +129,29 @@ class AccountCapabilityTests(unittest.TestCase):
             self.assertFalse(account["image_quota_unknown"])
             self.assertEqual(account["restore_at"], "2026-06-30T13:57:04.555288+00:00")
 
+    def test_limits_progress_does_not_restore_quota_for_abnormal_account(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            service.add_account_items(
+                [
+                    {
+                        "access_token": "invalid-token",
+                        "status": "异常",
+                        "quota": 0,
+                        "image_quota_unknown": False,
+                        "limits_progress": [
+                            {"feature_name": "image_gen", "remaining": 25, "reset_after": "2026-06-30T13:57:04.555288+00:00"}
+                        ],
+                    }
+                ]
+            )
+
+            account = service.get_account("invalid-token")
+
+            self.assertIsNotNone(account)
+            self.assertEqual(account["quota"], 0)
+            self.assertFalse(account["image_quota_unknown"])
+
     def test_tainted_accounts_are_not_image_schedulable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
@@ -138,6 +186,105 @@ class AccountCapabilityTests(unittest.TestCase):
             stats = service.get_stats()
             self.assertEqual(stats["schedulable"], 1)
             self.assertEqual(stats["tainted_count"], 2)
+
+    def test_stats_expose_panda_upload_visibility_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            service.add_account_items(
+                [
+                    {
+                        "access_token": "eligible-token",
+                        "status": "正常",
+                        "quota": 5,
+                        "panda_sync_state": "ready",
+                        "last_quota_refresh_at": "2999-01-01T00:00:00+00:00",
+                    },
+                    {
+                        "access_token": "missing-refresh-token",
+                        "status": "正常",
+                        "quota": 5,
+                        "panda_sync_state": "ready",
+                    },
+                    {
+                        "access_token": "tainted-ready-token",
+                        "status": "正常",
+                        "quota": 5,
+                        "panda_sync_state": "ready",
+                        "last_quota_refresh_at": "2999-01-01T00:00:00+00:00",
+                        "invalid_count": 1,
+                    },
+                    {
+                        "access_token": "synced-token",
+                        "status": "正常",
+                        "quota": 5,
+                        "panda_sync_state": "synced",
+                        "panda_receive_state": "verified_ready",
+                    },
+                    {
+                        "access_token": "incoming-token",
+                        "status": "正常",
+                        "quota": 5,
+                        "panda_sync_state": "synced",
+                        "panda_receive_state": "incoming",
+                    },
+                    {
+                        "access_token": "rejected-token",
+                        "status": "正常",
+                        "quota": 5,
+                        "panda_sync_state": "synced",
+                        "panda_receive_state": "rejected",
+                    },
+                ]
+            )
+
+            stats = service.get_stats()
+
+            self.assertEqual(stats["panda_ready_count"], 3)
+            self.assertEqual(stats["panda_synced_count"], 3)
+            self.assertEqual(stats["panda_upload_queue_count"], 3)
+            self.assertEqual(stats["panda_upload_eligible_count"], 1)
+            self.assertEqual(stats["panda_upload_unsynced_eligible_count"], 1)
+            self.assertEqual(stats["panda_upload_blocked_count"], 2)
+            self.assertEqual(stats["panda_upload_retained_count"], 3)
+            self.assertEqual(stats["panda_upload_remote_pending_count"], 1)
+            self.assertEqual(stats["panda_upload_remote_verified_count"], 1)
+            self.assertEqual(stats["panda_upload_remote_rejected_count"], 1)
+
+    def test_account_activity_daily_uses_logs_and_live_account_dates(self) -> None:
+        today = datetime.now(timezone.utc).date().isoformat()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            activity_log = LogService(Path(tmp_dir) / "logs.jsonl")
+            service.add_account_items(
+                [
+                    {
+                        "access_token": "registered-token",
+                        "status": "正常",
+                        "quota": 5,
+                        "created_at": f"{today} 08:00:00",
+                        "panda_synced_at": f"{today}T08:30:00+00:00",
+                    },
+                    {
+                        "access_token": "received-token",
+                        "status": "正常",
+                        "quota": 5,
+                        "created_at": f"{today} 09:00:00",
+                        "panda_imported_at": f"{today}T09:30:00+00:00",
+                    },
+                ]
+            )
+            activity_log.add(LOG_TYPE_ACCOUNT, "上传到 Panda", {"accepted": 3, "deleted_local": 3})
+            activity_log.add(LOG_TYPE_ACCOUNT, "Panda 接收账号", {"received": 2})
+            activity_log.add(LOG_TYPE_ACCOUNT, "删除 4 个账号", {"removed": 4})
+
+            with patch("services.account_service.log_service", activity_log):
+                activity = service.get_activity_daily(days=1)
+
+            item = activity["items"][0]
+            self.assertEqual(item["registered"], 2)
+            self.assertEqual(item["uploaded"], 3)
+            self.assertEqual(item["received"], 2)
+            self.assertEqual(item["deleted"], 4)
 
     def test_stats_expose_runtime_image_candidate_counts(self) -> None:
         prev_backoff = self._set_config("image_preflight_failure_backoff_sec", 60)
@@ -454,6 +601,115 @@ class AccountCapabilityTests(unittest.TestCase):
                 config.data.pop("auto_remove_invalid_accounts", None)
             else:
                 config.data["auto_remove_invalid_accounts"] = original_value
+
+    def test_refresh_accounts_skips_terminal_outlook_without_remote_request(self) -> None:
+        original_value = config.data.get("auto_remove_invalid_accounts")
+        config.data["auto_remove_invalid_accounts"] = True
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+                service.add_account_items(
+                    [
+                        {
+                            "access_token": "terminal-token",
+                            "email": "terminal@outlook.com",
+                            "status": "禁用",
+                            "quota": 25,
+                            "outlook_recovery_state": "terminal",
+                            "outlook_recovery_terminal_reason": "account_deactivated",
+                        }
+                    ]
+                )
+
+                def fail_if_called(*_args, **_kwargs):
+                    raise AssertionError("terminal account must not call fetch_remote_info")
+
+                service.fetch_remote_info = fail_if_called  # type: ignore[method-assign]
+                result = service.refresh_accounts(
+                    ["terminal-token"],
+                    progress_id="terminal-progress",
+                    defer_invalid_removal=False,
+                )
+
+                account = service.get_account("terminal-token")
+                progress = service.get_refresh_progress("terminal-progress")
+                self.assertEqual(result["refreshed"], 0)
+                self.assertEqual(result["errors"], [])
+                self.assertEqual(result["skipped_terminal"], 1)
+                self.assertEqual(service.pop_last_refresh_tokens(), [])
+                self.assertIsNotNone(account)
+                self.assertEqual(account["status"], "禁用")
+                self.assertEqual(account["outlook_recovery_state"], "terminal")
+                self.assertEqual(progress["total"], 0)
+                self.assertEqual(progress["processed"], 0)
+                self.assertTrue(progress["done"])
+        finally:
+            if original_value is None:
+                config.data.pop("auto_remove_invalid_accounts", None)
+            else:
+                config.data["auto_remove_invalid_accounts"] = original_value
+
+    def test_refresh_accounts_processes_normal_tokens_while_skipping_terminal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            service.add_account_items(
+                [
+                    {
+                        "access_token": "terminal-token",
+                        "email": "terminal@outlook.com",
+                        "status": "禁用",
+                        "outlook_recovery_state": "terminal",
+                    },
+                    {
+                        "access_token": "normal-token",
+                        "email": "normal@outlook.com",
+                        "status": "正常",
+                    },
+                ]
+            )
+            calls: list[str] = []
+
+            def fake_fetch(access_token: str, *_args, **_kwargs):
+                calls.append(access_token)
+                return service.get_account(access_token)
+
+            service.fetch_remote_info = fake_fetch  # type: ignore[method-assign]
+            result = service.refresh_accounts(["terminal-token", "normal-token"])
+
+            self.assertEqual(calls, ["normal-token"])
+            self.assertEqual(result["refreshed"], 1)
+            self.assertEqual(result["skipped_terminal"], 1)
+            self.assertEqual(service.pop_last_refresh_tokens(), ["normal-token"])
+
+    def test_re_login_accounts_skips_terminal_outlook_even_with_password(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            service.add_account_items(
+                [
+                    {
+                        "access_token": "terminal-token",
+                        "email": "terminal@outlook.com",
+                        "password": "must-not-be-used",
+                        "status": "禁用",
+                        "outlook_recovery_state": "terminal",
+                        "outlook_recovery_terminal_reason": "account_deactivated",
+                    }
+                ]
+            )
+
+            with patch("services.account_service.Thread") as thread_class:
+                result = service.re_login_accounts(
+                    ["terminal-token"],
+                    progress_id="terminal-relogin-progress",
+                )
+
+            progress = service.get_relogin_progress("terminal-relogin-progress")
+            thread_class.assert_not_called()
+            self.assertEqual(result["relogined"], 0)
+            self.assertEqual(result["skipped"], 1)
+            self.assertEqual(result["skipped_terminal"], 1)
+            self.assertEqual(progress["processed"], 1)
+            self.assertTrue(progress["done"])
 
     def test_refresh_accounts_defers_invalid_token_removal_by_default(self) -> None:
         original_value = config.data.get("auto_remove_invalid_accounts")

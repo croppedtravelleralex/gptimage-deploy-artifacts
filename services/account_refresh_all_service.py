@@ -12,8 +12,11 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any
 
+from services.account_identity import missing_panda_identity_fields, normalize_account_identity
 from services.account_service import AccountService, account_service
 from services.config import config
+from services.log_service import LOG_TYPE_ACCOUNT, log_service
+from services.register.real_browser_register import is_local_only_proxy_url
 from utils.helper import anonymize_token
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -42,6 +45,12 @@ def _parse_time(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _is_terminal_outlook_recovery(account: dict[str, Any]) -> bool:
+    state = str(account.get("outlook_recovery_state") or "").strip().lower()
+    reason = str(account.get("outlook_recovery_terminal_reason") or "").strip().lower()
+    return state == "terminal" or reason == "account_deactivated"
 
 
 def _clamp_int(value: object, default: int, min_value: int, max_value: int) -> int:
@@ -139,6 +148,7 @@ class AccountRefreshAllOptions:
     panda_sync_timeout_seconds: int = 60
     panda_sync_remove_local_on_success: bool = False
     panda_sync_cooldown_seconds: float = 2.0
+    panda_sync_queue_on_failure: bool = False
     token_overrides: tuple[str, ...] = ()
 
     @classmethod
@@ -166,6 +176,9 @@ class AccountRefreshAllOptions:
         panda_base_url = str(data.get("panda_sync_base_url", panda_defaults.get("base_url")) or "").strip().rstrip("/")
         panda_auth_key = str(data.get("panda_sync_auth_key", panda_defaults.get("auth_key")) or "").strip()
         panda_requested = bool(data.get("panda_sync_enabled", panda_defaults.get("enabled", False))) and bool(panda_base_url)
+        configured_delete_invalid = bool(defaults.get("delete_invalid", True))
+        requested_delete_invalid = bool(data.get("delete_invalid", configured_delete_invalid))
+        delete_invalid = configured_delete_invalid and requested_delete_invalid
         return cls(
             concurrency=_clamp_int(data.get("concurrency"), int(defaults.get("concurrency") or 1), 1, max_concurrency),
             batch_size=_clamp_int(data.get("batch_size"), int(defaults.get("batch_size") or 10), 1, 200),
@@ -178,7 +191,7 @@ class AccountRefreshAllOptions:
             resource_pause_enabled=bool(data.get("resource_pause_enabled", defaults.get("resource_pause_enabled", False))),
             resource_check_interval_sec=_clamp_float(data.get("resource_check_interval_sec"), float(defaults.get("resource_check_interval_sec") or 10.0), 1.0, 120.0),
             limit=limit,
-            delete_invalid=bool(data.get("delete_invalid", defaults.get("delete_invalid", True))),
+            delete_invalid=delete_invalid,
             delete_after_failures=_clamp_int(data.get("delete_after_failures"), int(defaults.get("delete_after_failures") or 3), 0, 20),
             expired_grace_hours=_clamp_int(data.get("expired_grace_hours"), int(defaults.get("expired_grace_hours") or 1), 0, 24 * 30),
             panda_sync_requested=panda_requested,
@@ -189,6 +202,7 @@ class AccountRefreshAllOptions:
             panda_sync_timeout_seconds=_clamp_int(data.get("panda_sync_timeout_seconds"), int(panda_defaults.get("timeout_seconds") or 60), 5, 300),
             panda_sync_remove_local_on_success=bool(data.get("panda_sync_remove_local_on_success", panda_defaults.get("remove_local_on_success", False))),
             panda_sync_cooldown_seconds=_clamp_float(data.get("panda_sync_cooldown_seconds"), float(panda_defaults.get("cooldown_seconds") or 2.0), 0.0, 60.0),
+            panda_sync_queue_on_failure=bool(data.get("panda_sync_queue_on_failure", panda_defaults.get("queue_on_failure", False))),
             token_overrides=tuple(
                 dict.fromkeys(
                     str(token or "").strip()
@@ -283,7 +297,7 @@ class AccountRefreshAllService:
         self._save_pending_sync_accounts([*self._load_pending_sync_accounts(), *accounts])
 
     def _retry_pending_sync(self, options: AccountRefreshAllOptions) -> tuple[int, int, int]:
-        if not options.panda_sync_enabled:
+        if not options.panda_sync_enabled or not options.panda_sync_queue_on_failure:
             return 0, 0, 0
         pending = self._load_pending_sync_accounts()
         if not pending:
@@ -331,6 +345,32 @@ class AccountRefreshAllService:
         self._last_panda_stats = normalized
         self._last_panda_stats_at = now
         return dict(normalized)
+
+    def _fetch_panda_account_tokens(self, options: AccountRefreshAllOptions) -> set[str] | None:
+        if not options.panda_sync_enabled:
+            return None
+        url = f"{options.panda_sync_base_url.rstrip('/')}/api/accounts?offset=0&limit=10000"
+        request = urllib.request.Request(
+            url,
+            method="GET",
+            headers={"Authorization": f"Bearer {options.panda_sync_auth_key}"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=options.panda_sync_timeout_seconds) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception:
+            return None
+        items = payload.get("items") if isinstance(payload, dict) else None
+        if not isinstance(items, list):
+            return set()
+        tokens: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            token = str(item.get("access_token") or item.get("accessToken") or "").strip()
+            if token:
+                tokens.add(token)
+        return tokens
 
     def _panda_upload_capacity(self, options: AccountRefreshAllOptions, candidate_count: int) -> int:
         if candidate_count <= 0:
@@ -408,8 +448,18 @@ class AccountRefreshAllService:
         return self._service.update_account(token, updates, quiet=True) or {**account, **updates}
 
     @staticmethod
-    def _is_panda_sync_ready(account: dict[str, Any]) -> bool:
+    def _is_panda_sync_ready(
+        account: dict[str, Any],
+        remote_tokens: set[str] | None = None,
+    ) -> bool:
         state = str(account.get("panda_sync_state") or "").strip().lower()
+        token = str(account.get("access_token") or account.get("accessToken") or "").strip()
+        if state != "ready":
+            if state != "synced" or remote_tokens is None or not token or token in remote_tokens:
+                return False
+            # 旧策略会在本地保留 synced 账号；如果 Panda 已经删掉或没有该 token，
+            # 这里允许重新上传补池。
+            state = "ready"
         if state != "ready":
             return False
         if not AccountService._is_image_account_available(account):
@@ -421,6 +471,36 @@ class AccountRefreshAllService:
         if account.get("panda_probe_last_error"):
             return False
         return True
+
+    @staticmethod
+    def _retry_after_seconds(error: urllib.error.HTTPError) -> int:
+        raw = str(error.headers.get("Retry-After") or "").strip()
+        if raw:
+            try:
+                return max(1, min(300, int(float(raw))))
+            except ValueError:
+                pass
+        try:
+            body = error.read().decode("utf-8", "replace")
+            payload = json.loads(body)
+        except Exception:
+            return 0
+        detail = payload.get("detail") if isinstance(payload, dict) else None
+        message = ""
+        if isinstance(detail, dict):
+            message = str(detail.get("error") or "")
+        elif detail is not None:
+            message = str(detail)
+        match = None
+        try:
+            import re
+
+            match = re.search(r"retry after\s+(\d+)s", message, re.IGNORECASE)
+        except Exception:
+            match = None
+        if not match:
+            return 0
+        return max(1, min(300, int(match.group(1))))
 
     def _purge_expired_tokens(self, options: AccountRefreshAllOptions) -> int:
         if not options.delete_invalid:
@@ -462,7 +542,11 @@ class AccountRefreshAllService:
 
         expired_removed = self._purge_expired_tokens(normalized)
         tokens, skipped = self._build_token_queue(normalized)
-        has_pending_sync = normalized.panda_sync_enabled and bool(self._load_pending_sync_accounts())
+        has_pending_sync = (
+            normalized.panda_sync_enabled
+            and normalized.panda_sync_queue_on_failure
+            and bool(self._load_pending_sync_accounts())
+        )
         with self._lock:
             if self._is_active_locked():
                 raise RuntimeError("已有慢速刷新任务正在运行")
@@ -505,9 +589,25 @@ class AccountRefreshAllService:
 
     def _build_token_queue(self, options: AccountRefreshAllOptions) -> tuple[list[str], int]:
         if options.token_overrides:
-            existing = {str(account.get("access_token") or "") for account in self._service.list_accounts()}
-            tokens = [token for token in options.token_overrides if token in existing]
-            return tokens[: options.limit] if options.limit is not None else tokens, 0
+            accounts_by_token = {
+                str(account.get("access_token") or ""): account
+                for account in self._service.list_accounts()
+                if str(account.get("access_token") or "")
+            }
+            tokens: list[str] = []
+            skipped = 0
+            for token in options.token_overrides:
+                account = accounts_by_token.get(token)
+                if account is None:
+                    continue
+                if _is_terminal_outlook_recovery(account):
+                    skipped += 1
+                    continue
+                tokens.append(token)
+            if options.limit is not None:
+                skipped += max(0, len(tokens) - options.limit)
+                tokens = tokens[: options.limit]
+            return tokens, skipped
         now = _utc_now()
         stale_cutoff = now - timedelta(hours=options.stale_after_hours)
         candidates: list[tuple[tuple[int, int, float], str]] = []
@@ -517,6 +617,9 @@ class AccountRefreshAllService:
         for account in self._service.list_accounts():
             token = str(account.get("access_token") or "").strip()
             if not token:
+                skipped += 1
+                continue
+            if _is_terminal_outlook_recovery(account):
                 skipped += 1
                 continue
             status = str(account.get("status") or "正常").strip()
@@ -647,7 +750,7 @@ class AccountRefreshAllService:
             cooldown = max(0.0, float(options.panda_sync_cooldown_seconds or 0.0))
             wait_sec = max(0.0, self._last_panda_sync_at + cooldown - time.monotonic())
             if wait_sec > 0 and self._stop_event.wait(wait_sec):
-                if persist_failures:
+                if persist_failures and options.panda_sync_queue_on_failure:
                     self._append_pending_sync_accounts(accounts)
                 return 0, len(accounts)
 
@@ -662,63 +765,248 @@ class AccountRefreshAllService:
                     "Content-Type": "application/json; charset=utf-8",
                 },
             )
-            try:
-                with urllib.request.urlopen(request, timeout=options.panda_sync_timeout_seconds) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
-            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
-                self._last_panda_sync_at = time.monotonic()
-                if persist_failures:
-                    self._append_pending_sync_accounts(accounts)
-                return 0, len(accounts)
+            payload: dict[str, Any] | None = None
+            for attempt in range(3):
+                try:
+                    with urllib.request.urlopen(request, timeout=options.panda_sync_timeout_seconds) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+                    break
+                except urllib.error.HTTPError as exc:
+                    self._last_panda_sync_at = time.monotonic()
+                    if exc.code == 429:
+                        retry_after = self._retry_after_seconds(exc) or int(cooldown) or 30
+                        if attempt < 2 and not self._stop_event.wait(retry_after):
+                            continue
+                    if persist_failures and options.panda_sync_queue_on_failure:
+                        self._append_pending_sync_accounts(accounts)
+                    return 0, len(accounts)
+                except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+                    self._last_panda_sync_at = time.monotonic()
+                    remote_tokens = self._fetch_panda_account_tokens(options)
+                    if remote_tokens:
+                        accepted_accounts = [
+                            account
+                            for account in accounts
+                            if str(account.get("access_token") or "").strip() in remote_tokens
+                        ]
+                        if accepted_accounts and options.panda_sync_remove_local_on_success:
+                            log_service.add(
+                                LOG_TYPE_ACCOUNT,
+                                "上传到 Panda",
+                                {
+                                    "accepted": len(accepted_accounts),
+                                    "added": 0,
+                                    "updated": 0,
+                                    "skipped": len(accepted_accounts),
+                                    "deleted_local": len(accepted_accounts),
+                                    "retained_local": 0,
+                                    "reconciled_after_error": True,
+                                },
+                            )
+                            self._service.delete_accounts([
+                                str(account.get("access_token") or "")
+                                for account in accepted_accounts
+                                if str(account.get("access_token") or "").strip()
+                            ], include_items=False)
+                        accepted = len(accepted_accounts)
+                        if accepted:
+                            return accepted, max(0, len(accounts) - accepted)
+                    if persist_failures and options.panda_sync_queue_on_failure:
+                        self._append_pending_sync_accounts(accounts)
+                    return 0, len(accounts)
             self._last_panda_sync_at = time.monotonic()
+        if payload is None:
+            return 0, len(accounts)
         added = int(payload.get("added") or 0)
         skipped = int(payload.get("skipped") or 0)
         updated = int(payload.get("updated") or 0)
         accepted = max(0, min(len(accounts), added + skipped + updated))
-        if accepted and options.panda_sync_remove_local_on_success:
-            self._service.delete_accounts([
-                str(account.get("access_token") or "")
-                for account in accounts[:accepted]
-                if str(account.get("access_token") or "").strip()
-            ], include_items=False)
+        if accepted:
+            accepted_accounts = accounts[:accepted]
+            log_service.add(
+                LOG_TYPE_ACCOUNT,
+                "上传到 Panda",
+                {
+                    "accepted": accepted,
+                    "added": added,
+                    "updated": updated,
+                    "skipped": skipped,
+                    "deleted_local": accepted if options.panda_sync_remove_local_on_success else 0,
+                    "retained_local": 0 if options.panda_sync_remove_local_on_success else accepted,
+                },
+            )
+            if options.panda_sync_remove_local_on_success:
+                self._service.delete_accounts([
+                    str(account.get("access_token") or "")
+                    for account in accepted_accounts
+                    if str(account.get("access_token") or "").strip()
+                ], include_items=False)
+            else:
+                synced_at = _iso_now()
+                for account in accepted_accounts:
+                    token = str(account.get("access_token") or "").strip()
+                    if token:
+                        self._service.update_account(
+                            token,
+                            {"panda_sync_state": "synced", "panda_synced_at": synced_at},
+                            quiet=True,
+                        )
         return accepted, max(0, len(accounts) - accepted)
 
     def _queue_or_sync_accounts_to_panda(
         self,
         accounts: list[dict[str, Any]],
         options: AccountRefreshAllOptions,
+        *,
+        remote_tokens: set[str] | None = None,
     ) -> tuple[int, int, int]:
         prepared: list[dict[str, Any]] = []
         for account in accounts:
             if not isinstance(account, dict):
                 continue
-            if not self._is_panda_sync_ready(account):
+            if not self._is_panda_sync_ready(account, remote_tokens):
                 continue
             token = str(account.get("access_token") or account.get("accessToken") or "").strip()
-            if token:
-                prepared.append({**account, "access_token": token})
+            if not token:
+                continue
+            try:
+                prepared.append(
+                    self._prepare_account_for_panda_upload({**account, "access_token": token})
+                )
+            except ValueError as exc:
+                log_service.add(
+                    LOG_TYPE_ACCOUNT,
+                    "Panda 上传跳过身份不完整账号",
+                    {"token": anonymize_token(token), "error": str(exc)[:240]},
+                )
         if not prepared or not options.panda_sync_requested:
             return 0, 0, 0
         if not options.panda_sync_enabled:
-            self._append_pending_sync_accounts(prepared)
-            return 0, 0, len(prepared)
+            if options.panda_sync_queue_on_failure:
+                self._append_pending_sync_accounts(prepared)
+                return 0, 0, len(prepared)
+            return 0, len(prepared), 0
         synced, failed = self._sync_accounts_to_panda(prepared, options)
         return synced, failed, 0
 
-    def queue_available_accounts_for_panda(self, accounts: list[dict[str, Any]] | None = None) -> dict[str, int]:
+    @staticmethod
+    def _prepare_account_for_panda_upload(account: dict[str, Any]) -> dict[str, Any]:
+        prepared = normalize_account_identity(dict(account))
+        lifecycle = str(prepared.get("lifecycle_ip_mode") or "").strip().lower()
+        proxy_provider = str(prepared.get("proxy_provider") or "").strip().lower()
+        sticky = lifecycle in {"sticky_one_ip_full", "account_sticky"} or proxy_provider in {
+            "webshare",
+            "udeal",
+        }
+        has_proxy = bool(str(prepared.get("proxy") or "").strip())
+
+        # 本地环回代理对 Panda 不可达：非 sticky 仍可清空后进入 incoming；
+        # sticky 路径必须在上传前失败，避免假 ready。
+        if is_local_only_proxy_url(prepared.get("proxy")):
+            if sticky:
+                raise ValueError(
+                    "account_identity_incomplete: proxy_reachable_from_panda"
+                )
+            prepared.update(
+                {
+                    "proxy": "",
+                    "proxy_scope": "panda_runtime_default",
+                    "proxy_egress_hash": None,
+                    "panda_receive_state": "incoming",
+                    "panda_sync_last_error": None,
+                }
+            )
+            return prepared
+
+        # 账号级 sticky/住宅节点：上传前必须身份字段完整。
+        if sticky and has_proxy:
+            missing = missing_panda_identity_fields(prepared)
+            if missing:
+                raise ValueError("account_identity_incomplete: " + ",".join(missing))
+            prepared["proxy_scope"] = "account_sticky"
+            return prepared
+
+        # 无账号代理或非 sticky：允许走 Panda 运行时默认出口（legacy），不强制 egress/fp。
+        if has_proxy:
+            prepared.setdefault("proxy_scope", "account_proxy")
+            return prepared
+        prepared.setdefault("proxy_scope", "panda_runtime_default")
+        return prepared
+
+    @staticmethod
+    def _panda_sync_candidate_reason(
+        account: dict[str, Any],
+        remote_tokens: set[str] | None = None,
+    ) -> str:
+        state = str((account or {}).get("panda_sync_state") or "").strip().lower()
+        token = str((account or {}).get("access_token") or (account or {}).get("accessToken") or "").strip()
+        if state == "synced":
+            if remote_tokens is not None and token and token not in remote_tokens:
+                state = "ready"
+            else:
+                return "already_remote"
+        if state != "ready":
+            return "state_not_ready"
+        if not AccountService._is_image_account_available(account):
+            return "quota_or_status"
+        if AccountService._has_image_account_failure_evidence(account):
+            return "failure_evidence"
+        if _parse_time((account or {}).get("last_quota_refresh_at")) is None:
+            return "missing_quota_refresh"
+        if str((account or {}).get("panda_probe_last_error") or "").strip():
+            return "probe_error"
+        return "remote_missing_reupload" if str((account or {}).get("panda_sync_state") or "").strip().lower() == "synced" else "eligible"
+
+    def queue_available_accounts_for_panda(self, accounts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         candidates = accounts if accounts is not None else self._service.list_accounts()
         options = AccountRefreshAllOptions.from_mapping({})
-        available = [
-            account
-            for account in candidates
-            if AccountService._is_image_account_available(account)
-            and self._is_panda_sync_ready(account)
-        ]
+        remote_tokens = self._fetch_panda_account_tokens(options) if options.panda_sync_enabled else None
+        details: dict[str, Any] = {
+            "scanned": len(candidates),
+            "eligible": 0,
+            "remote_missing_reupload": 0,
+            "already_remote": 0,
+            "blocked_by_config": 0,
+            "blocked_by_watermark": 0,
+            "blocked_by_state": 0,
+            "blocked_by_quota_or_status": 0,
+            "blocked_by_failure_evidence": 0,
+            "blocked_by_missing_quota_refresh": 0,
+            "blocked_by_probe_error": 0,
+            "remote_token_snapshot": "unavailable" if options.panda_sync_enabled and remote_tokens is None else "ok",
+            "deleted_local": 0,
+        }
+        available: list[dict[str, Any]] = []
+        for account in candidates:
+            if not AccountService._is_image_account_available(account):
+                details["blocked_by_quota_or_status"] += 1
+                continue
+            reason = self._panda_sync_candidate_reason(account, remote_tokens)
+            if reason in {"eligible", "remote_missing_reupload"} and self._is_panda_sync_ready(account, remote_tokens):
+                if reason != "eligible":
+                    details[reason] += 1
+                details["eligible"] += 1
+                available.append(account)
+            elif reason == "already_remote":
+                details["already_remote"] += 1
+            elif reason == "failure_evidence":
+                details["blocked_by_failure_evidence"] += 1
+            elif reason == "missing_quota_refresh":
+                details["blocked_by_missing_quota_refresh"] += 1
+            elif reason == "probe_error":
+                details["blocked_by_probe_error"] += 1
+            elif reason == "quota_or_status":
+                details["blocked_by_quota_or_status"] += 1
+            else:
+                details["blocked_by_state"] += 1
         if not available:
-            return {"synced": 0, "failed": 0, "queued": 0}
+            if not options.panda_sync_requested or not options.panda_sync_enabled:
+                details["blocked_by_config"] = details["eligible"]
+            return {"synced": 0, "failed": 0, "queued": 0, "details": details}
         capacity = self._panda_upload_capacity(options, len(available)) if options.panda_sync_enabled else len(available)
         if capacity <= 0:
-            return {"synced": 0, "failed": 0, "queued": 0}
+            details["blocked_by_watermark"] = len(available)
+            return {"synced": 0, "failed": 0, "queued": 0, "details": details}
         available = available[:capacity]
 
         synced = failed = queued = 0
@@ -726,13 +1014,19 @@ class AccountRefreshAllService:
         batch_size = max(1, min(int(options.panda_sync_batch_size or 20), int(settings.get("upload_max_batch") or 20)))
         for offset in range(0, len(available), batch_size):
             batch = available[offset: offset + batch_size]
-            batch_synced, batch_failed, batch_queued = self._queue_or_sync_accounts_to_panda(batch, options)
+            batch_synced, batch_failed, batch_queued = self._queue_or_sync_accounts_to_panda(
+                batch,
+                options,
+                remote_tokens=remote_tokens,
+            )
             synced += batch_synced
             failed += batch_failed
             queued += batch_queued
-        return {"synced": synced, "failed": failed, "queued": queued}
+        if options.panda_sync_remove_local_on_success:
+            details["deleted_local"] = synced
+        return {"synced": synced, "failed": failed, "queued": queued, "details": details}
 
-    def queue_refreshed_tokens_for_panda(self, tokens: list[str] | None = None) -> dict[str, int]:
+    def queue_refreshed_tokens_for_panda(self, tokens: list[str] | None = None) -> dict[str, Any]:
         """把刚刷新过的 token 对应的可用账号，立即进入 Panda 增量同步。
 
         这个入口给手动刷新和定时 watcher 用：只同步本次刚处理的账号，
@@ -901,6 +1195,14 @@ class AccountRefreshAllService:
             return
 
         refreshed_token = str((account or {}).get("access_token") or token)
+        previous_token = str((before or {}).get("access_token") or token)
+        previous_sync_state = str((before or {}).get("panda_sync_state") or "").strip().lower()
+        if previous_sync_state == "local_proxy_only":
+            next_sync_state = "local_proxy_only"
+        elif previous_sync_state == "synced" and refreshed_token == previous_token:
+            next_sync_state = "synced"
+        else:
+            next_sync_state = "ready"
         updated = self._service.update_account(
             refreshed_token,
             {
@@ -912,7 +1214,7 @@ class AccountRefreshAllService:
                 "panda_receive_state": "verified_ready",
                 "panda_verified_at": _iso_now(),
                 "panda_verify_last_error": None,
-                "panda_sync_state": "ready",
+                "panda_sync_state": next_sync_state,
             },
             quiet=True,
         ) or account
@@ -1026,7 +1328,7 @@ class AccountRefreshAllService:
                 if stopped and not self._status.get("pause_reason"):
                     self._status["pause_reason"] = "stopped by user"
 
-    def sync_last_refreshed_accounts_to_panda(self) -> dict[str, int]:
+    def sync_last_refreshed_accounts_to_panda(self) -> dict[str, Any]:
         """把最近一次 refresh_accounts 实际处理过的账号，直接交给 Panda 增量同步。"""
         tokens = self._service.pop_last_refresh_tokens()
         if not tokens:

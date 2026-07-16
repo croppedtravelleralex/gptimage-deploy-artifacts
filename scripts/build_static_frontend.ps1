@@ -60,6 +60,35 @@ if (Test-Path -LiteralPath $WebDistDir) {
 New-Item -ItemType Directory -Path $WebDistDir -Force | Out-Null
 Copy-Item -Path (Join-Path $OutputDir "*") -Destination $WebDistDir -Recurse -Force
 
+# Build manifest for version drift checks (plan.md P1 / E02)
+$gitCommit = ""
+try {
+    $gitCommit = (& git -C $ProjectRoot rev-parse --short HEAD 2>$null | Out-String).Trim()
+} catch {}
+$accountsHtml = Join-Path $WebDistDir "accounts\index.html"
+$chunkHint = ""
+if (Test-Path -LiteralPath $accountsHtml) {
+    $html = Get-Content -LiteralPath $accountsHtml -Raw -ErrorAction SilentlyContinue
+    if ($html -match '(/_next/static/[^"\s]+\.js)') {
+        $chunkHint = $Matches[1]
+    }
+}
+function Get-FileSha256([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return "" }
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+$manifest = [ordered]@{
+    built_at         = (Get-Date).ToUniversalTime().ToString("o")
+    git_commit       = $gitCommit
+    project_root     = $ProjectRoot
+    accounts_chunk   = $chunkHint
+    index_html_sha256 = Get-FileSha256 (Join-Path $WebDistDir "index.html")
+    accounts_html_sha256 = Get-FileSha256 $accountsHtml
+}
+$manifestPath = Join-Path $WebDistDir "web_dist-manifest.json"
+$manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $manifestPath -Encoding utf8
+Write-Host "web_dist_manifest=$manifestPath"
+
 if ($BackupDir) {
     Write-Host "web_dist_backup=$BackupDir"
 }

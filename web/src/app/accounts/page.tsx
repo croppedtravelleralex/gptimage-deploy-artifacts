@@ -45,13 +45,18 @@ import {
 } from "@/components/ui/select";
 import {
   deleteAccounts,
+  fetchAccountActivityDaily,
   fetchAccounts,
   fetchAccountMaintenanceLoopStatus,
   fetchModels,
+  fetchOutlookAccountRecoveryProgress,
+  fetchOutlookAutoRecoveryStatus,
+  fetchPandaSyncSettings,
   fetchRefreshAllStatus,
   fetchRefreshProgress,
   fetchSettingsConfig,
   fetchReLoginProgress,
+  recoverOutlookAccount,
   reLoginAccounts,
   refreshAccounts,
   startRefreshAllAccounts,
@@ -59,19 +64,44 @@ import {
   syncAccountsToPanda,
   testProxy,
   updateAccountMaintenanceLoop,
+  updateOutlookAutoRecovery,
+  updatePandaSyncSettings,
   updateAccount,
   type Account,
+  type AccountActivityDailyResponse,
   type AccountMaintenanceLoopStatus,
   type AccountRefreshAllStatus,
   type AccountRefreshResponse,
   type AccountStatus,
   type Model,
+  type OutlookAutoRecoveryStatus,
+  type PandaAccountSyncResponse,
+  type PandaSyncPublicSettings,
   type RefreshProgressResponse,
 } from "@/lib/api";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import { cn } from "@/lib/utils";
 
 import { AccountImportDialog } from "./components/account-import-dialog";
+
+const isOutlookRecoveryTerminal = (account: Account) => (
+  String(account.outlook_recovery_state ?? "").trim().toLowerCase() === "terminal"
+  || String(account.outlook_recovery_terminal_reason ?? "").trim().toLowerCase() === "account_deactivated"
+);
+
+const isOutlookRecoveryCandidate = (account: Account) => {
+  if (isOutlookRecoveryTerminal(account) || account.status === "禁用") {
+    return false;
+  }
+  const email = String(account.email ?? "").trim().toLowerCase();
+  return (
+    account.status === "异常"
+    && ["@outlook.com", "@hotmail.com", "@live.com"].some((suffix) => email.endsWith(suffix))
+  ) || (
+    account.panda_receive_state === "rejected"
+    && ["@outlook.com", "@hotmail.com", "@live.com"].some((suffix) => email.endsWith(suffix))
+  );
+};
 
 const accountStatusOptions: { label: string; value: AccountStatus | "all" }[] = [
   { label: "全部状态", value: "all" },
@@ -103,6 +133,33 @@ const metricCards = [
   { key: "quota", label: "剩余额度", color: "text-blue-500", icon: RefreshCw },
 ] as const;
 
+type AccountStats = {
+  total: number;
+  active: number;
+  limited: number;
+  abnormal: number;
+  disabled: number;
+  total_quota: number;
+  unlimited_quota_count?: number;
+  unknown_quota_count?: number;
+  panda_staging_count?: number;
+  panda_ready_count?: number;
+  panda_synced_count?: number;
+  panda_upload_queue_count?: number;
+  panda_upload_eligible_count?: number;
+  panda_upload_unsynced_eligible_count?: number;
+  panda_upload_blocked_count?: number;
+  panda_upload_retained_count?: number;
+  panda_upload_remote_pending_count?: number;
+  panda_upload_remote_verified_count?: number;
+  panda_upload_remote_rejected_count?: number;
+  panda_incoming_count?: number;
+  panda_verified_count?: number;
+  panda_rejected_count?: number;
+  schedulable?: number;
+  tainted_count?: number;
+};
+
 const maxRefreshTokens = 50;
 const accountListLimit = 200;
 
@@ -126,6 +183,14 @@ const maintenanceStateText: Record<string, string> = {
   error_backoff: "异常退避",
 };
 
+const outlookAutoRecoveryStateText: Record<string, string> = {
+  off: "已关闭",
+  idle: "等待中",
+  scanning: "扫描中",
+  recovering: "恢复中",
+  paused: "已暂停",
+};
+
 function isUnlimitedImageQuotaAccount(account: Account) {
   return String(account.type || "").trim().toLowerCase() === "pro" || String(account.type || "").trim().toLowerCase() === "prolite";
 }
@@ -143,6 +208,45 @@ function formatCompact(value: number) {
     return `${(value / 1000).toFixed(1)}k`;
   }
   return String(value);
+}
+
+function formatBytes(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return "待统计";
+  }
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const digits = unitIndex === 0 ? 0 : size >= 10 ? 1 : 2;
+  return `${size.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function proxyDisplay(account: Account) {
+  const egressIp = String(account.proxy_egress_ip ?? "").trim();
+  const rawProxy = String(account.proxy ?? "").trim();
+  let endpoint = "默认出口";
+  if (egressIp) {
+    endpoint = egressIp;
+  } else if (rawProxy) {
+    try {
+      const parsed = new URL(rawProxy);
+      endpoint = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
+    } catch {
+      endpoint = rawProxy.replace(/^[a-z]+:\/\//i, "").replace(/^[^@]+@/, "").split("/")[0] || "账号代理";
+    }
+  }
+  const provider = String(account.proxy_provider ?? "").trim();
+  const scope = String(account.proxy_scope ?? "").trim();
+  const hash = String(account.proxy_egress_hash ?? "").trim();
+  return {
+    endpoint,
+    detail: [provider, scope].filter(Boolean).join(" · ") || (rawProxy ? "账号级代理" : "运行时默认"),
+    hash: hash ? hash.slice(0, 12) : "",
+  };
 }
 
 function formatQuota(account: Account) {
@@ -193,6 +297,37 @@ function formatMaintenanceTime(value?: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function formatOutlookAutoRecoveryState(state?: string) {
+  const key = String(state || "off");
+  return outlookAutoRecoveryStateText[key] ?? key;
+}
+
+function formatCountdown(totalSeconds?: number | null) {
+  if (typeof totalSeconds !== "number" || !Number.isFinite(totalSeconds) || totalSeconds < 0) {
+    return "—";
+  }
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remain = seconds % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(remain).padStart(2, "0")}`;
+  }
+  return `${String(minutes).padStart(2, "0")}:${String(remain).padStart(2, "0")}`;
+}
+
+function formatShortDateTime(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function formatMaintenanceResource(status: AccountMaintenanceLoopStatus | null) {
@@ -253,6 +388,44 @@ function compactToastMessage(value?: string) {
   return `${text.slice(0, 177)}...`;
 }
 
+function formatPandaSyncDetails(data: PandaAccountSyncResponse) {
+  const details = data.details ?? {};
+  const parts = [
+    `上传 ${data.synced ?? 0}`,
+    `失败 ${data.failed ?? 0}`,
+    `pending ${data.queued ?? 0}`,
+    `本地删除 ${details.deleted_local ?? 0}`,
+    `可上传 ${details.eligible ?? 0}`,
+    `远端缺失重传 ${details.remote_missing_reupload ?? 0}`,
+    `已在远端 ${details.already_remote ?? 0}`,
+  ];
+  const blocked = [
+    details.blocked_by_config ?? 0,
+    details.blocked_by_watermark ?? 0,
+    details.blocked_by_state ?? 0,
+    details.blocked_by_quota_or_status ?? 0,
+    details.blocked_by_failure_evidence ?? 0,
+    details.blocked_by_missing_quota_refresh ?? 0,
+    details.blocked_by_probe_error ?? 0,
+  ].reduce((sum, value) => sum + value, 0);
+  if (blocked > 0) {
+    parts.push(`阻断 ${blocked}`);
+  }
+  return parts.join(" · ");
+}
+
+function buildLinePath(values: number[], maxValue: number, width: number, height: number) {
+  if (values.length === 0) return "";
+  const denominator = Math.max(1, values.length - 1);
+  return values
+    .map((value, index) => {
+      const x = (index / denominator) * width;
+      const y = height - (Math.max(0, value) / Math.max(1, maxValue)) * height;
+      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    })
+    .join(" ");
+}
+
 function downloadTokens(accounts: Account[]) {
   const content = `${accounts.map((account) => account.access_token).join("\n")}\n`;
   const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
@@ -279,20 +452,74 @@ function displayAccountSource(account: Account) {
   return source;
 }
 
+function pandaSyncLabel(value?: string | null) {
+  const state = String(value || "").trim().toLowerCase();
+  if (state === "staging") return "探活中";
+  if (state === "ready") return "待上传";
+  if (state === "synced") return "已上传";
+  if (state === "incoming") return "已导入";
+  return "未进入";
+}
+
+function pandaSyncVariant(value?: string | null): ComponentProps<typeof Badge>["variant"] {
+  const state = String(value || "").trim().toLowerCase();
+  if (state === "synced" || state === "incoming") return "success";
+  if (state === "ready") return "info";
+  if (state === "staging") return "warning";
+  return "secondary";
+}
+
+function pandaReceiveLabel(value?: string | null) {
+  const state = String(value || "").trim().toLowerCase();
+  if (state === "incoming") return "待验证";
+  if (state === "verified" || state === "verified_ready" || state === "local_verified") return "已验证";
+  if (state === "rejected") return "拒绝";
+  return "本地";
+}
+
+function pandaReceiveVariant(value?: string | null): ComponentProps<typeof Badge>["variant"] {
+  const state = String(value || "").trim().toLowerCase();
+  if (state === "verified" || state === "verified_ready" || state === "local_verified") return "success";
+  if (state === "incoming") return "warning";
+  if (state === "rejected") return "danger";
+  return "outline";
+}
+
+function formatPandaInlineError(value?: string | null) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const lower = text.toLowerCase();
+  if (lower.startsWith("restored_after_accidental")) {
+    return "事故恢复隔离，需重登验证";
+  }
+  if (lower.includes("account_deactivated")) {
+    return "OpenAI 账号已删除或停用";
+  }
+  if (lower.includes("/backend-api/") && lower.includes("403")) {
+    return "Web 验证 403，需重登";
+  }
+  return text;
+}
+
+function pandaStatusTitle(account: Account) {
+  return [
+    account.panda_ready_at ? `ready: ${formatShortDateTime(account.panda_ready_at)}` : "",
+    account.panda_synced_at ? `synced: ${formatShortDateTime(account.panda_synced_at)}` : "",
+    account.panda_imported_at ? `imported: ${formatShortDateTime(account.panda_imported_at)}` : "",
+    account.panda_verified_at ? `verified: ${formatShortDateTime(account.panda_verified_at)}` : "",
+    account.panda_rejected_at ? `rejected: ${formatShortDateTime(account.panda_rejected_at)}` : "",
+    account.panda_probe_last_error ? `probe: ${account.panda_probe_last_error}` : "",
+    account.panda_verify_last_error ? `verify: ${account.panda_verify_last_error}` : "",
+    account.outlook_recovery_terminal_reason ? `recovery: ${account.outlook_recovery_terminal_reason}` : "",
+    account.outlook_recovery_terminal_at ? `terminal: ${formatShortDateTime(account.outlook_recovery_terminal_at)}` : "",
+  ].filter(Boolean).join("\n");
+}
+
 function AccountsPageContent() {
   const didLoadRef = useRef(false);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [accountTotal, setAccountTotal] = useState(0);
-  const [accountStats, setAccountStats] = useState<{
-    total: number;
-    active: number;
-    limited: number;
-    abnormal: number;
-    disabled: number;
-    total_quota: number;
-    unlimited_quota_count?: number;
-    unknown_quota_count?: number;
-  } | null>(null);
+  const [accountStats, setAccountStats] = useState<AccountStats | null>(null);
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [query, setQuery] = useState("");
@@ -320,7 +547,14 @@ function AccountsPageContent() {
   const [refreshAllStatus, setRefreshAllStatus] = useState<AccountRefreshAllStatus | null>(null);
   const [refreshAllMaxConcurrency, setRefreshAllMaxConcurrency] = useState(8);
   const [maintenanceStatus, setMaintenanceStatus] = useState<AccountMaintenanceLoopStatus | null>(null);
+  const [outlookAutoRecoveryStatus, setOutlookAutoRecoveryStatus] = useState<OutlookAutoRecoveryStatus | null>(null);
+  const [outlookAutoRecoveryCountdown, setOutlookAutoRecoveryCountdown] = useState<number | null>(null);
+  const [pandaSyncSettings, setPandaSyncSettings] = useState<PandaSyncPublicSettings | null>(null);
+  const [isTogglingPandaSync, setIsTogglingPandaSync] = useState(false);
+  const [lastPandaSyncResult, setLastPandaSyncResult] = useState<PandaAccountSyncResponse | null>(null);
+  const [accountActivity, setAccountActivity] = useState<AccountActivityDailyResponse | null>(null);
   const [isTogglingMaintenance, setIsTogglingMaintenance] = useState(false);
+  const [isTogglingOutlookAutoRecovery, setIsTogglingOutlookAutoRecovery] = useState(false);
   const [progress, setProgress] = useState<{
     visible: boolean;
     current: number;
@@ -337,6 +571,8 @@ function AccountsPageContent() {
   const progressRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const refreshAllPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const maintenancePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const outlookAutoRecoveryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const outlookAutoRecoveryCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const refreshAllLastStateRef = useRef<string>("");
   const [refreshSummary, setRefreshSummary] = useState<Record<string, number | string> | null>(null);
 
@@ -388,12 +624,17 @@ function AccountsPageContent() {
     void loadRefreshSettings();
     void loadRefreshAllStatus();
     void loadMaintenanceStatus();
+    void loadOutlookAutoRecoveryStatus();
+    void loadPandaSyncSettings();
+    void loadAccountActivity();
 
     // 清理进度条定时器
     return () => {
       if (progressRef.current) clearInterval(progressRef.current);
       if (refreshAllPollRef.current) clearInterval(refreshAllPollRef.current);
       if (maintenancePollRef.current) clearInterval(maintenancePollRef.current);
+      if (outlookAutoRecoveryPollRef.current) clearInterval(outlookAutoRecoveryPollRef.current);
+      if (outlookAutoRecoveryCountdownRef.current) clearInterval(outlookAutoRecoveryCountdownRef.current);
     };
   }, []);
 
@@ -428,6 +669,46 @@ function AccountsPageContent() {
       const status = await fetchAccountMaintenanceLoopStatus();
       setMaintenanceStatus(status);
       return status;
+    } catch {
+      return null;
+    }
+  };
+
+  const loadOutlookAutoRecoveryStatus = async () => {
+    try {
+      const status = await fetchOutlookAutoRecoveryStatus();
+      setOutlookAutoRecoveryStatus(status);
+      if (typeof status.seconds_until_next_run === "number") {
+        setOutlookAutoRecoveryCountdown(status.seconds_until_next_run);
+      } else if (status.next_run_at) {
+        const deadline = new Date(status.next_run_at).getTime();
+        setOutlookAutoRecoveryCountdown(
+          Number.isNaN(deadline) ? null : Math.max(0, Math.floor((deadline - Date.now()) / 1000)),
+        );
+      } else {
+        setOutlookAutoRecoveryCountdown(null);
+      }
+      return status;
+    } catch {
+      return null;
+    }
+  };
+
+  const loadPandaSyncSettings = async () => {
+    try {
+      const data = await fetchPandaSyncSettings();
+      setPandaSyncSettings(data.panda_sync);
+      return data.panda_sync;
+    } catch {
+      return null;
+    }
+  };
+
+  const loadAccountActivity = async () => {
+    try {
+      const data = await fetchAccountActivityDaily(14);
+      setAccountActivity(data);
+      return data;
     } catch {
       return null;
     }
@@ -480,6 +761,43 @@ function AccountsPageContent() {
     };
   }, []);
 
+  useEffect(() => {
+    if (outlookAutoRecoveryPollRef.current) {
+      return;
+    }
+    outlookAutoRecoveryPollRef.current = setInterval(() => {
+      void loadOutlookAutoRecoveryStatus();
+    }, 3000);
+    return () => {
+      if (outlookAutoRecoveryPollRef.current) {
+        clearInterval(outlookAutoRecoveryPollRef.current);
+        outlookAutoRecoveryPollRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (outlookAutoRecoveryCountdownRef.current) {
+      clearInterval(outlookAutoRecoveryCountdownRef.current);
+      outlookAutoRecoveryCountdownRef.current = null;
+    }
+    if (!outlookAutoRecoveryStatus?.enabled || outlookAutoRecoveryCountdown == null) {
+      return;
+    }
+    outlookAutoRecoveryCountdownRef.current = setInterval(() => {
+      setOutlookAutoRecoveryCountdown((prev) => {
+        if (prev == null) return prev;
+        return Math.max(0, prev - 1);
+      });
+    }, 1000);
+    return () => {
+      if (outlookAutoRecoveryCountdownRef.current) {
+        clearInterval(outlookAutoRecoveryCountdownRef.current);
+        outlookAutoRecoveryCountdownRef.current = null;
+      }
+    };
+  }, [outlookAutoRecoveryStatus?.enabled, outlookAutoRecoveryStatus?.next_run_at]);
+
   const filteredAccounts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return accounts.filter((account) => {
@@ -520,6 +838,92 @@ function AccountsPageContent() {
 
     return { total, active, limited, abnormal, disabled, quota };
   }, [accountStats, accounts]);
+
+  const pandaUploadCards = useMemo(() => {
+    const receiverMode = accountActivity?.sync_label === "接收";
+    const countState = (field: keyof Account, value: string) =>
+      accounts.filter((account) => String(account[field] || "").trim().toLowerCase() === value).length;
+    const stat = (key: keyof AccountStats, fallback: number) => {
+      const value = accountStats?.[key];
+      return typeof value === "number" ? value : fallback;
+    };
+    const localReady = countState("panda_sync_state", "ready");
+    const localSynced = countState("panda_sync_state", "synced");
+    const localIncoming = countState("panda_receive_state", "incoming");
+    const localVerified = accounts.filter((account) => {
+      const state = String(account.panda_receive_state || "").trim().toLowerCase();
+      return state === "verified" || state === "verified_ready" || state === "local_verified";
+    }).length;
+    const localRejected = countState("panda_receive_state", "rejected");
+
+    return [
+      {
+        label: receiverMode ? "接收可用" : "可上传",
+        value: stat("panda_upload_eligible_count", localReady),
+        icon: CloudUpload,
+        color: "text-sky-600",
+      },
+      {
+        label: receiverMode ? "接收队列" : "上传队列",
+        value: stat("panda_upload_queue_count", localReady),
+        icon: RefreshCw,
+        color: "text-blue-600",
+      },
+      {
+        label: receiverMode ? "具备未接收" : "具备但未传",
+        value: stat("panda_upload_unsynced_eligible_count", localReady),
+        icon: CircleAlert,
+        color: "text-amber-600",
+      },
+      {
+        label: receiverMode ? "上传留存" : "已传本地留存",
+        value: stat("panda_upload_retained_count", localSynced),
+        icon: CheckCircle2,
+        color: "text-emerald-600",
+      },
+      {
+        label: "接收待验证",
+        value: stat("panda_upload_remote_pending_count", localIncoming),
+        icon: LoaderCircle,
+        color: "text-orange-600",
+      },
+      {
+        label: "接收已验证",
+        value: stat("panda_upload_remote_verified_count", localVerified),
+        icon: CheckCircle2,
+        color: "text-teal-600",
+      },
+      {
+        label: "接收拒绝",
+        value: stat("panda_upload_remote_rejected_count", localRejected),
+        icon: CircleOff,
+        color: "text-rose-600",
+      },
+      {
+        label: "ready 阻断",
+        value: stat("panda_upload_blocked_count", 0),
+        icon: Ban,
+        color: "text-stone-600",
+      },
+    ];
+  }, [accountActivity?.sync_label, accountStats, accounts]);
+
+  const activityChart = useMemo(() => {
+    const items = accountActivity?.items ?? [];
+    const syncKey = accountActivity?.sync_label === "接收" ? "received" : "uploaded";
+    const registered = items.map((item) => item.registered);
+    const synced = items.map((item) => syncKey === "received" ? item.received : item.uploaded);
+    const deleted = items.map((item) => item.deleted);
+    const maxValue = Math.max(1, ...registered, ...synced, ...deleted);
+    return {
+      items,
+      syncLabel: accountActivity?.sync_label ?? "上传",
+      maxValue,
+      registeredPath: buildLinePath(registered, maxValue, 640, 120),
+      syncedPath: buildLinePath(synced, maxValue, 640, 120),
+      deletedPath: buildLinePath(deleted, maxValue, 640, 120),
+    };
+  }, [accountActivity]);
 
   const accountTypeOptions = useMemo(
     () => [
@@ -567,6 +971,7 @@ function AccountsPageContent() {
     try {
       const data = await deleteAccounts(tokens);
       await refreshAccountPage();
+      await loadAccountActivity();
       setSelectedIds((prev) => prev.filter((id) => !tokens.includes(id)));
       toast.success(`删除 ${data.removed ?? 0} 个账户`);
     } catch (error) {
@@ -581,17 +986,34 @@ function AccountsPageContent() {
     setIsSyncingPanda(true);
     try {
       const data = await syncAccountsToPanda();
-      const detail = compactToastMessage(data.summary || data.stderr_tail || data.stdout_tail);
+      setLastPandaSyncResult(data);
+      const detail = compactToastMessage(formatPandaSyncDetails(data));
+      await refreshAccountPage();
+      await loadAccountActivity();
       if (data.ok) {
-        toast.success(detail ? `同步完成：${detail}` : "同步完成");
+        toast.success(detail ? `上传完成：${detail}` : "上传完成");
       } else {
-        toast.error(detail ? `同步失败：${detail}` : data.error || "同步失败");
+        toast.error(detail ? `上传失败：${detail}` : data.error || "上传失败");
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "同步到 panda 失败";
+      const message = error instanceof Error ? error.message : "上传到 Panda 失败";
       toast.error(message);
     } finally {
       setIsSyncingPanda(false);
+    }
+  };
+
+  const handleTogglePandaSync = async () => {
+    const nextEnabled = !pandaSyncSettings?.enabled;
+    setIsTogglingPandaSync(true);
+    try {
+      const data = await updatePandaSyncSettings({ enabled: nextEnabled });
+      setPandaSyncSettings(data.panda_sync);
+      toast.success(nextEnabled ? "自动上传已开启" : "自动上传已暂停");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "更新自动上传失败");
+    } finally {
+      setIsTogglingPandaSync(false);
     }
   };
 
@@ -608,7 +1030,7 @@ function AccountsPageContent() {
         stale_after_hours: 0,
         include_recent: true,
         resource_pause_enabled: false,
-        delete_invalid: true,
+        delete_invalid: false,
         delete_after_failures: 1,
       });
       setRefreshAllStatus(status);
@@ -653,7 +1075,7 @@ function AccountsPageContent() {
     slow_delay_between_accounts_sec: 3,
     slow_cooldown_sec: 10,
     startup_delay_sec: 5,
-    delete_invalid: true,
+    delete_invalid: false,
     delete_after_failures: 1,
   };
 
@@ -679,6 +1101,73 @@ function AccountsPageContent() {
 
   const handleApplyMaintenanceSafeSettings = async () => {
     await updateMaintenanceEnabled(Boolean(maintenanceStatus?.enabled), "已应用保活新版参数：不硬暂停、每轮 80、慢速 20");
+  };
+
+  const handleToggleOutlookAutoRecovery = async () => {
+    setIsTogglingOutlookAutoRecovery(true);
+    try {
+      const status = await updateOutlookAutoRecovery({
+        enabled: !Boolean(outlookAutoRecoveryStatus?.enabled),
+      });
+      setOutlookAutoRecoveryStatus(status);
+      if (typeof status.seconds_until_next_run === "number") {
+        setOutlookAutoRecoveryCountdown(status.seconds_until_next_run);
+      } else {
+        setOutlookAutoRecoveryCountdown(null);
+      }
+      toast.success(status.enabled ? "Outlook 自动恢复已开启" : "Outlook 自动恢复已关闭");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "更新 Outlook 自动恢复失败");
+    } finally {
+      setIsTogglingOutlookAutoRecovery(false);
+    }
+  };
+
+  const handleRecoverOutlookAccount = async (account: Account) => {
+    const accessToken = account.access_token;
+    setRefreshingTokens((prev) => new Set([...prev, accessToken]));
+    try {
+      const { progress_id } = await recoverOutlookAccount(accessToken);
+      const deadline = Date.now() + 15 * 60 * 1000;
+      let recovery = await fetchOutlookAccountRecoveryProgress(progress_id);
+      while (!recovery.done) {
+        if (Date.now() >= deadline) {
+          throw new Error("Outlook 恢复等待超时，请稍后刷新页面查看结果");
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        recovery = await fetchOutlookAccountRecoveryProgress(progress_id);
+      }
+      if (!recovery.ok) {
+        throw new Error(recovery.error || "Outlook 账号恢复失败");
+      }
+      await refreshAccountPage();
+      const quota = recovery.result?.quota;
+      toast.success(
+        typeof quota === "number"
+          ? `Outlook 账号已恢复并重新入调度，额度 ${quota}`
+          : "Outlook 账号已恢复并重新入调度",
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Outlook 账号恢复失败");
+    } finally {
+      setRefreshingTokens((prev) => {
+        const next = new Set(prev);
+        next.delete(accessToken);
+        return next;
+      });
+    }
+  };
+
+  const handleAccountRefreshAction = async (account: Account) => {
+    if (isOutlookRecoveryTerminal(account)) {
+      toast.error("OpenAI 账号已删除或停用，系统已停止自动恢复；官方恢复后请重新导入账号");
+      return;
+    }
+    if (isOutlookRecoveryCandidate(account)) {
+      await handleRecoverOutlookAccount(account);
+      return;
+    }
+    await handleRefreshAccounts([account.access_token]);
   };
 
   const handleRefreshAccounts = async (accessTokens: string[]) => {
@@ -853,7 +1342,8 @@ function AccountsPageContent() {
           `刷新成功 ${data.refreshed} 个，失败 ${(data.errors ?? []).length} 个${firstError ? `，首个错误：${firstError}` : ""}`,
         );
       } else {
-        toast.success(`刷新成功 ${data.refreshed} 个账户${relogined > 0 ? `，已触发 ${relogined} 个账号重新登录` : ""}`);
+      await loadAccountActivity();
+      toast.success(`刷新成功 ${data.refreshed} 个账户${relogined > 0 ? `，已触发 ${relogined} 个账号重新登录` : ""}`);
       }
     } catch (error) {
       setProgress({ visible: false, current: 0, total: 0, message: "", email: "" });
@@ -1150,12 +1640,35 @@ function AccountsPageContent() {
           <Button
             variant="outline"
             className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"
-            onClick={() => void handleSyncPanda()}
+            onClick={() => {
+              if (activityChart.syncLabel === "接收") {
+                void refreshAccountPage();
+                void loadAccountActivity();
+                return;
+              }
+              void handleSyncPanda();
+            }}
             disabled={isLoading || isRefreshing || isDeleting || isSyncingPanda}
           >
             {isSyncingPanda ? <LoaderCircle className="size-4 animate-spin" /> : <CloudUpload className="size-4" />}
-            同步到 panda
+            {activityChart.syncLabel === "接收" ? "刷新接收状态" : "上传到 Panda"}
           </Button>
+          {activityChart.syncLabel !== "接收" ? (
+            <Button
+              variant={pandaSyncSettings?.enabled ? "outline" : "default"}
+              className={cn(
+                "h-10 rounded-xl px-4",
+                pandaSyncSettings?.enabled
+                  ? "border-stone-200 bg-white/80 text-stone-700 hover:bg-white"
+                  : "bg-stone-900 text-white hover:bg-stone-800",
+              )}
+              onClick={() => void handleTogglePandaSync()}
+              disabled={isTogglingPandaSync}
+            >
+              {isTogglingPandaSync ? <LoaderCircle className="size-4 animate-spin" /> : <CloudUpload className="size-4" />}
+              {pandaSyncSettings?.enabled ? "暂停自动上传" : "开启自动上传"}
+            </Button>
+          ) : null}
           <AccountImportDialog
             disabled={isLoading || isRefreshing || isDeleting || isSyncingPanda}
             onImported={(items) => {
@@ -1180,7 +1693,7 @@ function AccountsPageContent() {
       </section>
 
       <div className="text-xs text-stone-500">
-        慢刷参数上限：并发 {refreshAllMaxConcurrency}，批量 200；当前任务启动后参数锁定，修改只对下次启动生效；异常/限流账号会优先筛死号，不再被保护性暂停卡住。
+        慢刷参数上限：并发 {refreshAllMaxConcurrency}，批量 200；当前任务启动后参数锁定，修改只对下次启动生效；异常/限流账号只记录失败证据，不自动删除。
       </div>
 
       {/* 进度条 */}
@@ -1243,9 +1756,9 @@ function AccountsPageContent() {
               <span>失败 {refreshAllStatus.failed}</span>
               <span>已删除 {refreshAllStatus.removed ?? 0}</span>
               <span>过期清理 {refreshAllStatus.expired_removed ?? 0}</span>
-              <span>已同步 panda {refreshAllStatus.synced_to_panda ?? 0}</span>
-              <span>待同步 panda {refreshAllStatus.queued_for_panda ?? 0}</span>
-              <span>同步失败 {refreshAllStatus.sync_failed ?? 0}</span>
+              <span>已上传 Panda {refreshAllStatus.synced_to_panda ?? 0}</span>
+              <span>待上传 Panda {refreshAllStatus.queued_for_panda ?? 0}</span>
+              <span>上传失败 {refreshAllStatus.sync_failed ?? 0}</span>
               <span>跳过 {refreshAllStatus.skipped}</span>
               <span>并发 {formatRefreshAllOption(refreshAllStatus, "concurrency")}</span>
               <span>批量 {formatRefreshAllOption(refreshAllStatus, "batch_size")}</span>
@@ -1328,6 +1841,95 @@ function AccountsPageContent() {
             </div>
             {maintenanceStatus.pause_reason ? (
               <div className="mt-2 text-xs text-amber-700">{maintenanceStatus.pause_reason}</div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {outlookAutoRecoveryStatus ? (
+        <div className="overflow-hidden rounded-2xl border border-amber-200/80 bg-amber-50/40 shadow-sm">
+          <div className="px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+              <div className="flex min-w-0 items-center gap-2 text-stone-700">
+                {outlookAutoRecoveryStatus.state === "recovering" || outlookAutoRecoveryStatus.state === "scanning" ? (
+                  <LoaderCircle className="size-4 animate-spin text-amber-600" />
+                ) : (
+                  <RefreshCw className="size-4 text-amber-600" />
+                )}
+                <span className="font-medium">Outlook 自动恢复</span>
+                <Badge
+                  variant={
+                    outlookAutoRecoveryStatus.enabled
+                      ? outlookAutoRecoveryStatus.state === "paused"
+                        ? "warning"
+                        : "success"
+                      : "secondary"
+                  }
+                >
+                  {formatOutlookAutoRecoveryState(outlookAutoRecoveryStatus.state)}
+                </Badge>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="text-stone-600">
+                  下次检测{" "}
+                  <span className="font-medium tabular-nums text-stone-800">
+                    {outlookAutoRecoveryStatus.enabled
+                      ? formatCountdown(outlookAutoRecoveryCountdown)
+                      : "—"}
+                  </span>
+                </div>
+                <Button
+                  variant={outlookAutoRecoveryStatus.enabled ? "outline" : "default"}
+                  className={cn(
+                    "h-8 rounded-xl px-3 text-xs",
+                    outlookAutoRecoveryStatus.enabled
+                      ? "border-amber-200 bg-white/80 text-amber-800 hover:bg-amber-50"
+                      : "bg-amber-700 text-white hover:bg-amber-800",
+                  )}
+                  onClick={() => void handleToggleOutlookAutoRecovery()}
+                  disabled={isTogglingOutlookAutoRecovery}
+                >
+                  {isTogglingOutlookAutoRecovery ? (
+                    <LoaderCircle className="size-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="size-3.5" />
+                  )}
+                  {outlookAutoRecoveryStatus.enabled ? "关闭自动恢复" : "开启自动恢复"}
+                </Button>
+              </div>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
+              <span>间隔 {Math.round(Number(outlookAutoRecoveryStatus.settings?.interval_sec ?? 1800) / 60)} 分钟</span>
+              <span>每轮最多 {outlookAutoRecoveryStatus.settings?.max_per_cycle ?? 1} 个</span>
+              <span>候选 {outlookAutoRecoveryStatus.candidate_count ?? 0}</span>
+              <span>终态隔离 {outlookAutoRecoveryStatus.terminal_count ?? 0}</span>
+              <span>累计成功 {outlookAutoRecoveryStatus.totals?.succeeded ?? 0}</span>
+              <span>失败 {outlookAutoRecoveryStatus.totals?.failed ?? 0}</span>
+              <span>跳过忙 {outlookAutoRecoveryStatus.totals?.skipped_busy ?? 0}</span>
+              {outlookAutoRecoveryStatus.current?.email ? (
+                <span>
+                  当前 {String(outlookAutoRecoveryStatus.current.email)} ·{" "}
+                  {String(outlookAutoRecoveryStatus.current.stage || outlookAutoRecoveryStatus.current.message || "")}
+                </span>
+              ) : null}
+              {outlookAutoRecoveryStatus.last_result?.email ? (
+                <span>
+                  最近 {String(outlookAutoRecoveryStatus.last_result.email)}{" "}
+                  {outlookAutoRecoveryStatus.last_result.ok
+                    ? `成功${typeof outlookAutoRecoveryStatus.last_result.quota === "number" ? ` · 额度 ${outlookAutoRecoveryStatus.last_result.quota}` : ""}`
+                    : outlookAutoRecoveryStatus.last_result.skipped
+                      ? "已跳过"
+                      : "失败"}
+                </span>
+              ) : null}
+            </div>
+            {outlookAutoRecoveryStatus.pause_reason ? (
+              <div className="mt-2 text-xs text-amber-700">{outlookAutoRecoveryStatus.pause_reason}</div>
+            ) : null}
+            {outlookAutoRecoveryStatus.last_result?.error ? (
+              <div className="mt-2 max-w-full truncate text-xs text-rose-600">
+                {String(outlookAutoRecoveryStatus.last_result.error)}
+              </div>
             ) : null}
           </div>
         </div>
@@ -1423,6 +2025,81 @@ function AccountsPageContent() {
             );
           })}
         </div>
+        <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
+          <CardContent className="p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="text-sm font-medium text-stone-700">
+                Panda {activityChart.syncLabel === "接收" ? "接收状态" : "上传状态"}
+              </div>
+              <Badge variant="outline" className="rounded-md border-stone-200 text-stone-500">
+                {activityChart.syncLabel === "接收" ? "接收节点" : pandaSyncSettings?.enabled ? "自动上传开启" : "自动上传暂停"}
+              </Badge>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+              {pandaUploadCards.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <div key={item.label} className="rounded-xl border border-stone-100 bg-stone-50/70 px-3 py-2">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-medium text-stone-400">{item.label}</span>
+                      <Icon className="size-3.5 text-stone-400" />
+                    </div>
+                    <div className={cn("text-xl font-semibold tracking-tight", item.color)}>
+                      {formatCompact(item.value)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {lastPandaSyncResult ? (
+              <div className="mt-3 rounded-xl border border-stone-100 bg-white px-3 py-2 text-xs text-stone-500">
+                最近上传：{formatPandaSyncDetails(lastPandaSyncResult)}
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+        <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
+          <CardContent className="p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm font-medium text-stone-700">账号流水</div>
+              <div className="flex flex-wrap items-center gap-3 text-xs text-stone-500">
+                <span className="inline-flex items-center gap-1"><span className="size-2 rounded-full bg-emerald-500" />注册/入库</span>
+                <span className="inline-flex items-center gap-1"><span className="size-2 rounded-full bg-blue-500" />{activityChart.syncLabel}</span>
+                <span className="inline-flex items-center gap-1"><span className="size-2 rounded-full bg-rose-500" />删除</span>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <svg viewBox="0 0 640 150" className="h-[170px] min-w-[640px] w-full">
+                {[0, 1, 2, 3].map((line) => (
+                  <line
+                    key={line}
+                    x1="0"
+                    x2="640"
+                    y1={15 + line * 35}
+                    y2={15 + line * 35}
+                    stroke="#e7e5e4"
+                    strokeWidth="1"
+                  />
+                ))}
+                <path d={activityChart.registeredPath} fill="none" stroke="#10b981" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" transform="translate(0 10)" />
+                <path d={activityChart.syncedPath} fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" transform="translate(0 10)" />
+                <path d={activityChart.deletedPath} fill="none" stroke="#f43f5e" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" transform="translate(0 10)" />
+                {activityChart.items.map((item, index) => {
+                  const x = activityChart.items.length <= 1 ? 0 : (index / (activityChart.items.length - 1)) * 640;
+                  return (
+                    <text key={item.date} x={x} y="148" textAnchor={index === 0 ? "start" : index === activityChart.items.length - 1 ? "end" : "middle"} className="fill-stone-400 text-[10px]">
+                      {item.date.slice(5)}
+                    </text>
+                  );
+                })}
+              </svg>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
+              <span>峰值 {activityChart.maxValue}</span>
+              <span>窗口 {accountActivity?.days ?? 14} 天</span>
+            </div>
+          </CardContent>
+        </Card>
         <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
           <CardContent className="p-4">
             <div className="mb-3 text-sm font-medium text-stone-700">
@@ -1591,7 +2268,7 @@ function AccountsPageContent() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1000px] text-left">
+              <table className="w-full min-w-[1480px] text-left">
                 <thead className="border-b border-stone-100 text-[11px] text-stone-400 uppercase tracking-[0.18em]">
                   <tr>
                     <th className="w-12 px-4 py-3">
@@ -1604,7 +2281,10 @@ function AccountsPageContent() {
                     <th className="w-28 px-4 py-3">类型</th>
                     <th className="w-24 px-4 py-3">来源</th>
                     <th className="w-24 px-4 py-3">状态</th>
+                    <th className="w-44 px-4 py-3">Panda</th>
                     <th className="w-56 px-4 py-3">账号信息</th>
+                    <th className="w-48 px-4 py-3">代理 / 出口</th>
+                    <th className="w-32 px-4 py-3">累计流量</th>
                     <th className="w-32 px-4 py-3">创建时间</th>
                     <th className="w-24 px-4 py-3">额度</th>
                     <th className="w-40 px-4 py-3">恢复时间</th>
@@ -1618,6 +2298,9 @@ function AccountsPageContent() {
                   {currentRows.map((account) => {
                     const status = statusMeta[account.status];
                     const StatusIcon = status.icon;
+                    const terminalOutlook = isOutlookRecoveryTerminal(account);
+                    const recoverOutlook = isOutlookRecoveryCandidate(account);
+                    const rowRefreshing = isRefreshing || refreshingTokens.has(account.access_token);
 
                     return (
                       <tr
@@ -1673,11 +2356,73 @@ function AccountsPageContent() {
                           </Badge>
                         </td>
                         <td className="px-4 py-3">
+                          <div className="flex flex-col items-start gap-1" title={pandaStatusTitle(account)}>
+                            {activityChart.syncLabel === "接收" ? (
+                              <Badge
+                                variant={pandaReceiveVariant(account.panda_receive_state)}
+                                className="rounded-md px-2 py-1"
+                              >
+                                接收 {pandaReceiveLabel(account.panda_receive_state)}
+                              </Badge>
+                            ) : (
+                              <>
+                                <Badge
+                                  variant={pandaSyncVariant(account.panda_sync_state)}
+                                  className="rounded-md px-2 py-1"
+                                >
+                                  {pandaSyncLabel(account.panda_sync_state)}
+                                </Badge>
+                                <Badge
+                                  variant={pandaReceiveVariant(account.panda_receive_state)}
+                                  className="rounded-md px-2 py-1"
+                                >
+                                  远端 {pandaReceiveLabel(account.panda_receive_state)}
+                                </Badge>
+                              </>
+                            )}
+                            {account.panda_probe_last_error || account.panda_verify_last_error ? (
+                              <div className="max-w-[9rem] truncate text-[11px] text-rose-500">
+                                {formatPandaInlineError(account.panda_probe_last_error || account.panda_verify_last_error)}
+                              </div>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
                           <div className="text-xs leading-5 text-stone-500">{account.email ?? "—"}</div>
+                        </td>
+                        <td className="px-4 py-3">
+                          {(() => {
+                            const proxy = proxyDisplay(account);
+                            return (
+                              <div
+                                className="max-w-44 space-y-0.5 text-xs leading-5"
+                                title={[proxy.endpoint, proxy.detail, proxy.hash ? `出口哈希 ${proxy.hash}` : ""].filter(Boolean).join("\n")}
+                              >
+                                <div className="truncate font-medium text-stone-700">{proxy.endpoint}</div>
+                                <div className="truncate text-stone-400">{proxy.detail}</div>
+                                {proxy.hash ? <div className="font-mono text-[10px] text-stone-400">#{proxy.hash}</div> : null}
+                              </div>
+                            );
+                          })()}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div
+                            className="space-y-0.5 text-xs leading-5"
+                            title={
+                              typeof account.traffic_total_bytes === "number"
+                                ? `上传 ${formatBytes(account.traffic_uploaded_bytes)}\n下载 ${formatBytes(account.traffic_downloaded_bytes)}\n更新时间 ${account.traffic_updated_at || "—"}`
+                                : "历史账号尚未启用应用层流量统计"
+                            }
+                          >
+                            <div className="font-medium text-stone-700">{formatBytes(account.traffic_total_bytes)}</div>
+                            <div className="text-[10px] text-stone-400">
+                              {typeof account.traffic_total_bytes === "number" ? "应用层已跟踪" : "等待采集"}
+                            </div>
+                          </div>
                         </td>
                         <td className="px-4 py-3 text-xs leading-5 text-stone-500">
                           {(() => {
-                            const raw = (account as any).created_at;
+                            const raw = account.created_at;
                             if (!raw) return "—";
                             try {
                               const d = new Date(raw + "Z");
@@ -1737,11 +2482,32 @@ function AccountsPageContent() {
                             </button>
                             <button
                               type="button"
-                              className="rounded-lg p-2 transition hover:bg-stone-100 hover:text-stone-700"
-                              onClick={() => void handleRefreshAccounts([account.access_token])}
-                              disabled={isRefreshing || refreshingTokens.has(account.access_token)}
+                              className={cn(
+                                "rounded-lg p-2 transition",
+                                recoverOutlook
+                                  ? "text-amber-600 hover:bg-amber-50 hover:text-amber-700"
+                                  : terminalOutlook
+                                    ? "text-stone-400 hover:bg-stone-100 hover:text-stone-600"
+                                    : "hover:bg-stone-100 hover:text-stone-700",
+                              )}
+                              onClick={() => void handleAccountRefreshAction(account)}
+                              disabled={rowRefreshing}
+                              title={
+                                terminalOutlook
+                                  ? "OpenAI 账号已删除或停用，已停止自动恢复"
+                                  : recoverOutlook
+                                    ? "恢复异常 Outlook 账号"
+                                    : "刷新账号信息和额度"
+                              }
+                              aria-label={
+                                terminalOutlook
+                                  ? "OpenAI 账号已停用"
+                                  : recoverOutlook
+                                    ? "恢复异常 Outlook 账号"
+                                    : "刷新账号信息和额度"
+                              }
                             >
-                              <RefreshCw className={cn("size-4", (isRefreshing || refreshingTokens.has(account.access_token)) ? "animate-spin" : "")} />
+                              <RefreshCw className={cn("size-4", rowRefreshing ? "animate-spin" : "")} />
                             </button>
                             <button
                               type="button"
