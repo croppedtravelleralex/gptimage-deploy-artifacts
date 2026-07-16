@@ -2496,8 +2496,14 @@ class OpenAIBackendAPI:
             time.sleep(sleep_for)
 
         _raise_if_cancelled()
-        start = time.time()
-        attempt = 0
+        from services.image_poll_budget import ImagePollBudget
+
+        budget = ImagePollBudget.create(
+            timeout_secs=timeout_secs,
+            max_conversation_gets=config.image_poll_max_upstream_gets,
+            max_tasks_gets=config.image_poll_max_tasks_gets,
+            tasks_every_n_attempts=config.image_poll_tasks_every_n_attempts,
+        )
         interval = float(config.image_poll_interval_secs)
         initial_wait = float(config.image_poll_initial_wait_secs)
         file_ids: list[str] = []
@@ -2516,10 +2522,11 @@ class OpenAIBackendAPI:
             "interval_secs": interval,
             "initial_file_ids": file_ids,
             "initial_sediment_ids": sediment_ids,
+            "poll_budget": budget.snapshot(),
         })
 
         def _remaining() -> float:
-            return timeout_secs - (time.time() - start)
+            return budget.remaining_wall()
 
         if has_initial_ids and config.image_settle_enabled:
             settle_for = min(config.image_settle_secs, max(0.0, _remaining()))
@@ -2533,7 +2540,7 @@ class OpenAIBackendAPI:
 
         def _retry_sleep(reason: str, status_code: int | None, error: str | None, retry_after: int | None) -> bool:
             # retry_after=0 means "retry immediately" — must not be coerced via falsy check.
-            base = retry_after if retry_after is not None else min(2 ** min(attempt, 4), 16)
+            base = retry_after if retry_after is not None else min(2 ** min(budget.attempt, 4), 16)
             backoff = base + random.uniform(0, 0.5)
             remaining = _remaining()
             if remaining <= 0:
@@ -2542,9 +2549,10 @@ class OpenAIBackendAPI:
             log_payload: Dict[str, Any] = {
                 "event": "image_poll_retry",
                 "conversation_id": conversation_id,
-                "attempt": attempt,
+                "attempt": budget.attempt,
                 "reason": reason,
                 "sleep_secs": round(sleep_for, 2),
+                "poll_budget": budget.snapshot(),
             }
             if status_code is not None:
                 log_payload["status_code"] = status_code
@@ -2555,50 +2563,51 @@ class OpenAIBackendAPI:
             return True
 
         last_task_error = ""
-        while _remaining() > 0:
+        while budget.begin_attempt():
             _raise_if_cancelled()
-            attempt += 1
-            # 在每次轮询时，检查 /backend-api/tasks/ 是否有错误（仅记录，不中断）
-            # 内容政策违规检测通过对话文本进行（在 _find_content_policy_error_in_conversation 中）
+            # tasks 降为低频终态诊断；conversation 文档是主轮询源
             last_task_error = ""
-            try:
-                tasks = self._query_backend_tasks(conversation_id=conversation_id, timeout_secs=5.0)
-                for task in tasks:
-                    is_error, error_msg, metadata = self.check_task_error(task)
-                    if is_error and error_msg:
-                        last_task_error = error_msg
-                        logger.info({
-                            "event": "image_poll_task_error_not_blocking",
-                            "conversation_id": conversation_id,
-                            "attempt": attempt,
-                            "error_msg": error_msg,
-                            "metadata": metadata,
-                        })
-            except Exception as exc:
-                error_text = str(exc)
-                if (
-                    not file_ids
-                    and not sediment_ids
-                    and (
-                        "status=401" in error_text
-                        or "token_revoked" in error_text.lower()
-                        or "invalidated oauth token" in error_text.lower()
-                    )
-                ):
-                    token_error = InvalidAccessTokenError(
-                        f"token invalidated during image poll task check ({conversation_id})"
-                    )
-                    setattr(token_error, "conversation_id", conversation_id or "")
-                    raise token_error from exc
-                # tasks 查询失败不影响正常轮询流程
-                logger.debug({
-                    "event": "image_poll_task_check_failed",
-                    "conversation_id": conversation_id,
-                    "attempt": attempt,
-                    "error": error_text,
-                })
+            if budget.should_query_tasks():
+                try:
+                    tasks = self._query_backend_tasks(conversation_id=conversation_id, timeout_secs=5.0)
+                    budget.record_tasks_get()
+                    for task in tasks:
+                        is_error, error_msg, metadata = self.check_task_error(task)
+                        if is_error and error_msg:
+                            last_task_error = error_msg
+                            logger.info({
+                                "event": "image_poll_task_error_not_blocking",
+                                "conversation_id": conversation_id,
+                                "attempt": budget.attempt,
+                                "error_msg": error_msg,
+                                "metadata": metadata,
+                            })
+                except Exception as exc:
+                    budget.record_tasks_get()
+                    error_text = str(exc)
+                    if (
+                        not file_ids
+                        and not sediment_ids
+                        and (
+                            "status=401" in error_text
+                            or "token_revoked" in error_text.lower()
+                            or "invalidated oauth token" in error_text.lower()
+                        )
+                    ):
+                        token_error = InvalidAccessTokenError(
+                            f"token invalidated during image poll task check ({conversation_id})"
+                        )
+                        setattr(token_error, "conversation_id", conversation_id or "")
+                        raise token_error from exc
+                    logger.debug({
+                        "event": "image_poll_task_check_failed",
+                        "conversation_id": conversation_id,
+                        "attempt": budget.attempt,
+                        "error": error_text,
+                    })
 
             _raise_if_cancelled()
+            budget.record_conversation_get()
             try:
                 conversation = self._get_conversation(conversation_id)
             except UpstreamHTTPError as exc:
@@ -2637,13 +2646,20 @@ class OpenAIBackendAPI:
                     logger.warning({
                         "event": "image_poll_conversation_text_policy_violation",
                         "conversation_id": conversation_id,
-                        "attempt": attempt,
+                        "attempt": budget.attempt,
                         "error_msg": policy_msg[:200],
+                        "poll_budget": budget.snapshot(),
                     })
                     raise ImageContentPolicyError(policy_msg)
 
-            logger.debug({"event": "image_poll_check", "conversation_id": conversation_id, "attempt": attempt,
-                          "file_ids": file_ids, "sediment_ids": sediment_ids})
+            logger.debug({
+                "event": "image_poll_check",
+                "conversation_id": conversation_id,
+                "attempt": budget.attempt,
+                "file_ids": file_ids,
+                "sediment_ids": sediment_ids,
+                "poll_budget": budget.snapshot(),
+            })
             if file_ids or sediment_ids:
                 if not config.image_check_before_hit_enabled:
                     # 先check再hit 机制关闭：直接返回首次发现的 file_ids
@@ -2669,8 +2685,11 @@ class OpenAIBackendAPI:
                     _cancel_aware_sleep(wait)
                     continue
                 return file_ids, sediment_ids
-            logger.debug({"event": "image_poll_wait", "conversation_id": conversation_id,
-                          "elapsed_secs": round(time.time() - start, 1)})
+            logger.debug({
+                "event": "image_poll_wait",
+                "conversation_id": conversation_id,
+                "poll_budget": budget.snapshot(),
+            })
             wait = min(interval, max(0.0, _remaining()))
             if wait > 0:
                 _cancel_aware_sleep(wait)
@@ -2678,9 +2697,10 @@ class OpenAIBackendAPI:
             "event": "image_poll_timeout",
             "conversation_id": conversation_id,
             "timeout_secs": timeout_secs,
-            "attempts_made": attempt,
+            "attempts_made": budget.attempt,
             # attempts_made == 0 means the initial_wait consumed the entire budget — no HTTP attempted.
-            "initial_wait_exhausted_budget": attempt == 0,
+            "initial_wait_exhausted_budget": budget.attempt == 0,
+            "poll_budget": budget.snapshot(),
             "last_task_error": last_task_error if last_task_error else None,
         })
         exc = ImagePollTimeoutError(
@@ -2691,6 +2711,7 @@ class OpenAIBackendAPI:
         if last_task_error:
             setattr(exc, "task_error", last_task_error)
         setattr(exc, "conversation_id", conversation_id or "")
+        setattr(exc, "poll_budget", budget.snapshot())
         raise exc
 
     def _get_file_download_url(self, file_id: str) -> str:
@@ -2972,6 +2993,19 @@ class OpenAIBackendAPI:
         requirements = self._get_chat_requirements()
         path, timezone = self._chat_target()
         payload = self._conversation_payload(normalized, model, timezone, thinking_effort=thinking_effort)
+        try:
+            from services.request_shape import body_shape
+
+            logger.info(
+                {
+                    "event": "request_shape",
+                    "purpose": "conversation_body",
+                    "path": path,
+                    **body_shape(payload),
+                }
+            )
+        except Exception:
+            pass
         response = self.session.post(
             self.base_url + path,
             headers=self._conversation_headers(path, requirements),

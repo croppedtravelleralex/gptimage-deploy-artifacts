@@ -2,6 +2,9 @@
 
 ## Unreleased
 
++ [优化] 生图 poll：`ImagePollBudget` 硬上限（conversation GET / tasks GET）+ tasks 低频；外层重复 poll 收敛为 1 次；conversation 恢复改用 submit 前 `started_at`；`body_shape` 接入 conversation 请求日志。
++ [运维] P5 证据目录 `account-identity-remediation-p5-*`（hash 对账/字段合同）；canary 候选 `40de2f332c0d3fd4`；本地矩阵 `matrix-results.json` 三套 suite 全绿。
++ [修复] canary apply 出口探测：缺失 `proxy_egress_hash` 时三次测量后再写身份。
 + [修复] Panda 部署：`account_refresh_all_service` 改从轻量 `services/proxy_url_utils.is_local_only_proxy_url` 导入，避免依赖未下发的 `real_browser_register` 导致容器 ImportError 重启。
 + [运维] Panda 22:09 SSH 只读深检：根分区 49%（磁盘门禁解除）、调度面仍 0、fp/egress 0/18、生产码漂移；报告 `data/runlogs/panda-deep-audit-readonly-20260716-220921.md`，脚本 `scripts/panda_readonly_deep_audit.py`；同步刷新 `02-current-state` / `09` / `04` ACC-010。
 + [运维] 发布门禁：ACC-010 **仅本地** compile/pytest/前端 build（`scripts/panda_acc010_local_build.ps1`）；验收通过后经 **GitHub push → Panda git pull**，禁止在 Panda 上 build，禁止脚本直推 scp 业务码。误触的 scp 热更已从 `acc010-fingerprint-backend-20260716-222708` 回滚（`openai`→`1fa10b…`，fingerprint 已移除，health ok）。

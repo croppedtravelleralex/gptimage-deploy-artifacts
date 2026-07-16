@@ -113,8 +113,8 @@
 
 - **状态**：本地核心项已落地；待 GitHub→Panda。上线路径：本地验收 → push → `git pull` + recreate；**禁止** Panda build / scp 直推。
 - **实时证据**（22:09 SSH）：`schedulable=0 / verified_total_quota=0`；fp/egress 0/18；12 条同代理签名；Panda 缺 `account_fingerprint.py`；详见深检报告与 `account-identity-remediation-panda18`。
-- **本地已落地**：API/resource Session 隔离；`/me` fail-fast；空 conduit 失败；fp ensure/persist；去掉「最新对话」兜底；`request_shape` 脱敏 header hash；身份门禁与上传校验。
-- **仍待**：poll GET 预算硬上限、单一重试协调器、阶段耗时全链路、生产代码 hash 对账（部署后）。
+- **本地已落地**：API/resource Session 隔离；`/me` fail-fast；空 conduit 失败；fp ensure/persist；去掉「最新对话」兜底；`request_shape` 脱敏 header/body hash；身份门禁与上传校验；`ImagePollBudget` poll GET/tasks 硬上限与外层重试收敛；conversation 恢复用 submit 前 `started_at`。
+- **仍待**：完整阶段耗时链（preflight→cleanup）统一字段、生产 live canary/72h、节点一对一去共享绑定。
 - **验收**：跨域敏感头 0；会话串线 0；已有 conversation 的重复生成 0；poll 不越预算；成功/异常/取消后 FD、线程、Session和slot回到基线。
 
 ### ACC-008 正常状态但 invalid 证据账号的恢复闭环

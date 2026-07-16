@@ -1,6 +1,6 @@
 # Dashboard 与 Panda 账号身份证据修复执行计划
 
-最后更新：2026-07-16
+最后更新：2026-07-17
 
 执行目标：修复 Dashboard 两列未显示、Panda 账号代理绑定/出口证据/持久指纹缺失，建立防复发门禁，完成单 canary、72 小时观察和完整测试矩阵验收。
 Goal 预算：`900,000,000 tokens`（由 Goal 工具记录实际消耗；本文件负责执行拆解与证据索引）。
@@ -744,13 +744,13 @@ data/runlogs/account-identity-remediation-*/
 |---|---|---|
 | 计划重写 | completed | 本文件 |
 | P0 基线/门禁 | local-completed | `data/runlogs/account-identity-remediation-*/baseline.json` + `operation.json`；Panda 容量 49% 见深检报告 |
-| P1 Dashboard 诊断 | local-partial | 源码两列已在；`scripts/build_static_frontend.ps1` 输出 `web_dist/web_dist-manifest.json`；公网截图/三层 hash 对账待 Git 部署后 |
-| P2 身份盘点 | local-completed | `data/runlogs/account-identity-remediation-panda18/`：inventory 18 闭合，grades E12+B6，H1 真共享节点 |
-| P3 统一门禁 | local-completed | `AccountService.update_account_identity` / `ensure_account_identity_ready` / merge 写保护；`test_account_identity_persistence` 5 passed；重复 binding 调度拦截；ACC-008 陈旧 invalid 进恢复 |
-| P4 修复工具 | local-completed | `scripts/repair_panda_account_identity.py` audit/canary/apply；`test_repair_panda_account_identity` passed |
-| P5 分层部署 | pending | **禁止 scp**；须本地验收通过后 GitHub → Panda `git pull` |
-| P6 单canary | pending | 依赖 P5 |
-| P7 72h观察 | pending | 依赖 P6 |
-| P8 总矩阵/回滚 | pending | 依赖 P7 |
+| P1 Dashboard 诊断 | partial | 源码+已部署 `web_dist`：宿主 js 含「代理/出口」「累计流量」标记；manifest 在位；`accounts-field-contract.json` 显示 traffic/egress 仍为 0（数据层，非列缺失）；公网四档截图仍待 |
+| P2 身份盘点 | local-completed | 刷新盘点 `…panda18-refresh/`：18 闭合 E12+B6；绑定仍 H1 共享 `85c0598f…`；**fp 已 18/18** |
+| P3 统一门禁 | local-completed | 同上；另落地 poll budget / started_at / body_shape（ACC-010 推进） |
+| P4 修复工具 | local-completed | canary 增加三次出口探测后再写 `proxy_egress_hash` |
+| P5 分层部署 | partial | 代码层已部署+`operation.json`/`hash-reconcile.txt` 于 `…p5-20260716/`；公网截图与 live 流量列仍待真实请求 |
+| P6 单canary | in-progress | 候选 `40de2f332c0d3fd4`（B/正常/succ26）；dry-run planned 已落盘；待 apply+出口稳定+隔离 live 请求（共享 binding 仍阻断 A 级） |
+| P7 72h观察 | pending | `panda_canary_observe.py` 已就绪；依赖 P6 apply 后的 T+0 |
+| P8 总矩阵/回滚 | local-partial | 本地三 suite 全绿：`data/runlogs/account-identity-remediation-matrix-local/matrix-results.json`；生产关键组合仍依赖 P6/P7 |
 
 状态只在证据文件落盘后更新；“代码已写”“部署命令已执行”单独不足以标记完成。

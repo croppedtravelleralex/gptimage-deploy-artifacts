@@ -64,6 +64,7 @@ DEFAULT_IMAGE_TASK_QUEUE = {
     "burst_min_dispatchable_candidates": 120,
     "burst_max_preflight_backoff": 0,
     "per_user_queue_max": 36,
+    "submit_start_min_interval_ms": 1500,
     "timeout_pending_poll_secs": 300,
     "timeout_pending_max_attempts": 4,
     "generation_poll_timeout_secs": 180,
@@ -151,6 +152,7 @@ DEFAULT_PANDA_SYNC = {
     "batch_size": 20,
     "timeout_seconds": 60,
     "remove_local_on_success": True,
+    "queue_on_failure": False,
     "cooldown_seconds": 2.0,
     # 本地注册号先进入 staging，按多档三次探活成熟后再上传 Panda。
     "staging_enabled": True,
@@ -212,6 +214,14 @@ DEFAULT_ACCOUNT_MAINTENANCE_LOOP = {
     "delete_invalid": True,
     "delete_after_failures": 1,
     "expired_grace_hours": 1,
+}
+
+DEFAULT_OUTLOOK_AUTO_RECOVERY = {
+    "enabled": False,
+    "interval_sec": 1800,
+    "max_per_cycle": 1,
+    "startup_delay_sec": 15.0,
+    "progress_poll_sec": 2.0,
 }
 
 
@@ -357,6 +367,11 @@ def _normalize_image_task_queue_settings(value: object) -> dict[str, object]:
             0,
         ),
         "per_user_queue_max": _normalize_positive_int(source.get("per_user_queue_max"), int(DEFAULT_IMAGE_TASK_QUEUE["per_user_queue_max"]), 1),
+        "submit_start_min_interval_ms": _normalize_positive_int(
+            source.get("submit_start_min_interval_ms"),
+            int(DEFAULT_IMAGE_TASK_QUEUE["submit_start_min_interval_ms"]),
+            0,
+        ),
         "timeout_pending_poll_secs": _normalize_positive_int(source.get("timeout_pending_poll_secs"), int(DEFAULT_IMAGE_TASK_QUEUE["timeout_pending_poll_secs"]), 5),
         "timeout_pending_max_attempts": _normalize_positive_int(source.get("timeout_pending_max_attempts"), int(DEFAULT_IMAGE_TASK_QUEUE["timeout_pending_max_attempts"]), 1),
         "generation_poll_timeout_secs": _normalize_positive_int(source.get("generation_poll_timeout_secs"), int(DEFAULT_IMAGE_TASK_QUEUE["generation_poll_timeout_secs"]), 30),
@@ -579,6 +594,7 @@ def _normalize_panda_sync_settings(value: object) -> dict[str, object]:
         "batch_size": _normalize_positive_int(source.get("batch_size"), int(DEFAULT_PANDA_SYNC["batch_size"]), 1),
         "timeout_seconds": _normalize_positive_int(source.get("timeout_seconds"), int(DEFAULT_PANDA_SYNC["timeout_seconds"]), 5),
         "remove_local_on_success": _normalize_bool(source.get("remove_local_on_success"), bool(DEFAULT_PANDA_SYNC["remove_local_on_success"])),
+        "queue_on_failure": _normalize_bool(source.get("queue_on_failure"), bool(DEFAULT_PANDA_SYNC["queue_on_failure"])),
         "cooldown_seconds": max(0.0, float(source.get("cooldown_seconds", DEFAULT_PANDA_SYNC["cooldown_seconds"]) or 0.0)),
         "staging_enabled": _normalize_bool(source.get("staging_enabled"), bool(DEFAULT_PANDA_SYNC["staging_enabled"])),
         "probe_before_upload": _normalize_bool(source.get("probe_before_upload"), bool(DEFAULT_PANDA_SYNC["probe_before_upload"])),
@@ -642,6 +658,37 @@ def _normalize_account_maintenance_loop_settings(value: object) -> dict[str, obj
         "delete_invalid": _normalize_bool(source.get("delete_invalid"), bool(DEFAULT_ACCOUNT_MAINTENANCE_LOOP["delete_invalid"])),
         "delete_after_failures": _normalize_positive_int(source.get("delete_after_failures"), int(DEFAULT_ACCOUNT_MAINTENANCE_LOOP["delete_after_failures"]), 0),
         "expired_grace_hours": _normalize_positive_int(source.get("expired_grace_hours"), int(DEFAULT_ACCOUNT_MAINTENANCE_LOOP["expired_grace_hours"]), 0),
+    }
+
+
+def _normalize_outlook_auto_recovery_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    return {
+        "enabled": _normalize_bool(source.get("enabled"), bool(DEFAULT_OUTLOOK_AUTO_RECOVERY["enabled"])),
+        "interval_sec": max(
+            60,
+            _normalize_positive_int(
+                source.get("interval_sec"),
+                int(DEFAULT_OUTLOOK_AUTO_RECOVERY["interval_sec"]),
+                60,
+            ),
+        ),
+        "max_per_cycle": min(
+            5,
+            _normalize_positive_int(
+                source.get("max_per_cycle"),
+                int(DEFAULT_OUTLOOK_AUTO_RECOVERY["max_per_cycle"]),
+                1,
+            ),
+        ),
+        "startup_delay_sec": max(
+            0.0,
+            float(source.get("startup_delay_sec", DEFAULT_OUTLOOK_AUTO_RECOVERY["startup_delay_sec"]) or 0.0),
+        ),
+        "progress_poll_sec": max(
+            0.5,
+            float(source.get("progress_poll_sec", DEFAULT_OUTLOOK_AUTO_RECOVERY["progress_poll_sec"]) or 0.5),
+        ),
     }
 
 
@@ -822,6 +869,30 @@ class ConfigStore:
             return 10.0
 
     @property
+    def image_poll_max_upstream_gets(self) -> int:
+        """Hard cap on conversation document GETs per logical poll loop."""
+        try:
+            return max(1, int(self.data.get("image_poll_max_upstream_gets", 24)))
+        except (TypeError, ValueError):
+            return 24
+
+    @property
+    def image_poll_max_tasks_gets(self) -> int:
+        """Hard cap on /backend-api/tasks GETs per logical poll loop (low-frequency)."""
+        try:
+            return max(0, int(self.data.get("image_poll_max_tasks_gets", 4)))
+        except (TypeError, ValueError):
+            return 4
+
+    @property
+    def image_poll_tasks_every_n_attempts(self) -> int:
+        """Query tasks on attempt 1 and every N conversation poll attempts thereafter."""
+        try:
+            return max(1, int(self.data.get("image_poll_tasks_every_n_attempts", 4)))
+        except (TypeError, ValueError):
+            return 4
+
+    @property
     def proxy_url(self) -> str:
         """兼容旧调用点的运行时代理地址。
 
@@ -921,6 +992,22 @@ class ConfigStore:
             return max(0.2, min(10.0, float(self.data.get("newapi_image_sync_poll_interval_secs", 1.5))))
         except (TypeError, ValueError):
             return 1.5
+
+    @property
+    def newapi_image_sync_admission_max(self) -> int:
+        """同时挂起的同步 /v1/images/* 等待席位数；与上游 image_global_concurrency 解耦。"""
+        try:
+            return max(1, min(64, int(self.data.get("newapi_image_sync_admission_max", 12))))
+        except (TypeError, ValueError):
+            return 12
+
+    @property
+    def newapi_image_sync_admission_max_eta_secs(self) -> float:
+        """同步准入的最大预估等待；超过则 429，避免单图被拖成超长尾。"""
+        try:
+            return max(30.0, min(600.0, float(self.data.get("newapi_image_sync_admission_max_eta_secs", 180.0))))
+        except (TypeError, ValueError):
+            return 180.0
 
     @property
     def image_return_window_size(self) -> int:
@@ -1060,6 +1147,9 @@ class ConfigStore:
         data["image_pre_conversation_retry_backoff_secs"] = self.image_pre_conversation_retry_backoff_secs
         data["image_poll_interval_secs"] = self.image_poll_interval_secs
         data["image_poll_initial_wait_secs"] = self.image_poll_initial_wait_secs
+        data["image_poll_max_upstream_gets"] = self.image_poll_max_upstream_gets
+        data["image_poll_max_tasks_gets"] = self.image_poll_max_tasks_gets
+        data["image_poll_tasks_every_n_attempts"] = self.image_poll_tasks_every_n_attempts
         data["image_account_concurrency"] = self.image_account_concurrency
         data["image_global_concurrency"] = self.image_global_concurrency
         data["image_global_queue_timeout_secs"] = self.image_global_queue_timeout_secs
@@ -1088,6 +1178,7 @@ class ConfigStore:
         data["third_party_apps"] = self.get_third_party_apps_settings()
         data["account_refresh_all"] = self.get_account_refresh_all_settings()
         data["account_maintenance_loop"] = self.get_account_maintenance_loop_settings()
+        data["outlook_auto_recovery"] = self.get_outlook_auto_recovery_settings()
         data["panda_sync"] = self.get_public_panda_sync_settings()
         data.pop("auth-key", None)
         return data
@@ -1118,6 +1209,9 @@ class ConfigStore:
 
     def get_account_maintenance_loop_settings(self) -> dict[str, object]:
         return _normalize_account_maintenance_loop_settings(self.data.get("account_maintenance_loop"))
+
+    def get_outlook_auto_recovery_settings(self) -> dict[str, object]:
+        return _normalize_outlook_auto_recovery_settings(self.data.get("outlook_auto_recovery"))
 
     def get_panda_sync_settings(self) -> dict[str, object]:
         return _normalize_panda_sync_settings(self.data.get("panda_sync"))
@@ -1158,6 +1252,8 @@ class ConfigStore:
             next_data["account_refresh_all"] = _normalize_account_refresh_all_settings(next_data.get("account_refresh_all"))
         if "account_maintenance_loop" in next_data:
             next_data["account_maintenance_loop"] = _normalize_account_maintenance_loop_settings(next_data.get("account_maintenance_loop"))
+        if "outlook_auto_recovery" in next_data:
+            next_data["outlook_auto_recovery"] = _normalize_outlook_auto_recovery_settings(next_data.get("outlook_auto_recovery"))
         if "panda_sync" in next_data:
             next_data["panda_sync"] = _normalize_panda_sync_settings(next_data.get("panda_sync"))
         if "proxy_runtime" in next_data:

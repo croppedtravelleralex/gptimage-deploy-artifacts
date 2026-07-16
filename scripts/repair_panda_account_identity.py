@@ -284,6 +284,7 @@ def run_canary(
     result = {"applied": False, "plan": plan}
     if apply:
         from services.account_service import account_service
+        from services.register.proxy_health import measure_proxy_egress_ip
 
         token = str(target.get("access_token") or "")
         updates = {
@@ -295,10 +296,44 @@ def run_canary(
             "fp_origin": plan["planned_identity"].get("fp_origin") or "repair_generated",
         }
         # 仅补缺失派生字段；不在 canary 中改绑 proxy 明文
-        if not target.get("proxy_egress_hash") and target.get("proxy"):
-            updates["proxy_egress_hash"] = target.get("proxy_egress_hash")
-        if not target.get("registration_proxy_hash") and target.get("proxy"):
-            updates["registration_proxy_hash"] = proxy_binding_hash(target.get("proxy"))
+        proxy_url = str(target.get("proxy") or "").strip()
+        egress_probe: dict[str, Any] = {"samples": []}
+        if not target.get("proxy_egress_hash") and proxy_url:
+            hashes: list[str] = []
+            ips: list[str] = []
+            locs: list[str] = []
+            for _ in range(3):
+                sample = measure_proxy_egress_ip(proxy_url, timeout=20.0)
+                egress_probe["samples"].append(
+                    {
+                        "ok": sample.get("ok"),
+                        "egress_hash": sample.get("egress_hash"),
+                        "loc": sample.get("loc"),
+                        "elapsed_sec": sample.get("elapsed_sec"),
+                        "error": sample.get("error"),
+                    }
+                )
+                if sample.get("ok") and sample.get("egress_hash"):
+                    hashes.append(str(sample["egress_hash"]))
+                    ips.append(str(sample.get("ip") or ""))
+                    locs.append(str(sample.get("loc") or ""))
+            unique = sorted(set(hashes))
+            egress_probe["unique_hashes"] = unique
+            egress_probe["stable"] = len(unique) == 1
+            if len(unique) == 1:
+                updates["proxy_egress_hash"] = unique[0]
+                if ips and ips[0]:
+                    updates["proxy_egress_ip"] = ips[0]
+            else:
+                egress_probe["error"] = "egress_unstable_or_failed"
+        if not target.get("registration_proxy_hash") and proxy_url:
+            updates["registration_proxy_hash"] = proxy_binding_hash(proxy_url)
+        (out_dir / "egress-probe.json").write_text(
+            json.dumps(egress_probe, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        if egress_probe.get("error"):
+            raise SystemExit(f"canary egress probe failed: {egress_probe['error']}")
         normalized = normalize_account_identity({**target, **updates})
         updated = account_service.update_account_identity(
             token,
@@ -306,7 +341,8 @@ def run_canary(
                 "proxy": normalized.get("proxy"),
                 "proxy_provider": normalized.get("proxy_provider"),
                 "proxy_scope": normalized.get("proxy_scope"),
-                "proxy_egress_hash": normalized.get("proxy_egress_hash"),
+                "proxy_egress_hash": normalized.get("proxy_egress_hash") or updates.get("proxy_egress_hash"),
+                "proxy_egress_ip": updates.get("proxy_egress_ip") or normalized.get("proxy_egress_ip"),
                 "registration_proxy_hash": normalized.get("registration_proxy_hash"),
                 "lifecycle_ip_mode": normalized.get("lifecycle_ip_mode"),
                 "fp": normalized.get("fp"),
