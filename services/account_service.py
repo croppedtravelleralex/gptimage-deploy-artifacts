@@ -304,6 +304,10 @@ class AccountService:
                 continue
             if str(item.get("outlook_recovery_state") or "").strip().lower() == "terminal":
                 continue
+            receive = str(item.get("panda_receive_state") or "").strip().lower()
+            # canary 窗口：共享绑定的同伴可先标 identity_isolated，不计入活跃重复
+            if receive in {"identity_isolated", "rejected"}:
+                continue
             other_binding = str(item.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(
                 item.get("proxy")
             )
