@@ -300,7 +300,8 @@ class AccountService:
             if not isinstance(item, dict):
                 continue
             status = str(item.get("status") or "")
-            if status == "禁用":
+            # 仅「可调度态」同伴计入重复；禁用/限流/异常不挡唯一 canary
+            if status in {"禁用", "限流", "异常"}:
                 continue
             if str(item.get("outlook_recovery_state") or "").strip().lower() == "terminal":
                 continue
