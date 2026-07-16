@@ -16,7 +16,7 @@ from services.account_identity import missing_panda_identity_fields, normalize_a
 from services.account_service import AccountService, account_service
 from services.config import config
 from services.log_service import LOG_TYPE_ACCOUNT, log_service
-from services.register.real_browser_register import is_local_only_proxy_url
+from services.proxy_url_utils import is_local_only_proxy_url
 from utils.helper import anonymize_token
 
 BASE_DIR = Path(__file__).resolve().parents[1]

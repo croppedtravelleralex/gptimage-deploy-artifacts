@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [修复] Panda 部署：`account_refresh_all_service` 改从轻量 `services/proxy_url_utils.is_local_only_proxy_url` 导入，避免依赖未下发的 `real_browser_register` 导致容器 ImportError 重启。
 + [运维] Panda 22:09 SSH 只读深检：根分区 49%（磁盘门禁解除）、调度面仍 0、fp/egress 0/18、生产码漂移；报告 `data/runlogs/panda-deep-audit-readonly-20260716-220921.md`，脚本 `scripts/panda_readonly_deep_audit.py`；同步刷新 `02-current-state` / `09` / `04` ACC-010。
 + [运维] 发布门禁：ACC-010 **仅本地** compile/pytest/前端 build（`scripts/panda_acc010_local_build.ps1`）；验收通过后经 **GitHub push → Panda git pull**，禁止在 Panda 上 build，禁止脚本直推 scp 业务码。误触的 scp 热更已从 `acc010-fingerprint-backend-20260716-222708` 回滚（`openai`→`1fa10b…`，fingerprint 已移除，health ok）。
 + [新增] 账号身份门禁：`update_account_identity` / `ensure_account_identity_ready` / 普通 update·import 写保护；Panda 上传完整性校验；重复 `proxy_binding_hash` 调度拦截。
