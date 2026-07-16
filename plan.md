@@ -748,9 +748,9 @@ data/runlogs/account-identity-remediation-*/
 | P2 身份盘点 | local-completed | 刷新盘点 `…panda18-refresh/`：18 闭合 E12+B6；绑定仍 H1 共享 `85c0598f…`；**fp 已 18/18** |
 | P3 统一门禁 | local-completed | 同上；另落地 poll budget / started_at / body_shape（ACC-010 推进） |
 | P4 修复工具 | local-completed | canary 增加三次出口探测后再写 `proxy_egress_hash` |
-| P5 分层部署 | partial | 代码层已部署+`operation.json`/`hash-reconcile.txt` 于 `…p5-20260716/`；公网截图与 live 流量列仍待真实请求 |
-| P6 单canary | in-progress | 候选 `40de2f332c0d3fd4`（B/正常/succ26）；dry-run planned 已落盘；待 apply+出口稳定+隔离 live 请求（共享 binding 仍阻断 A 级） |
-| P7 72h观察 | pending | `panda_canary_observe.py` 已就绪；依赖 P6 apply 后的 T+0 |
-| P8 总矩阵/回滚 | local-partial | 本地三 suite 全绿：`data/runlogs/account-identity-remediation-matrix-local/matrix-results.json`；生产关键组合仍依赖 P6/P7 |
+| P5 分层部署 | partial | `…p5-20260716/` operation+hash 对账；web_dist 列标记在位；公网四档截图仍待 |
+| P6 单canary | t0-passed | 候选 `40de2f332c0d3fd4`：apply→grade A；隔离 8 同伴；`schedulable=1`；`t0-live.json`：me_ok、fp_stable、egress_stable×3 且匹配存证 |
+| P7 72h观察 | running | 观察目录 `…canary-40de2f…/`；`run-next-observe.sh` + cron 计划 t1h/t6h；待采 t1h/t6h/t24h/t72h |
+| P8 总矩阵/回滚 | local-partial | 本地 `matrix-results.json` 三 suite 全绿；生产矩阵/回滚演练待 P7 节点 |
 
 状态只在证据文件落盘后更新；“代码已写”“部署命令已执行”单独不足以标记完成。
