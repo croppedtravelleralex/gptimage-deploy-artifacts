@@ -212,16 +212,17 @@ function formatCompact(value: number) {
 
 function formatBytes(value?: number | null) {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return "待统计";
+    return "等待采集";
   }
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let size = value;
+  // 展示优先 MB / GB / TB，小于 1MB 仍用 KB
+  const units = ["KB", "MB", "GB", "TB"] as const;
+  let size = value / 1024;
   let unitIndex = 0;
   while (size >= 1024 && unitIndex < units.length - 1) {
     size /= 1024;
     unitIndex += 1;
   }
-  const digits = unitIndex === 0 ? 0 : size >= 10 ? 1 : 2;
+  const digits = size >= 100 ? 0 : size >= 10 ? 1 : 2;
   return `${size.toFixed(digits)} ${units[unitIndex]}`;
 }
 
@@ -417,13 +418,28 @@ function formatPandaSyncDetails(data: PandaAccountSyncResponse) {
 function buildLinePath(values: number[], maxValue: number, width: number, height: number) {
   if (values.length === 0) return "";
   const denominator = Math.max(1, values.length - 1);
-  return values
-    .map((value, index) => {
-      const x = (index / denominator) * width;
-      const y = height - (Math.max(0, value) / Math.max(1, maxValue)) * height;
-      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    })
-    .join(" ");
+  const max = Math.max(1, maxValue);
+  const points = values.map((value, index) => ({
+    x: (index / denominator) * width,
+    y: height - (Math.max(0, value) / max) * height,
+  }));
+  if (points.length === 1) {
+    return `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
+  }
+  // Catmull-Rom → cubic Bezier，平滑曲线
+  let path = `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const p0 = points[Math.max(0, i - 1)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(points.length - 1, i + 2)];
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+    path += ` C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
+  }
+  return path;
 }
 
 function downloadTokens(accounts: Account[]) {
@@ -526,7 +542,7 @@ function AccountsPageContent() {
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<AccountStatus | "all">("all");
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState("10");
+  const [pageSize, setPageSize] = useState("100");
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [editStatus, setEditStatus] = useState<AccountStatus>("正常");
   const [editProxy, setEditProxy] = useState("");
@@ -2069,29 +2085,39 @@ function AccountsPageContent() {
               </div>
             </div>
             <div className="overflow-x-auto">
-              <svg viewBox="0 0 640 150" className="h-[170px] min-w-[640px] w-full">
-                {[0, 1, 2, 3].map((line) => (
-                  <line
-                    key={line}
-                    x1="0"
-                    x2="640"
-                    y1={15 + line * 35}
-                    y2={15 + line * 35}
-                    stroke="#e7e5e4"
-                    strokeWidth="1"
-                  />
-                ))}
-                <path d={activityChart.registeredPath} fill="none" stroke="#10b981" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" transform="translate(0 10)" />
-                <path d={activityChart.syncedPath} fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" transform="translate(0 10)" />
-                <path d={activityChart.deletedPath} fill="none" stroke="#f43f5e" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" transform="translate(0 10)" />
-                {activityChart.items.map((item, index) => {
-                  const x = activityChart.items.length <= 1 ? 0 : (index / (activityChart.items.length - 1)) * 640;
+              <svg viewBox="0 0 700 180" className="h-[200px] min-w-[700px] w-full">
+                {/* Y axis */}
+                <line x1="48" y1="12" x2="48" y2="140" stroke="#a8a29e" strokeWidth="1" />
+                {/* X axis */}
+                <line x1="48" y1="140" x2="688" y2="140" stroke="#a8a29e" strokeWidth="1" />
+                {[0, 1, 2, 3, 4].map((line) => {
+                  const y = 12 + line * 32;
+                  const value = Math.round(activityChart.maxValue * (1 - line / 4));
                   return (
-                    <text key={item.date} x={x} y="148" textAnchor={index === 0 ? "start" : index === activityChart.items.length - 1 ? "end" : "middle"} className="fill-stone-400 text-[10px]">
+                    <g key={line}>
+                      <line x1="48" x2="688" y1={y} y2={y} stroke="#e7e5e4" strokeWidth="1" />
+                      <text x="42" y={y + 3} textAnchor="end" className="fill-stone-400 text-[10px]">
+                        {value}
+                      </text>
+                    </g>
+                  );
+                })}
+                <g transform="translate(48 12)">
+                  <path d={activityChart.registeredPath} fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d={activityChart.syncedPath} fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d={activityChart.deletedPath} fill="none" stroke="#f43f5e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                </g>
+                {activityChart.items.map((item, index) => {
+                  const chartWidth = 640;
+                  const x = 48 + (activityChart.items.length <= 1 ? 0 : (index / (activityChart.items.length - 1)) * chartWidth);
+                  return (
+                    <text key={item.date} x={x} y="158" textAnchor={index === 0 ? "start" : index === activityChart.items.length - 1 ? "end" : "middle"} className="fill-stone-500 text-[10px]">
                       {item.date.slice(5)}
                     </text>
                   );
                 })}
+                <text x="368" y="176" textAnchor="middle" className="fill-stone-400 text-[10px]">日期</text>
+                <text x="14" y="76" textAnchor="middle" className="fill-stone-400 text-[10px]" transform="rotate(-90 14 76)">数量</text>
               </svg>
             </div>
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
@@ -2268,7 +2294,7 @@ function AccountsPageContent() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1480px] text-left">
+              <table className="w-full min-w-[1100px] text-left">
                 <thead className="border-b border-stone-100 text-[11px] text-stone-400 uppercase tracking-[0.18em]">
                   <tr>
                     <th className="w-12 px-4 py-3">
@@ -2277,20 +2303,15 @@ function AccountsPageContent() {
                         onCheckedChange={(checked) => toggleSelectAll(Boolean(checked))}
                       />
                     </th>
-                    <th className="w-56 px-4 py-3">token</th>
-                    <th className="w-28 px-4 py-3">类型</th>
-                    <th className="w-24 px-4 py-3">来源</th>
+                    <th className="w-56 px-4 py-3">Token / 邮箱</th>
+                    <th className="w-28 px-4 py-3">类型 / 来源</th>
                     <th className="w-24 px-4 py-3">状态</th>
-                    <th className="w-44 px-4 py-3">Panda</th>
-                    <th className="w-56 px-4 py-3">账号信息</th>
                     <th className="w-48 px-4 py-3">代理 / 出口</th>
                     <th className="w-32 px-4 py-3">累计流量</th>
                     <th className="w-32 px-4 py-3">创建时间</th>
                     <th className="w-24 px-4 py-3">额度</th>
                     <th className="w-40 px-4 py-3">恢复时间</th>
                     <th className="w-18 px-4 py-3">在途</th>
-                    <th className="w-18 px-4 py-3">成功</th>
-                    <th className="w-18 px-4 py-3">失败</th>
                     <th className="w-24 px-4 py-3">操作</th>
                   </tr>
                 </thead>
@@ -2320,31 +2341,34 @@ function AccountsPageContent() {
                           />
                         </td>
                         <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium tracking-tight text-stone-700">
-                              {maskToken(account.access_token)}
-                            </span>
-                            <button
-                              type="button"
-                              className="rounded-lg p-1 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
-                              onClick={() => {
-                                void navigator.clipboard.writeText(account.access_token);
-                                toast.success("token 已复制");
-                              }}
-                            >
-                              <Copy className="size-4" />
-                            </button>
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium tracking-tight text-stone-700">
+                                {maskToken(account.access_token)}
+                              </span>
+                              <button
+                                type="button"
+                                className="rounded-lg p-1 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700"
+                                onClick={() => {
+                                  void navigator.clipboard.writeText(account.access_token);
+                                  toast.success("token 已复制");
+                                }}
+                              >
+                                <Copy className="size-4" />
+                              </button>
+                            </div>
+                            <div className="truncate text-xs leading-5 text-stone-500">{account.email ?? "—"}</div>
                           </div>
                         </td>
                         <td className="px-4 py-3">
-                          <Badge variant="secondary" className="rounded-md bg-stone-100 text-stone-700">
-                            {displayAccountType(account)}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3">
-                          <Badge variant="outline" className="rounded-md border-stone-200 text-stone-600">
-                            {displayAccountSource(account)}
-                          </Badge>
+                          <div className="flex flex-col items-start gap-1">
+                            <Badge variant="secondary" className="rounded-md bg-stone-100 text-stone-700">
+                              {displayAccountType(account)}
+                            </Badge>
+                            <Badge variant="outline" className="rounded-md border-stone-200 text-stone-600">
+                              {displayAccountSource(account)}
+                            </Badge>
+                          </div>
                         </td>
                         <td className="px-4 py-3">
                           <Badge
@@ -2356,51 +2380,29 @@ function AccountsPageContent() {
                           </Badge>
                         </td>
                         <td className="px-4 py-3">
-                          <div className="flex flex-col items-start gap-1" title={pandaStatusTitle(account)}>
-                            {activityChart.syncLabel === "接收" ? (
-                              <Badge
-                                variant={pandaReceiveVariant(account.panda_receive_state)}
-                                className="rounded-md px-2 py-1"
-                              >
-                                接收 {pandaReceiveLabel(account.panda_receive_state)}
-                              </Badge>
-                            ) : (
-                              <>
-                                <Badge
-                                  variant={pandaSyncVariant(account.panda_sync_state)}
-                                  className="rounded-md px-2 py-1"
-                                >
-                                  {pandaSyncLabel(account.panda_sync_state)}
-                                </Badge>
-                                <Badge
-                                  variant={pandaReceiveVariant(account.panda_receive_state)}
-                                  className="rounded-md px-2 py-1"
-                                >
-                                  远端 {pandaReceiveLabel(account.panda_receive_state)}
-                                </Badge>
-                              </>
-                            )}
-                            {account.panda_probe_last_error || account.panda_verify_last_error ? (
-                              <div className="max-w-[9rem] truncate text-[11px] text-rose-500">
-                                {formatPandaInlineError(account.panda_probe_last_error || account.panda_verify_last_error)}
-                              </div>
-                            ) : null}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="text-xs leading-5 text-stone-500">{account.email ?? "—"}</div>
-                        </td>
-                        <td className="px-4 py-3">
                           {(() => {
                             const proxy = proxyDisplay(account);
+                            const pandaError = formatPandaInlineError(
+                              account.panda_probe_last_error || account.panda_verify_last_error,
+                            );
                             return (
                               <div
-                                className="max-w-44 space-y-0.5 text-xs leading-5"
-                                title={[proxy.endpoint, proxy.detail, proxy.hash ? `出口哈希 ${proxy.hash}` : ""].filter(Boolean).join("\n")}
+                                className="max-w-48 space-y-0.5 text-xs leading-5"
+                                title={[
+                                  proxy.endpoint,
+                                  proxy.detail,
+                                  proxy.hash ? `出口哈希 ${proxy.hash}` : "",
+                                  pandaError ? `Panda: ${pandaError}` : "",
+                                ]
+                                  .filter(Boolean)
+                                  .join("\n")}
                               >
                                 <div className="truncate font-medium text-stone-700">{proxy.endpoint}</div>
                                 <div className="truncate text-stone-400">{proxy.detail}</div>
                                 {proxy.hash ? <div className="font-mono text-[10px] text-stone-400">#{proxy.hash}</div> : null}
+                                {pandaError ? (
+                                  <div className="truncate text-[11px] text-rose-500">{pandaError}</div>
+                                ) : null}
                               </div>
                             );
                           })()}
@@ -2468,8 +2470,6 @@ function AccountsPageContent() {
                             );
                           })()}
                         </td>
-                        <td className="px-4 py-3 text-stone-500">{account.success}</td>
-                        <td className="px-4 py-3 text-stone-500">{account.fail}</td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1 text-stone-400">
                             <button

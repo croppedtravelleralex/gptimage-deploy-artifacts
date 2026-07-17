@@ -26,6 +26,11 @@ def main() -> int:
     parser.add_argument("--token-hash", required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="exit non-zero if any peer shares binding and is not identity_isolated",
+    )
     parser.add_argument("--restore", action="store_true", help="restore from rollback.json in --out")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -79,6 +84,22 @@ def main() -> int:
         "peers": peers,
     }
     (args.out / "peer-isolation-plan.json").write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    if args.preflight:
+        bad = [
+            item
+            for item in peers
+            if str(item.get("before_receive_state") or "").strip().lower() != "identity_isolated"
+        ]
+        result = {
+            "ok": len(bad) == 0,
+            "preflight": True,
+            "peer_count": len(peers),
+            "not_isolated": len(bad),
+            "peers": bad,
+            "out": str(args.out),
+        }
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if not bad else 2
     if not args.apply:
         print(json.dumps({"ok": True, "dry_run": True, "peer_count": len(peers), "out": str(args.out)}))
         return 0

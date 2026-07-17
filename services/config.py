@@ -692,6 +692,46 @@ def _normalize_outlook_auto_recovery_settings(value: object) -> dict[str, object
     }
 
 
+DEFAULT_WORKLOAD_SETTINGS: dict[str, object] = {
+    "mode": "shadow",
+    "text_queue_mode": "off",
+    "canary_token_hashes": [],
+    "global_text_inflight": 1,
+}
+
+
+def _normalize_workload_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    mode = str(source.get("mode") or DEFAULT_WORKLOAD_SETTINGS["mode"]).strip().lower()
+    if mode not in {"shadow", "live"}:
+        mode = "shadow"
+    text_queue_mode = str(
+        source.get("text_queue_mode") or DEFAULT_WORKLOAD_SETTINGS["text_queue_mode"]
+    ).strip().lower()
+    if text_queue_mode not in {"off", "busy_only", "always"}:
+        text_queue_mode = "off"
+    hashes_raw = source.get("canary_token_hashes")
+    hashes: list[str] = []
+    if isinstance(hashes_raw, list):
+        for item in hashes_raw:
+            text = str(item or "").strip().lower()
+            if text and text not in hashes:
+                hashes.append(text)
+    return {
+        "mode": mode,
+        "text_queue_mode": text_queue_mode,
+        "canary_token_hashes": hashes,
+        "global_text_inflight": max(
+            1,
+            _normalize_positive_int(
+                source.get("global_text_inflight"),
+                int(DEFAULT_WORKLOAD_SETTINGS["global_text_inflight"]),
+                1,
+            ),
+        ),
+    }
+
+
 def _validate_image_storage_settings(settings: dict[str, object]) -> None:
     if not _normalize_bool(settings.get("enabled"), False):
         return
@@ -1213,6 +1253,22 @@ class ConfigStore:
     def get_outlook_auto_recovery_settings(self) -> dict[str, object]:
         return _normalize_outlook_auto_recovery_settings(self.data.get("outlook_auto_recovery"))
 
+    def get_workload_settings(self) -> dict[str, object]:
+        return _normalize_workload_settings(self.data.get("workload"))
+
+    @property
+    def workload_mode(self) -> str:
+        return str(self.get_workload_settings().get("mode") or "shadow")
+
+    @property
+    def text_queue_mode(self) -> str:
+        return str(self.get_workload_settings().get("text_queue_mode") or "off")
+
+    @property
+    def workload_canary_token_hashes(self) -> list[str]:
+        raw = self.get_workload_settings().get("canary_token_hashes") or []
+        return [str(item) for item in raw] if isinstance(raw, list) else []
+
     def get_panda_sync_settings(self) -> dict[str, object]:
         return _normalize_panda_sync_settings(self.data.get("panda_sync"))
 
@@ -1254,6 +1310,8 @@ class ConfigStore:
             next_data["account_maintenance_loop"] = _normalize_account_maintenance_loop_settings(next_data.get("account_maintenance_loop"))
         if "outlook_auto_recovery" in next_data:
             next_data["outlook_auto_recovery"] = _normalize_outlook_auto_recovery_settings(next_data.get("outlook_auto_recovery"))
+        if "workload" in next_data:
+            next_data["workload"] = _normalize_workload_settings(next_data.get("workload"))
         if "panda_sync" in next_data:
             next_data["panda_sync"] = _normalize_panda_sync_settings(next_data.get("panda_sync"))
         if "proxy_runtime" in next_data:

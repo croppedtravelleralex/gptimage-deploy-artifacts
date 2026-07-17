@@ -755,18 +755,9 @@ class OpenAIBackendAPI:
 
     def _conversation_headers(self, path: str, requirements: ChatRequirements) -> Dict[str, str]:
         """根据当前 requirements 构造对话 SSE 请求头。"""
-        headers = {
-            "Accept": "text/event-stream",
-            "Content-Type": "application/json",
-            "OpenAI-Sentinel-Chat-Requirements-Token": requirements.token,
-        }
-        if requirements.proof_token:
-            headers["OpenAI-Sentinel-Proof-Token"] = requirements.proof_token
-        if requirements.turnstile_token:
-            headers["OpenAI-Sentinel-Turnstile-Token"] = requirements.turnstile_token
-        if requirements.so_token:
-            headers["OpenAI-Sentinel-SO-Token"] = requirements.so_token
-        built = self._headers(path, headers)
+        from services.protocol.chatgpt_web_request import build_chat_headers
+
+        built = self._headers(path, build_chat_headers(requirements))
         try:
             from services.request_shape import header_shape
 
@@ -873,40 +864,15 @@ class OpenAIBackendAPI:
             thinking_effort: str = "",
     ) -> Dict[str, Any]:
         """把标准 messages 构造成 web 对话请求体。"""
-        payload = {
-            "action": "next",
-            "messages": self._api_messages_to_conversation_messages(messages),
-            "model": model,
-            "parent_message_id": new_uuid(),
-            "conversation_mode": {"kind": "primary_assistant"},
-            "conversation_origin": None,
-            "force_paragen": False,
-            "force_paragen_model_slug": "",
-            "force_rate_limit": False,
-            "force_use_sse": True,
-            "history_and_training_disabled": True,
-            "reset_rate_limits": False,
-            "suggestions": [],
-            "supported_encodings": [],
-            "system_hints": [],
-            "timezone": timezone,
-            "timezone_offset_min": -480,
-            "variant_purpose": "comparison_implicit",
-            "websocket_request_id": new_uuid(),
-            "client_contextual_info": {
-                "is_dark_mode": False,
-                "time_since_loaded": 120,
-                "page_height": 900,
-                "page_width": 1400,
-                "pixel_ratio": 2,
-                "screen_height": 1440,
-                "screen_width": 2560,
-            },
-        }
-        normalized_effort = self._normalize_thinking_effort(thinking_effort)
-        if normalized_effort:
-            payload["thinking_effort"] = normalized_effort
-        return payload
+        from services.protocol.chatgpt_web_request import build_chat_body
+
+        return build_chat_body(
+            messages,
+            model,
+            timezone=timezone,
+            thinking_effort=thinking_effort,
+            convert_messages=self._api_messages_to_conversation_messages,
+        )
 
     def _image_model_slug(self, model: str) -> str:
         """把标准图片模型名映射到底层 model slug。"""
@@ -922,21 +888,24 @@ class OpenAIBackendAPI:
     def _image_headers(self, path: str, requirements: ChatRequirements, conduit_token: str = "", accept: str = "*/*") -> \
             Dict[str, str]:
         """构造图片链路请求头。"""
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": accept,
-            "OpenAI-Sentinel-Chat-Requirements-Token": requirements.token,
-        }
-        if requirements.proof_token:
-            headers["OpenAI-Sentinel-Proof-Token"] = requirements.proof_token
-        if requirements.turnstile_token:
-            headers["OpenAI-Sentinel-Turnstile-Token"] = requirements.turnstile_token
-        if requirements.so_token:
-            headers["OpenAI-Sentinel-SO-Token"] = requirements.so_token
-        if conduit_token:
-            headers["X-Conduit-Token"] = conduit_token
-        if accept == "text/event-stream":
-            headers["X-Oai-Turn-Trace-Id"] = new_uuid()
+        from services.protocol.chatgpt_web_request import (
+            build_image_prepare_headers,
+            build_image_start_headers,
+            build_sentinel_headers,
+        )
+
+        if conduit_token or accept == "text/event-stream":
+            headers = build_image_start_headers(requirements, conduit_token) if conduit_token else {
+                "Content-Type": "application/json",
+                "Accept": accept,
+                **build_sentinel_headers(requirements),
+            }
+            if accept and not conduit_token:
+                headers["Accept"] = accept
+        else:
+            headers = build_image_prepare_headers(requirements)
+            if accept:
+                headers["Accept"] = accept
         built = self._headers(path, headers)
         try:
             from services.request_shape import header_shape
@@ -1223,26 +1192,10 @@ class OpenAIBackendAPI:
 
     def _prepare_image_conversation(self, prompt: str, requirements: ChatRequirements, model: str) -> str:
         """为图片生成准备 conduit token。"""
+        from services.protocol.chatgpt_web_request import build_image_prepare_body
+
         path = "/backend-api/f/conversation/prepare"
-        payload = {
-            "action": "next",
-            "fork_from_shared_post": False,
-            "parent_message_id": new_uuid(),
-            "model": self._image_model_slug(model),
-            "client_prepare_state": "success",
-            "timezone_offset_min": -480,
-            "timezone": "Asia/Shanghai",
-            "conversation_mode": {"kind": "primary_assistant"},
-            "system_hints": ["picture_v2"],
-            "partial_query": {
-                "id": new_uuid(),
-                "author": {"role": "user"},
-                "content": {"content_type": "text", "parts": [prompt]},
-            },
-            "supports_buffering": True,
-            "supported_encodings": ["v1"],
-            "client_contextual_info": {"app_name": "chatgpt.com"},
-        }
+        payload = build_image_prepare_body(prompt, self._image_model_slug(model))
         response = self.session.post(
             self.base_url + path,
             headers=self._image_headers(path, requirements),
@@ -1250,10 +1203,9 @@ class OpenAIBackendAPI:
             timeout=60,
         )
         ensure_ok(response, path)
-        conduit_token = str(response.json().get("conduit_token") or "")
-        if not conduit_token:
-            raise RuntimeError("image_prepare: missing conduit_token")
-        return conduit_token
+        from services.protocol.chatgpt_web_request import require_conduit_token
+
+        return require_conduit_token(response.json().get("conduit_token"))
 
     def _decode_image_base64(self, image: str) -> bytes:
         """把 base64 图片字符串或本地路径解码成二进制。"""
@@ -1330,67 +1282,14 @@ class OpenAIBackendAPI:
     def _start_image_generation(self, prompt: str, requirements: ChatRequirements, conduit_token: str, model: str,
                                 references: Optional[list[Dict[str, Any]]] = None) -> requests.Response:
         """启动图片生成或编辑的 SSE 请求。"""
-        if not conduit_token:
-            raise RuntimeError("image_start: missing conduit_token")
-        references = references or []
-        parts = [{
-            "content_type": "image_asset_pointer",
-            "asset_pointer": f"file-service://{item['file_id']}",
-            "width": item["width"],
-            "height": item["height"],
-            "size_bytes": item["file_size"],
-        } for item in references]
-        parts.append(prompt)
-        content = {"content_type": "multimodal_text", "parts": parts} if references else {"content_type": "text",
-                                                                                          "parts": [prompt]}
-        metadata = {
-            "developer_mode_connector_ids": [],
-            "selected_github_repos": [],
-            "selected_all_github_repos": False,
-            "system_hints": ["picture_v2"],
-            "serialization_metadata": {"custom_symbol_offsets": []},
-        }
-        if references:
-            metadata["attachments"] = [{
-                "id": item["file_id"],
-                "mimeType": item["mime_type"],
-                "name": item["file_name"],
-                "size": item["file_size"],
-                "width": item["width"],
-                "height": item["height"],
-            } for item in references]
-        payload = {
-            "action": "next",
-            "messages": [{
-                "id": new_uuid(),
-                "author": {"role": "user"},
-                "create_time": time.time(),
-                "content": content,
-                "metadata": metadata,
-            }],
-            "parent_message_id": new_uuid(),
-            "model": self._image_model_slug(model),
-            "client_prepare_state": "sent",
-            "timezone_offset_min": -480,
-            "timezone": "Asia/Shanghai",
-            "conversation_mode": {"kind": "primary_assistant"},
-            "enable_message_followups": True,
-            "system_hints": ["picture_v2"],
-            "supports_buffering": True,
-            "supported_encodings": ["v1"],
-            "client_contextual_info": {
-                "is_dark_mode": False,
-                "time_since_loaded": 1200,
-                "page_height": 1072,
-                "page_width": 1724,
-                "pixel_ratio": 1.2,
-                "screen_height": 1440,
-                "screen_width": 2560,
-                "app_name": "chatgpt.com",
-            },
-            "paragen_cot_summary_display_override": "allow",
-            "force_parallel_switch": "auto",
-        }
+        from services.protocol.chatgpt_web_request import build_image_start_body, require_conduit_token
+
+        conduit_token = require_conduit_token(conduit_token)
+        payload = build_image_start_body(
+            prompt,
+            self._image_model_slug(model),
+            references=references or [],
+        )
         path = "/backend-api/f/conversation"
         response = self.session.post(
             self.base_url + path,
@@ -2989,46 +2888,78 @@ class OpenAIBackendAPI:
             return
 
         normalized = messages or [{"role": "user", "content": prompt}]
-        self._bootstrap()
-        requirements = self._get_chat_requirements()
-        path, timezone = self._chat_target()
-        payload = self._conversation_payload(normalized, model, timezone, thinking_effort=thinking_effort)
-        try:
-            from services.request_shape import body_shape
+        from services.request_phase import RequestPhaseTracker
 
-            logger.info(
-                {
-                    "event": "request_shape",
-                    "purpose": "conversation_body",
-                    "path": path,
-                    **body_shape(payload),
-                }
-            )
-        except Exception:
-            pass
-        response = self.session.post(
-            self.base_url + path,
-            headers=self._conversation_headers(path, requirements),
-            json=payload,
-            timeout=config.image_pre_conversation_timeout_secs if "picture_v2" in system_hints else 300,
-            stream=True,
+        phase = RequestPhaseTracker(
+            account_token=self.access_token or "",
+            node_proxy=str((self.account or {}).get("proxy") or ""),
+            purpose="text",
         )
-        ensure_ok(response, path)
         try:
-            yield from iter_sse_payloads(response)
-        finally:
-            response.close()
+            logger.info(phase.mark("preflight"))
+            self._bootstrap()
+            logger.info(phase.mark("auth"))
+            requirements = self._get_chat_requirements()
+            path, timezone = self._chat_target()
+            logger.info(phase.mark("request_build"))
+            payload = self._conversation_payload(normalized, model, timezone, thinking_effort=thinking_effort)
+            try:
+                from services.request_shape import body_shape
+
+                logger.info(
+                    {
+                        "event": "request_shape",
+                        "purpose": "conversation_body",
+                        "path": path,
+                        **body_shape(payload),
+                    }
+                )
+            except Exception:
+                pass
+            logger.info(phase.mark("upstream_submit"))
+            response = self.session.post(
+                self.base_url + path,
+                headers=self._conversation_headers(path, requirements),
+                json=payload,
+                timeout=config.image_pre_conversation_timeout_secs if "picture_v2" in system_hints else 300,
+                stream=True,
+            )
+            ensure_ok(response, path)
+            logger.info(phase.mark("sse_ready"))
+            try:
+                yield from iter_sse_payloads(response)
+            finally:
+                response.close()
+                logger.info(phase.mark("cleanup"))
+        except Exception as exc:
+            logger.warning(phase.fail(error_type=type(exc).__name__))
+            raise
 
     def _report_progress(self, step: str) -> None:
         """Report progress step to the callback if set."""
         now = time.time()
+        mapped = {
+            "uploading": "download",
+            "bootstrapping": "node_connect",
+            "getting_token": "auth",
+            "preparing_conversation": "request_build",
+            "starting_generation": "upstream_submit",
+            "generating": "sse_ready",
+            "polling": "poll",
+            "downloading": "download",
+            "done": "cleanup",
+        }.get(str(step or ""), str(step or ""))
         try:
-            logger.info({
-                "event": "image_upstream_phase",
-                "phase": str(step or ""),
-                "elapsed_ms": int((now - self._progress_started_at) * 1000),
-                "since_last_ms": int((now - self._progress_last_at) * 1000),
-            })
+            tracker = getattr(self, "_phase_tracker", None)
+            if tracker is not None:
+                logger.info(tracker.mark(mapped))
+            else:
+                logger.info({
+                    "event": "image_upstream_phase",
+                    "phase": str(step or ""),
+                    "elapsed_ms": int((now - self._progress_started_at) * 1000),
+                    "since_last_ms": int((now - self._progress_last_at) * 1000),
+                })
         except Exception:
             pass
         self._progress_last_at = now
@@ -3046,50 +2977,65 @@ class OpenAIBackendAPI:
     ) -> Iterator[str]:
         if not self.access_token:
             raise RuntimeError("access_token is required for image endpoints")
-        self._report_progress("uploading")
-        references = [self._upload_image(image, f"image_{idx}.png") for idx, image in enumerate(images, start=1)]
-        self._report_progress("bootstrapping")
-        self._bootstrap()
-        self._report_progress("getting_token")
-        requirements = self._get_chat_requirements()
-        self._report_progress("preparing_conversation")
-        conduit_token = self._prepare_image_conversation(prompt, requirements, model)
-        self._report_progress("starting_generation")
-        response = self._start_image_generation(prompt, requirements, conduit_token, model, references)
-        self._report_progress("generating")
-        captured_conversation_id = ""
+        from services.request_phase import RequestPhaseTracker
 
-        def conversation_ready(payload: str) -> bool:
-            return bool(re.search(r'"conversation_id"\s*:\s*"[^"]+"', payload))
-
+        self._phase_tracker = RequestPhaseTracker(
+            account_token=self.access_token or "",
+            node_proxy=str((self.account or {}).get("proxy") or ""),
+            purpose="image",
+        )
         try:
-            for payload in iter_sse_payloads_until_first_payload(
-                response,
-                config.image_pre_conversation_timeout_secs,
-                ready_predicate=conversation_ready,
-                cancel_event=self.cancel_event,
-                post_ready_timeout_secs=15.0,
-            ):
-                if not captured_conversation_id:
-                    match = re.search(r'"conversation_id"\s*:\s*"([^"]+)"', payload)
-                    if match:
-                        captured_conversation_id = match.group(1)
-                        logger.info({
-                            "event": "image_sse_conversation_id_captured",
-                            "conversation_id": captured_conversation_id,
-                        })
-                        if self.progress_callback:
-                            try:
-                                self.progress_callback({
-                                    "step": "conversation_id_captured",
-                                    "conversation_id": captured_conversation_id,
-                                    "access_token": self.access_token,
-                                })
-                            except Exception:
-                                pass
-                yield payload
-        finally:
-            response.close()
+            self._report_progress("uploading")
+            references = [self._upload_image(image, f"image_{idx}.png") for idx, image in enumerate(images, start=1)]
+            self._report_progress("bootstrapping")
+            self._bootstrap()
+            self._report_progress("getting_token")
+            requirements = self._get_chat_requirements()
+            self._report_progress("preparing_conversation")
+            conduit_token = self._prepare_image_conversation(prompt, requirements, model)
+            self._report_progress("starting_generation")
+            response = self._start_image_generation(prompt, requirements, conduit_token, model, references)
+            self._report_progress("generating")
+            captured_conversation_id = ""
+
+            def conversation_ready(payload: str) -> bool:
+                return bool(re.search(r'"conversation_id"\s*:\s*"[^"]+"', payload))
+
+            try:
+                for payload in iter_sse_payloads_until_first_payload(
+                    response,
+                    config.image_pre_conversation_timeout_secs,
+                    ready_predicate=conversation_ready,
+                    cancel_event=self.cancel_event,
+                    post_ready_timeout_secs=15.0,
+                ):
+                    if not captured_conversation_id:
+                        match = re.search(r'"conversation_id"\s*:\s*"([^"]+)"', payload)
+                        if match:
+                            captured_conversation_id = match.group(1)
+                            if self._phase_tracker is not None:
+                                self._phase_tracker.conversation_id = captured_conversation_id
+                                logger.info(self._phase_tracker.mark("conversation_started"))
+                            logger.info({
+                                "event": "image_sse_conversation_id_captured",
+                                "conversation_id": captured_conversation_id,
+                            })
+                            if self.progress_callback:
+                                try:
+                                    self.progress_callback({
+                                        "step": "conversation_id_captured",
+                                        "conversation_id": captured_conversation_id,
+                                        "access_token": self.access_token,
+                                    })
+                                except Exception:
+                                    pass
+                    yield payload
+            finally:
+                response.close()
+                logger.info(self._phase_tracker.mark("cleanup"))
+        except Exception as exc:
+            logger.warning(self._phase_tracker.fail(error_type=type(exc).__name__))
+            raise
 
     def _bootstrap(self) -> None:
         """预热首页，并提取 PoW 相关脚本引用。"""

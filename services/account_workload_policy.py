@@ -88,11 +88,15 @@ def image_reserve_count(dispatchable_image_accounts: int) -> int:
 def decide_account_workload(
     snapshot: WorkloadSnapshot,
     account: AccountWorkloadCapabilities,
+    *,
+    allowlist_rimg_exempt: bool = False,
 ) -> WorkloadDecision:
     """为单个空闲账号给出 shadow 决策。
 
     生图队列对可生图账号始终优先且零延迟。文本只使用文本专用账号，
     或使用无生图排队时高于 Rimg 的空闲生图余量。
+
+    ``allowlist_rimg_exempt``：canary 单号窗口下豁免 Rimg 对文本的硬挡。
     """
 
     reserve = image_reserve_count(snapshot.dispatchable_image_accounts)
@@ -118,6 +122,9 @@ def decide_account_workload(
 
     if snapshot.free_image_accounts > reserve:
         return WorkloadDecision(WorkloadAction.TEXT, "capacity_above_image_reserve", reserve)
+
+    if allowlist_rimg_exempt:
+        return WorkloadDecision(WorkloadAction.TEXT, "canary_rimg_exempt", reserve)
 
     return WorkloadDecision(WorkloadAction.IDLE, "image_reserve_protected", reserve)
 

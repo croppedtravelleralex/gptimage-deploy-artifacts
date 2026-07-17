@@ -354,6 +354,18 @@ def create_router(app_version: str) -> APIRouter:
             "proxy_runtime": proxy_settings.get_runtime_status(),
             "accounts": stats,
         }
+        try:
+            from services.config import config as cfg
+            from services.image_task_service import image_task_service
+            from services.text_task_queue import text_task_queue
+
+            stats_json["workload"] = {
+                **cfg.get_workload_settings(),
+                "text_queue_depth": text_task_queue.depth(),
+                "image_queue_depth": int(getattr(image_task_service, "queue_depth", lambda: 0)()),
+            }
+        except Exception:
+            pass
         if format == "json":
             return stats_json
         return HTMLResponse(f"""<!DOCTYPE html>

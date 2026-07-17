@@ -2,6 +2,12 @@
 
 ## Unreleased
 
++ [新增] 账号页：全宽平铺、类型/来源与 Token/邮箱合并列、默认 100/页、去 Panda 列与成功失败列、流量可读、流水贝塞尔+坐标轴。
++ [新增] Canonical `chatgpt_web_request` builder + `RequestPhaseTracker` 阶段耗时；聊天/生图出站收敛。
++ [新增] WorkloadPolicy shadow/live + canary Rimg 豁免 + 文本队列（默认 off 同步直通）；`/health` 暴露队列深度。
++ [新增] 反 bot：per-account clearance jar；共享 binding 入库强制 isolation；节点软租约字段门禁。
++ [修复] Outlook 恢复优先账号 sticky proxy 并写回 binding/egress；`recover-outlook` 需随 api 层部署。
++ [新增] canary `/me` 门禁脚本与 isolation preflight；update/import 保留 `identity_isolated`。
 + [修复] refresh-all 成功路径保留 `panda_receive_state=identity_isolated`，避免 canary 同伴被刷回 `verified_ready` 导致共享绑定门禁再次挡住调度。
 + [运维] P7：t1h/t6h 已采集且漂移报告 pass；回滚演练 web_dist/backend 路径证据；公网 accounts chunk 与宿主 hash 一致且含「代理/出口」「累计流量」。
 + [优化] 生图 poll：`ImagePollBudget` 硬上限（conversation GET / tasks GET）+ tasks 低频；外层重复 poll 收敛为 1 次；conversation 恢复改用 submit 前 `started_at`；`body_shape` 接入 conversation 请求日志。

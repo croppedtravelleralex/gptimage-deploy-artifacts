@@ -170,6 +170,25 @@ class AccountWorkloadPolicyTests(unittest.TestCase):
         self.assertEqual(selected, "task-b")
         self.assertIsNone(pick_equal_priority_text_task([], tie_break=tie_break))
 
+    def test_canary_allowlist_exempts_rimg_for_single_dispatchable(self) -> None:
+        snapshot = WorkloadSnapshot(
+            dispatchable_image_accounts=1,
+            free_image_accounts=1,
+            image_queue=0,
+            text_queue=1,
+        )
+        account = AccountWorkloadCapabilities(
+            text_healthy=True,
+            image_eligible=True,
+            node_bound=True,
+        )
+        blocked = decide_account_workload(snapshot, account)
+        admitted = decide_account_workload(snapshot, account, allowlist_rimg_exempt=True)
+        self.assertEqual(blocked.action, WorkloadAction.IDLE)
+        self.assertEqual(blocked.reason, "image_reserve_protected")
+        self.assertEqual(admitted.action, WorkloadAction.TEXT)
+        self.assertEqual(admitted.reason, "canary_rimg_exempt")
+
 
 if __name__ == "__main__":
     unittest.main()

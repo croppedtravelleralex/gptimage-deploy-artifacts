@@ -476,6 +476,10 @@ class ImageTaskService:
                     raise ImageTaskWaitTimeoutError(task_id, _public_task(task))
                 self._condition.wait(timeout=min(poll_interval, max(0.05, remaining)))
 
+    def queue_depth(self) -> int:
+        with self._lock:
+            return sum(1 for task in self._tasks.values() if task.get("status") == TASK_STATUS_QUEUED)
+
     def list_tasks(self, identity: dict[str, object], task_ids: list[str]) -> dict[str, Any]:
         owner = _owner_id(identity)
         requested_ids = [_clean(task_id) for task_id in task_ids if _clean(task_id)]

@@ -318,6 +318,58 @@ class AccountService:
                     return True
         return False
 
+    def _enforce_shared_binding_isolation(self, account: dict, access_token: str) -> dict:
+        """同 binding 已有活跃号时，禁止新号静默进调度池：强制 identity_isolated。"""
+        from services.account_identity import proxy_binding_hash
+        from utils.log import logger
+
+        if not isinstance(account, dict):
+            return account
+        receive = str(account.get("panda_receive_state") or "").strip().lower()
+        if receive in {"identity_isolated", "rejected"}:
+            return account
+        status = str(account.get("status") or "")
+        if status in {"禁用", "限流", "异常"}:
+            return account
+        binding = str(account.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(account.get("proxy"))
+        if not binding:
+            return account
+        for token, item in self._accounts.items():
+            if token == access_token or not isinstance(item, dict):
+                continue
+            other_status = str(item.get("status") or "")
+            if other_status in {"禁用", "限流", "异常"}:
+                continue
+            if str(item.get("outlook_recovery_state") or "").strip().lower() == "terminal":
+                continue
+            other_receive = str(item.get("panda_receive_state") or "").strip().lower()
+            if other_receive in {"identity_isolated", "rejected"}:
+                continue
+            other_binding = str(item.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(item.get("proxy"))
+            if other_binding != binding:
+                continue
+            next_account = dict(account)
+            next_account["panda_receive_state"] = "identity_isolated"
+            logger.warning(
+                {
+                    "event": "shared_binding_forced_isolation",
+                    "proxy_binding_hash": binding,
+                    "peer_present": True,
+                }
+            )
+            return next_account
+        return account
+
+    def _preserve_identity_isolated(self, current: dict, updates: dict) -> dict:
+        """禁止运维路径把 identity_isolated 同伴冲回 verified_ready。"""
+        previous = str(current.get("panda_receive_state") or "").strip().lower()
+        incoming = str(updates.get("panda_receive_state") or "").strip().lower()
+        if previous == "identity_isolated" and incoming in {"verified_ready", "verified", "local_verified", "ready"}:
+            next_updates = dict(updates)
+            next_updates["panda_receive_state"] = "identity_isolated"
+            return next_updates
+        return updates
+
     def _is_image_account_schedulable(self, account: dict) -> bool:
         if not self._is_image_account_available(account):
             return False
@@ -1542,6 +1594,19 @@ class AccountService:
             )
             attempted_tokens.add(access_token)
             local_account = self.get_account(access_token)
+            try:
+                from services.account_workload_policy_service import account_workload_policy_service
+
+                gate = account_workload_policy_service.decide_for_account(
+                    local_account or {},
+                    "image",
+                    access_token=access_token,
+                )
+                if gate.mode == "live" and not gate.admitted:
+                    self.release_image_slot(access_token)
+                    continue
+            except Exception:
+                pass
             if (
                     self._can_skip_image_preflight(local_account)
                     and self._account_matches_plan_type(local_account or {}, plan_type)
@@ -1578,6 +1643,8 @@ class AccountService:
 
     def get_text_access_token(self, excluded_tokens: set[str] | None = None) -> str:
         excluded = set(excluded_tokens or set())
+        from services.account_workload_policy_service import account_workload_policy_service
+
         with self._lock:
             candidates = [
                 token
@@ -1588,9 +1655,28 @@ class AccountService:
             ]
             if not candidates:
                 return ""
-            access_token = candidates[self._index % len(candidates)]
+            ordered = list(candidates)
+            start = self._index % len(ordered)
             self._index += 1
-        return self.refresh_access_token(access_token, event="get_text_access_token") or access_token
+            rotated = ordered[start:] + ordered[:start]
+
+        for access_token in rotated:
+            account = self.get_account(access_token) or {}
+            gate = account_workload_policy_service.decide_for_account(
+                account,
+                "text",
+                access_token=access_token,
+                force_text_demand=True,
+            )
+            if gate.mode == "live" and not gate.admitted:
+                continue
+            return self.refresh_access_token(access_token, event="get_text_access_token") or access_token
+
+        # live 全拒时：仍尝试返回第一个候选，避免硬死；shadow 路径本就不会拒。
+        if account_workload_policy_service.mode != "live" and rotated:
+            access_token = rotated[0]
+            return self.refresh_access_token(access_token, event="get_text_access_token") or access_token
+        return ""
 
     def mark_text_used(self, access_token: str) -> None:
         if not access_token:
@@ -1862,6 +1948,7 @@ class AccountService:
                 if not incoming.get("created_at"):
                     incoming.pop("created_at", None)
                 if existed:
+                    incoming = self._preserve_identity_isolated(current, incoming)
                     protected, conflicts = merge_account_identity(current, incoming, allow_rebind=False)
                     incoming = {**incoming, **protected}
                     if conflicts:
@@ -1877,6 +1964,7 @@ class AccountService:
                     }
                 )
                 if account is not None:
+                    account = self._enforce_shared_binding_isolation(account, access_token)
                     if existed and account != current:
                         updated += 1
                     if (not existed) or account != current:
@@ -1933,6 +2021,7 @@ class AccountService:
             if current is None:
                 return None
             incoming = dict(updates or {})
+            incoming = self._preserve_identity_isolated(current, incoming)
             protected, conflicts = merge_account_identity(current, incoming, allow_rebind=False)
             merged = {**current, **incoming, **protected, "access_token": access_token}
             if conflicts:
@@ -1976,6 +2065,7 @@ class AccountService:
             if current is None:
                 return None
             incoming = dict(updates or {})
+            incoming = self._preserve_identity_isolated(current, incoming)
             protected, _ = merge_account_identity(current, incoming, allow_rebind=True)
             merged = {
                 **current,

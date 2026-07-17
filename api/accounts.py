@@ -36,6 +36,8 @@ from services.config import config
 from services.panda_staging_service import panda_staging_service
 from services.cpa_service import cpa_config, cpa_import_service, list_remote_files
 from services.oauth_login_service import OAuthLoginError, oauth_login_service
+from services.outlook_account_recovery_service import outlook_account_recovery_service
+from services.outlook_auto_recovery_loop_service import outlook_auto_recovery_loop_service
 from services.sub2api_service import (
     list_remote_accounts as sub2api_list_remote_accounts,
     list_remote_groups as sub2api_list_remote_groups,
@@ -87,6 +89,10 @@ class AccountRefreshRequest(BaseModel):
     access_tokens: list[str] = Field(default_factory=list)
 
 
+class AccountOutlookRecoveryRequest(BaseModel):
+    access_token: str = ""
+
+
 class AccountRefreshAllStartRequest(BaseModel):
     concurrency: int | None = None
     max_concurrency: int | None = None
@@ -135,6 +141,18 @@ class AccountMaintenanceLoopUpdateRequest(BaseModel):
     delete_invalid: bool | None = None
     delete_after_failures: int | None = None
     expired_grace_hours: int | None = None
+
+
+class OutlookAutoRecoveryUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    interval_sec: int | None = None
+    max_per_cycle: int | None = None
+    startup_delay_sec: float | None = None
+    progress_poll_sec: float | None = None
+
+
+class PandaSyncUpdateRequest(BaseModel):
+    enabled: bool | None = None
 
 
 class AccountExportRequest(BaseModel):
@@ -403,15 +421,74 @@ def create_router() -> APIRouter:
             "stats": account_service.get_stats(),
         }
 
+    @router.post("/api/accounts/reload-from-storage")
+    async def reload_accounts_from_storage(authorization: str | None = Header(default=None)):
+        """管理员受控热加载外部进程已提交的账号持久化快照。"""
+        require_admin(authorization)
+        result = await run_in_threadpool(account_service.reload_from_storage)
+        return {
+            "ok": True,
+            "total": int(result.get("total") or 0),
+            "stats": account_service.get_stats(),
+        }
+
     @router.post("/api/accounts/sync/panda")
     async def sync_accounts_to_panda(authorization: str | None = Header(default=None)):
         require_admin(authorization)
+        if not _panda_sync_lock.acquire(blocking=False):
+            raise HTTPException(status_code=409, detail={"error": "panda 同步正在运行，请稍后再试"})
         try:
-            return await run_in_threadpool(_run_panda_account_sync)
-        except PandaSyncAlreadyRunning as exc:
-            raise HTTPException(status_code=409, detail={"error": str(exc)}) from exc
+            result = await run_in_threadpool(account_refresh_all_service.queue_available_accounts_for_panda)
+            synced = int(result.get("synced") or 0)
+            failed = int(result.get("failed") or 0)
+            queued = int(result.get("queued") or 0)
+            details = result.get("details") if isinstance(result.get("details"), dict) else {}
+            settings = config.get_panda_sync_settings()
+            summary = f"synced={synced} failed={failed} queued={queued}"
+            return {
+                "ok": failed == 0,
+                "exit_code": 0 if failed == 0 else 1,
+                "error": "" if failed == 0 else "部分账号同步到 panda 失败",
+                "summary": summary,
+                "stdout_tail": summary,
+                "stderr_tail": "",
+                "batch_size": int(settings.get("batch_size") or 20),
+                "max_accounts_per_run": int(settings.get("upload_max_batch") or 20),
+                "timeout_seconds": int(settings.get("timeout_seconds") or 60),
+                "synced": synced,
+                "failed": failed,
+                "queued": queued,
+                "details": details,
+                "stats": account_service.get_stats(),
+            }
         except Exception as exc:
             raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+        finally:
+            _panda_sync_lock.release()
+
+    @router.get("/api/accounts/activity/daily")
+    async def get_account_activity_daily(
+            authorization: str | None = Header(default=None),
+            days: int = Query(default=14, ge=1, le=90),
+    ):
+        require_admin(authorization)
+        return account_service.get_activity_daily(days=days)
+
+    @router.get("/api/accounts/panda-sync")
+    async def get_panda_sync_settings(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return {"panda_sync": config.get_public_panda_sync_settings()}
+
+    @router.post("/api/accounts/panda-sync")
+    async def update_panda_sync_settings(body: PandaSyncUpdateRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        current = config.get_panda_sync_settings()
+        updates = body.model_dump(mode="python", exclude_none=True)
+        if not updates:
+            return {"panda_sync": config.get_public_panda_sync_settings()}
+        next_settings = {**current, **updates}
+        updated = config.update({"panda_sync": next_settings})
+        return {"panda_sync": updated.get("panda_sync", {})}
 
     @router.post("/api/accounts")
     async def create_accounts(
@@ -585,6 +662,8 @@ def create_router() -> APIRouter:
             for key, value in body.model_dump(mode="python").items()
             if value is not None
         }
+        if not bool(config.get_account_refresh_all_settings().get("delete_invalid", True)):
+            options["delete_invalid"] = False
         try:
             return account_refresh_all_service.start(options)
         except RuntimeError as exc:
@@ -621,7 +700,59 @@ def create_router() -> APIRouter:
             for key, value in body.model_dump(mode="python").items()
             if value is not None
         }
+        if (
+            "delete_invalid" in updates
+            and bool(updates["delete_invalid"])
+            and not bool(config.get_account_maintenance_loop_settings().get("delete_invalid", True))
+        ):
+            updates["delete_invalid"] = False
         return account_maintenance_loop_service.update_settings(updates)
+
+    @router.get("/api/accounts/outlook-auto-recovery/status")
+    async def get_outlook_auto_recovery_status(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return outlook_auto_recovery_loop_service.get_status()
+
+    @router.post("/api/accounts/outlook-auto-recovery")
+    async def update_outlook_auto_recovery(
+            body: OutlookAutoRecoveryUpdateRequest,
+            authorization: str | None = Header(default=None),
+    ):
+        require_admin(authorization)
+        updates = {
+            key: value
+            for key, value in body.model_dump(mode="python").items()
+            if value is not None
+        }
+        return outlook_auto_recovery_loop_service.update_settings(updates)
+
+    @router.post("/api/accounts/recover-outlook")
+    async def recover_outlook_account(
+            body: AccountOutlookRecoveryRequest,
+            authorization: str | None = Header(default=None),
+    ):
+        """从账号页触发单个异常 Outlook 的完整 OTP 恢复链。"""
+        require_admin(authorization)
+        try:
+            progress_id = outlook_account_recovery_service.start(body.access_token)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        except (FileNotFoundError, PermissionError) as exc:
+            raise HTTPException(status_code=503, detail={"error": str(exc)}) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail={"error": str(exc)}) from exc
+        return {"progress_id": progress_id}
+
+    @router.get("/api/accounts/recover-outlook/progress/{progress_id}")
+    async def get_outlook_recovery_progress(
+            progress_id: str,
+            authorization: str | None = Header(default=None),
+    ):
+        require_admin(authorization)
+        progress = outlook_account_recovery_service.get_progress(progress_id)
+        if progress is None:
+            raise HTTPException(status_code=404, detail={"error": "progress not found"})
+        return progress
 
     @router.post("/api/accounts/re-login")
     async def re_login_accounts(body: AccountRefreshRequest, authorization: str | None = Header(default=None)):
