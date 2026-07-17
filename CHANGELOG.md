@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [修复] 生图/聊天 `_bootstrap`：CF HTML 403 等边缘拦截时软失败回退默认 PoW；首页头经 `build_headers` 合并 clearance；生图 prepare/start 遇 CF 边缘 403 短暂重试。
 + [新增] 账号页：全宽平铺、类型/来源与 Token/邮箱合并列、默认 100/页、去 Panda 列与成功失败列、流量可读、流水贝塞尔+坐标轴。
 + [新增] Canonical `chatgpt_web_request` builder + `RequestPhaseTracker` 阶段耗时；聊天/生图出站收敛。
 + [新增] WorkloadPolicy shadow/live + canary Rimg 豁免 + 文本队列（默认 off 同步直通）；`/health` 暴露队列深度。

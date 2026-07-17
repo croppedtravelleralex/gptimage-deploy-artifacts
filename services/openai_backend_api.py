@@ -709,8 +709,8 @@ class OpenAIBackendAPI:
         return result
 
     def _bootstrap_headers(self) -> Dict[str, str]:
-        """构造首页预热请求头。"""
-        return {
+        """构造首页预热请求头（经 clearance 合并，便于挂 cf_clearance）。"""
+        headers: Dict[str, str] = {
             "User-Agent": self.user_agent,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
@@ -723,6 +723,13 @@ class OpenAIBackendAPI:
             "Sec-Fetch-User": "?1",
             "Upgrade-Insecure-Requests": "1",
         }
+        merged = proxy_settings.build_headers(
+            headers=headers,
+            target_url=self.base_url + "/",
+            account=self.account,
+            upstream=True,
+        )
+        return {str(k): str(v) for k, v in merged.items() if v is not None}
 
     def _build_requirements(self, data: Dict[str, Any], source_p: str = "") -> ChatRequirements:
         """把 sentinel 响应整理成后续对话需要的 token 集合。"""
@@ -2987,14 +2994,7 @@ class OpenAIBackendAPI:
         try:
             self._report_progress("uploading")
             references = [self._upload_image(image, f"image_{idx}.png") for idx, image in enumerate(images, start=1)]
-            self._report_progress("bootstrapping")
-            self._bootstrap()
-            self._report_progress("getting_token")
-            requirements = self._get_chat_requirements()
-            self._report_progress("preparing_conversation")
-            conduit_token = self._prepare_image_conversation(prompt, requirements, model)
-            self._report_progress("starting_generation")
-            response = self._start_image_generation(prompt, requirements, conduit_token, model, references)
+            response = self._open_image_sse_with_cf_retry(prompt, model, references)
             self._report_progress("generating")
             captured_conversation_id = ""
 
@@ -3037,17 +3037,128 @@ class OpenAIBackendAPI:
             logger.warning(self._phase_tracker.fail(error_type=type(exc).__name__))
             raise
 
-    def _bootstrap(self) -> None:
-        """预热首页，并提取 PoW 相关脚本引用。"""
-        response = self.session.get(
-            self.base_url + "/",
-            headers=self._bootstrap_headers(),
-            timeout=30,
+    @staticmethod
+    def _is_cf_edge_block(exc: BaseException) -> bool:
+        """判定是否为 CF/边缘瞬时拦截（可重试）。"""
+        if not isinstance(exc, UpstreamHTTPError):
+            return False
+        status = int(exc.status_code)
+        if status not in {403, 429, 502, 503, 520, 521, 522, 523, 524}:
+            return False
+        body = str(exc.body or "")
+        body_l = body.lower()
+        if not body.strip():
+            return True
+        return (
+            "<html" in body_l
+            or "cloudflare" in body_l
+            or "cf-error" in body_l
+            or "scale-appear" in body_l
+            or "just a moment" in body_l
+            or "error code: 101" in body_l
         )
-        ensure_ok(response, "bootstrap")
-        self.pow_script_sources, self.pow_data_build = parse_pow_resources(response.text)
-        if not self.pow_script_sources:
-            self.pow_script_sources = [DEFAULT_POW_SCRIPT]
+
+    def _open_image_sse_with_cf_retry(
+        self,
+        prompt: str,
+        model: str,
+        references: list[Dict[str, Any]],
+        *,
+        max_attempts: int = 3,
+    ) -> requests.Response:
+        """bootstrap→requirements→prepare→start；遇 CF 边缘 403 短暂重试。"""
+        last_exc: BaseException | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                self._report_progress("bootstrapping")
+                self._bootstrap()
+                self._report_progress("getting_token")
+                requirements = self._get_chat_requirements()
+                self._report_progress("preparing_conversation")
+                conduit_token = self._prepare_image_conversation(prompt, requirements, model)
+                self._report_progress("starting_generation")
+                return self._start_image_generation(prompt, requirements, conduit_token, model, references)
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= max_attempts or not self._is_cf_edge_block(exc):
+                    raise
+                logger.warning({
+                    "event": "image_cf_edge_retry",
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "status_code": getattr(exc, "status_code", None),
+                    "error": str(exc)[:240],
+                })
+                time.sleep(0.7 * attempt)
+        assert last_exc is not None
+        raise last_exc
+
+    @staticmethod
+    def _should_soft_fail_bootstrap(exc: BaseException) -> bool:
+        """首页 HTML 被 CF/边缘拦时允许回退默认 PoW，避免整条生图/聊天硬失败。"""
+        if isinstance(exc, UpstreamHTTPError):
+            if int(exc.status_code) in {403, 429, 502, 503, 520, 521, 522, 523, 524}:
+                return True
+            body = str(exc.body or "").lower()
+            if "<html" in body and (
+                "cloudflare" in body
+                or "cf-error" in body
+                or "scale-appear" in body
+                or "just a moment" in body
+            ):
+                return True
+            return False
+        # 传输层失败（超时/断连）同样回退，sentinel 仍可走默认脚本。
+        transport_types: tuple[type, ...] = (TimeoutError, OSError, ConnectionError)
+        try:
+            from requests.exceptions import ConnectionError as ReqConnectionError
+            from requests.exceptions import Timeout as ReqTimeout
+
+            transport_types = (*transport_types, ReqTimeout, ReqConnectionError)
+        except Exception:  # pragma: no cover
+            pass
+        return isinstance(exc, transport_types)
+
+    def _apply_default_pow_scripts(self, *, reason: str, detail: str = "") -> None:
+        self.pow_script_sources = [DEFAULT_POW_SCRIPT]
+        if not self.pow_data_build:
+            self.pow_data_build = ""
+        logger.warning({
+            "event": "bootstrap_soft_failed",
+            "reason": reason,
+            "detail": (detail or "")[:240],
+            "fallback": DEFAULT_POW_SCRIPT,
+        })
+
+    def _bootstrap(self) -> None:
+        """预热首页并提取 PoW 脚本；CF/边缘拦 HTML 时软失败回退默认脚本。"""
+        try:
+            response = self.session.get(
+                self.base_url + "/",
+                headers=self._bootstrap_headers(),
+                timeout=30,
+            )
+            ensure_ok(response, "bootstrap")
+            self.pow_script_sources, self.pow_data_build = parse_pow_resources(response.text)
+            if not self.pow_script_sources:
+                self.pow_script_sources = [DEFAULT_POW_SCRIPT]
+            return
+        except Exception as exc:
+            if not self._should_soft_fail_bootstrap(exc):
+                raise
+            try:
+                proxy_settings.invalidate_clearance(
+                    target_url=self.base_url + "/",
+                    account=self.account,
+                    upstream=True,
+                )
+            except Exception:
+                pass
+            status = getattr(exc, "status_code", None)
+            self._apply_default_pow_scripts(
+                reason=f"upstream_{status}" if status is not None else type(exc).__name__,
+                detail=str(exc),
+            )
 
     def _get_chat_requirements(self) -> ChatRequirements:
         """获取当前模式对话所需的 sentinel token（prepare + finalize 两步流程）。"""
