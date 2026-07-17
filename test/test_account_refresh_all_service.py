@@ -99,6 +99,57 @@ class AccountRefreshAllServiceTests(unittest.TestCase):
             finally:
                 account_service.release_image_slot(selected)
 
+    def test_refresh_preserves_identity_isolated_receive_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            account_service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            account_service.add_account_items(
+                [
+                    {
+                        "access_token": "iso-token",
+                        "status": "正常",
+                        "quota": 1,
+                        "type": "plus",
+                        "panda_receive_state": "identity_isolated",
+                    }
+                ]
+            )
+
+            def fake_fetch_remote_info(
+                access_token: str,
+                event: str = "fetch_remote_info",
+                defer_invalid_removal: bool = True,
+            ):
+                return account_service.update_account(
+                    access_token,
+                    {"status": "正常", "quota": 3, "image_quota_unknown": False},
+                    quiet=True,
+                )
+
+            account_service.fetch_remote_info = fake_fetch_remote_info  # type: ignore[method-assign]
+            refresh_all = AccountRefreshAllService(account_service)
+            status = refresh_all.start(
+                AccountRefreshAllOptions(
+                    limit=1,
+                    stale_after_hours=0,
+                    delay_between_accounts_sec=0,
+                    delay_between_batches_sec=0,
+                    min_available_memory_mb=0,
+                    max_load_1m=0,
+                )
+            )
+            self.assertEqual(status["total"], 1)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                status = refresh_all.get_status()
+                if status["state"] == "completed":
+                    break
+                time.sleep(0.02)
+            self.assertEqual(status["state"], "completed")
+            account = account_service.get_account("iso-token")
+            self.assertIsNotNone(account)
+            self.assertEqual(account.get("panda_receive_state"), "identity_isolated")
+            self.assertEqual(int(account.get("quota") or 0), 3)
+
     def test_start_skips_recent_accounts_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             account_service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))

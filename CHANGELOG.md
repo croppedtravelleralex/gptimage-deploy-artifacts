@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ [修复] refresh-all 成功路径保留 `panda_receive_state=identity_isolated`，避免 canary 同伴被刷回 `verified_ready` 导致共享绑定门禁再次挡住调度。
++ [运维] P7：t1h/t6h 已采集且漂移报告 pass；回滚演练 web_dist/backend 路径证据；公网 accounts chunk 与宿主 hash 一致且含「代理/出口」「累计流量」。
 + [优化] 生图 poll：`ImagePollBudget` 硬上限（conversation GET / tasks GET）+ tasks 低频；外层重复 poll 收敛为 1 次；conversation 恢复改用 submit 前 `started_at`；`body_shape` 接入 conversation 请求日志。
 + [运维] P5 证据目录 `account-identity-remediation-p5-*`（hash 对账/字段合同）；canary 候选 `40de2f332c0d3fd4`；本地矩阵 `matrix-results.json` 三套 suite 全绿。
 + [修复] canary apply 出口探测：缺失 `proxy_egress_hash` 时三次测量后再写身份。

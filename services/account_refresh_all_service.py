@@ -1203,6 +1203,13 @@ class AccountRefreshAllService:
             next_sync_state = "synced"
         else:
             next_sync_state = "ready"
+        # canary 窗口：勿把 identity_isolated 同伴刷回 verified_ready，否则共享绑定重复门禁会再次挡住唯一 canary
+        previous_receive = str((before or {}).get("panda_receive_state") or "").strip().lower()
+        next_receive = (
+            "identity_isolated"
+            if previous_receive == "identity_isolated"
+            else "verified_ready"
+        )
         updated = self._service.update_account(
             refreshed_token,
             {
@@ -1211,7 +1218,7 @@ class AccountRefreshAllService:
                 "quota_refresh_fail_count": 0,
                 "quota_refresh_failure_kind": None,
                 "quota_refresh_quarantined_at": None,
-                "panda_receive_state": "verified_ready",
+                "panda_receive_state": next_receive,
                 "panda_verified_at": _iso_now(),
                 "panda_verify_last_error": None,
                 "panda_sync_state": next_sync_state,

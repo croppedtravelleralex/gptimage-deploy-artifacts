@@ -45,6 +45,15 @@ SUITES = [
             "test/test_proxy_service.py",
         ],
     },
+    {
+        "id": "refresh_isolation",
+        "section": "11.2/11.7",
+        "cmd": [
+            sys.executable, "-m", "pytest", "-q",
+            "test/test_account_refresh_all_service.py::AccountRefreshAllServiceTests::test_refresh_preserves_identity_isolated_receive_state",
+            "test/test_account_refresh_all_service.py::AccountRefreshAllServiceTests::test_refreshed_quota_enters_image_scheduler_immediately",
+        ],
+    },
 ]
 
 

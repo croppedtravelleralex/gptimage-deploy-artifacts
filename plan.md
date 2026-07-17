@@ -744,13 +744,13 @@ data/runlogs/account-identity-remediation-*/
 |---|---|---|
 | 计划重写 | completed | 本文件 |
 | P0 基线/门禁 | local-completed | `data/runlogs/account-identity-remediation-*/baseline.json` + `operation.json`；Panda 容量 49% 见深检报告 |
-| P1 Dashboard 诊断 | partial | 源码+已部署 `web_dist`：宿主 js 含「代理/出口」「累计流量」标记；manifest 在位；`accounts-field-contract.json` 显示 traffic/egress 仍为 0（数据层，非列缺失）；公网四档截图仍待 |
+| P1 Dashboard 诊断 | near-done | 公网 chunk `14fco7hjk-vva.js` 与宿主 **hash 一致**，含「代理/出口」「累计流量」；traffic 值仍多为 null（采集层）；四档视口截图仍待登录态 |
 | P2 身份盘点 | local-completed | 刷新盘点 `…panda18-refresh/`：18 闭合 E12+B6；绑定仍 H1 共享 `85c0598f…`；**fp 已 18/18** |
-| P3 统一门禁 | local-completed | 同上；另落地 poll budget / started_at / body_shape（ACC-010 推进） |
-| P4 修复工具 | local-completed | canary 增加三次出口探测后再写 `proxy_egress_hash` |
-| P5 分层部署 | partial | `…p5-20260716/` operation+hash 对账；web_dist 列标记在位；公网四档截图仍待 |
-| P6 单canary | t0-passed | 候选 `40de2f332c0d3fd4`：apply→grade A；隔离 8 同伴；`schedulable=1`；`t0-live.json`：me_ok、fp_stable、egress_stable×3 且匹配存证 |
-| P7 72h观察 | running | 观察目录 `…canary-40de2f…/`；`run-next-observe.sh` + cron 计划 t1h/t6h；待采 t1h/t6h/t24h/t72h |
-| P8 总矩阵/回滚 | local-partial | 本地 `matrix-results.json` 三 suite 全绿；生产矩阵/回滚演练待 P7 节点 |
+| P3 统一门禁 | local-completed | 同上；另落地 poll budget / started_at / body_shape；refresh 保 isolation |
+| P4 修复工具 | local-completed | canary 出口探测 + peer isolation 工具 |
+| P5 分层部署 | partial | operation/hash 对账完成；公网 health 与 chunk 对账完成；截图待 |
+| P6 单canary | t0-passed | `40de2f…` grade A；T+0 live 曾 me_ok；中段 `/me` 出现 403（已记入 advance 证据），egress 仍稳定；`schedulable` 经 re-isolate 维持 |
+| P7 72h观察 | running | **t1h/t6h 已采**；`p7-drift-report.md` verdict=pass（fp/egress 漂移 0）；待 t24h/t72h |
+| P8 总矩阵/回滚 | partial | 本地 4 suite 全绿；Panda `rollback-drill.md`（web_dist+backend）已演练；生产功能矩阵待 t24h 后扩 |
 
 状态只在证据文件落盘后更新；“代码已写”“部署命令已执行”单独不足以标记完成。
