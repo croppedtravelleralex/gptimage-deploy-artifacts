@@ -35,6 +35,7 @@
 | `C_g=max(configured,D)` auto | ✓ | 随代码部署 |
 | fail_streak / cohort / 新号 0.4× | ✓ | 随代码部署 |
 | soft band（**不改 status**；仅 `image_soft_capped`） | ✓ 2026-07-18 修复卡死 | 随代码部署 |
+| 额度窗口懒刷新（restore 已过且 quota≤0，取号时再 `/me`） | ✓ | 随代码部署 |
 | Phase C resume 退避 + 总墙取消 | ✓ | 随代码部署 |
 | prompt 短窗去重 | ✓ | 随代码部署 |
 | Phase D workload live | ✓（`mode` / `auto_live_min_ready`） | **保持 shadow** |

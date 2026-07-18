@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ [优化] 生图取号懒刷新：`restore_at` 已过且账面 `quota≤0` 时允许进候选，acquire 时再拉上游 limits（事件驱动，非到点齐刷）。
++ [运维] 2026-07-18 拟人化 Phase B/C 正式部署 Panda：artifacts `humanlike-v22` @ `d6ab644`；备份 `git-artifacts-deploy-20260718-110441`；容器符号/软熔断修复/RUNTIME_OK 已验收；workload 仍 shadow。
 + [修复] 软熔断/上游 429 不再把账号 `status` 打成「限流」导致永久不可调度；软解除可愈合历史误写；`is_rate_limit_http_error` 收紧为明确 429。回归测 `test_humanlike_softband_heal.py`。
 + [功能] 拟人化调度全量接线（docs/10 Phase B 续优化 + C）：选号夜间/午餐软权重；`timezone_from_egress`；文本 gap；上游 429→`apply_429_cooldown`；submit 间隔 Uniform 抖动；`C_g=max(cfg,D)`；fail_streak/cohort/新号 soft；resume 退避+总墙取消；prompt 短窗去重；`workload.auto_live_min_ready`（默认 0）。单测 `test_humanlike_scheduler.py` 13 passed。
 + [运维] 2026-07-18 Phase A+B 落地 Panda：关 maintenance/recovery；`submit_start_min_interval_ms=5000`；`scheduler.enabled=true`（gap/soft band）；`proactive_refresh` SG 日历 `p_rest=0.35`；备份 `config.phaseA-before-20260718-101054.json`；公网 health healthy。

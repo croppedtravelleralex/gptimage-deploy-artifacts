@@ -249,7 +249,30 @@ class AccountService:
             return True
         if bool(account.get("image_quota_unknown")):
             return True
-        return int(account.get("quota") or 0) > 0
+        if int(account.get("quota") or 0) > 0:
+            return True
+        # restore_at 已过但本地仍是 0：允许进候选，取号时懒刷新上游
+        return AccountService._quota_window_due_for_lazy_refresh(account)
+
+    @staticmethod
+    def _quota_window_due_for_lazy_refresh(account: dict) -> bool:
+        """账面额度耗尽且已过 restore_at：应在真实取号时再拉一次 limits。"""
+        if not isinstance(account, dict):
+            return False
+        if account.get("status") != "正常":
+            return False
+        if AccountService._is_true_unlimited_image_account(account):
+            return False
+        if bool(account.get("image_quota_unknown")):
+            return False
+        if int(account.get("quota") or 0) > 0:
+            return False
+        restore_at = AccountService._parse_time(account.get("restore_at") or account.get("image_gen_window_reset_at"))
+        if restore_at is None:
+            return False
+        if restore_at.tzinfo is None:
+            restore_at = restore_at.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) >= restore_at
 
     def _is_image_interval_ready(self, account: dict) -> bool:
         settings = config.get_scheduler_settings()
@@ -1636,7 +1659,7 @@ class AccountService:
                 ):
                     candidate = (self._image_candidate_sort_key(item), token)
                     fallback_candidates.append(candidate)
-                    if self._is_recent_image_quota(item):
+                    if self._is_recent_image_quota(item) or self._quota_window_due_for_lazy_refresh(item):
                         recent_candidates.append(candidate)
         candidates = (
             recent_candidates
@@ -1816,13 +1839,19 @@ class AccountService:
                 pass
             if (
                     self._can_skip_image_preflight(local_account)
+                    and not self._quota_window_due_for_lazy_refresh(local_account or {})
                     and self._account_matches_plan_type(local_account or {}, plan_type)
                     and self._account_matches_any_plan_type(local_account or {}, plan_types)
                     and self._account_matches_source_type(local_account or {}, source_type)
             ):
                 return str((local_account or {}).get("access_token") or access_token)
+            refresh_event = (
+                "lazy_quota_window_refresh"
+                if self._quota_window_due_for_lazy_refresh(local_account or {})
+                else "get_available_access_token"
+            )
             try:
-                account = self.fetch_remote_info(access_token, "get_available_access_token")
+                account = self.fetch_remote_info(access_token, refresh_event)
             except Exception as exc:
                 self._record_image_preflight_failure(access_token, exc)
                 self.release_image_slot(access_token)
