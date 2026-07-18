@@ -64,7 +64,7 @@ DEFAULT_IMAGE_TASK_QUEUE = {
     "burst_min_dispatchable_candidates": 120,
     "burst_max_preflight_backoff": 0,
     "per_user_queue_max": 36,
-    "submit_start_min_interval_ms": 1500,
+    "submit_start_min_interval_ms": 5000,
     "timeout_pending_poll_secs": 300,
     "timeout_pending_max_attempts": 4,
     "generation_poll_timeout_secs": 180,
@@ -697,7 +697,229 @@ DEFAULT_WORKLOAD_SETTINGS: dict[str, object] = {
     "text_queue_mode": "off",
     "canary_token_hashes": [],
     "global_text_inflight": 1,
+    "auto_live_min_ready": 0,
 }
+
+DEFAULT_SCHEDULER_SETTINGS: dict[str, object] = {
+    "enabled": False,
+    "image_min_interval_sec": 60,
+    "text_min_interval_sec": 30,
+    "text_poisson_lambda_sec": 5,
+    "jitter_lo": 0.65,
+    "jitter_hi": 1.45,
+    "extra_poisson_lambda_sec": 8,
+    "daily_usage_ratio": 0.70,
+    "cooldown_429_sec": 900,
+    "night_soft_weight": 0.4,
+    "lunch_soft_weight": 0.85,
+    "auto_scale_global_concurrency": True,
+    "fail_streak_threshold": 3,
+    "fail_cooldown_min_sec": 1800,
+    "fail_cooldown_max_sec": 5400,
+    "new_account_usage_cap": 0.40,
+    "cohort_terminal_threshold": 2,
+    "cohort_pause_hours": 24,
+    "submit_interval_jitter_lo": 0.70,
+    "submit_interval_jitter_hi": 1.30,
+    "resume_first_delay_sec": 5,
+    "resume_backoff_base_sec": 5,
+    "resume_backoff_cap_sec": 60,
+    "resume_wall_sec": 240,
+    "prompt_dedup_window_sec": 120,
+}
+
+DEFAULT_PROACTIVE_REFRESH_SETTINGS: dict[str, object] = {
+    "enabled": False,
+    "timezone": "Asia/Singapore",
+    "timezone_from_egress": True,
+    "p_work": 1.0,
+    "p_rest": 0.35,
+    "window_work": ["09:00", "17:00"],
+    "window_rest": ["10:00", "16:00"],
+    "workdays": [1, 2, 3, 4, 5],
+    "per_account_per_day": 1,
+    "minute_cap_k": 2,
+    "minute_cap_k_rest": 1,
+    "slot_jitter_minutes": 10,
+    "tick_sec": 60,
+    "startup_delay_sec": 30,
+}
+
+
+def _normalize_scheduler_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    jitter_lo = max(0.05, float(source.get("jitter_lo", DEFAULT_SCHEDULER_SETTINGS["jitter_lo"]) or 0.05))
+    jitter_hi = max(jitter_lo, float(source.get("jitter_hi", DEFAULT_SCHEDULER_SETTINGS["jitter_hi"]) or jitter_lo))
+    submit_lo = max(0.05, float(source.get("submit_interval_jitter_lo", DEFAULT_SCHEDULER_SETTINGS["submit_interval_jitter_lo"]) or 0.05))
+    submit_hi = max(submit_lo, float(source.get("submit_interval_jitter_hi", DEFAULT_SCHEDULER_SETTINGS["submit_interval_jitter_hi"]) or submit_lo))
+    return {
+        "enabled": _normalize_bool(source.get("enabled"), bool(DEFAULT_SCHEDULER_SETTINGS["enabled"])),
+        "image_min_interval_sec": max(
+            0.0,
+            float(source.get("image_min_interval_sec", DEFAULT_SCHEDULER_SETTINGS["image_min_interval_sec"]) or 0.0),
+        ),
+        "text_min_interval_sec": max(
+            0.0,
+            float(source.get("text_min_interval_sec", DEFAULT_SCHEDULER_SETTINGS["text_min_interval_sec"]) or 0.0),
+        ),
+        "text_poisson_lambda_sec": max(
+            0.0,
+            float(source.get("text_poisson_lambda_sec", DEFAULT_SCHEDULER_SETTINGS["text_poisson_lambda_sec"]) or 0.0),
+        ),
+        "jitter_lo": jitter_lo,
+        "jitter_hi": jitter_hi,
+        "extra_poisson_lambda_sec": max(
+            0.0,
+            float(
+                source.get("extra_poisson_lambda_sec", DEFAULT_SCHEDULER_SETTINGS["extra_poisson_lambda_sec"]) or 0.0
+            ),
+        ),
+        "daily_usage_ratio": max(
+            0.05,
+            min(0.99, float(source.get("daily_usage_ratio", DEFAULT_SCHEDULER_SETTINGS["daily_usage_ratio"]) or 0.7)),
+        ),
+        "cooldown_429_sec": _normalize_positive_int(
+            source.get("cooldown_429_sec"),
+            int(DEFAULT_SCHEDULER_SETTINGS["cooldown_429_sec"]),
+            60,
+        ),
+        "night_soft_weight": max(
+            0.05,
+            min(1.0, float(source.get("night_soft_weight", DEFAULT_SCHEDULER_SETTINGS["night_soft_weight"]) or 0.4)),
+        ),
+        "lunch_soft_weight": max(
+            0.05,
+            min(1.0, float(source.get("lunch_soft_weight", DEFAULT_SCHEDULER_SETTINGS["lunch_soft_weight"]) or 0.85)),
+        ),
+        "auto_scale_global_concurrency": _normalize_bool(
+            source.get("auto_scale_global_concurrency"),
+            bool(DEFAULT_SCHEDULER_SETTINGS["auto_scale_global_concurrency"]),
+        ),
+        "fail_streak_threshold": _normalize_positive_int(
+            source.get("fail_streak_threshold"),
+            int(DEFAULT_SCHEDULER_SETTINGS["fail_streak_threshold"]),
+            1,
+        ),
+        "fail_cooldown_min_sec": max(
+            60.0,
+            float(source.get("fail_cooldown_min_sec", DEFAULT_SCHEDULER_SETTINGS["fail_cooldown_min_sec"]) or 60.0),
+        ),
+        "fail_cooldown_max_sec": max(
+            60.0,
+            float(source.get("fail_cooldown_max_sec", DEFAULT_SCHEDULER_SETTINGS["fail_cooldown_max_sec"]) or 60.0),
+        ),
+        "new_account_usage_cap": max(
+            0.05,
+            min(0.99, float(source.get("new_account_usage_cap", DEFAULT_SCHEDULER_SETTINGS["new_account_usage_cap"]) or 0.4)),
+        ),
+        "cohort_terminal_threshold": _normalize_positive_int(
+            source.get("cohort_terminal_threshold"),
+            int(DEFAULT_SCHEDULER_SETTINGS["cohort_terminal_threshold"]),
+            1,
+        ),
+        "cohort_pause_hours": max(
+            1.0,
+            float(source.get("cohort_pause_hours", DEFAULT_SCHEDULER_SETTINGS["cohort_pause_hours"]) or 1.0),
+        ),
+        "submit_interval_jitter_lo": submit_lo,
+        "submit_interval_jitter_hi": submit_hi,
+        "resume_first_delay_sec": max(
+            1.0,
+            float(source.get("resume_first_delay_sec", DEFAULT_SCHEDULER_SETTINGS["resume_first_delay_sec"]) or 5.0),
+        ),
+        "resume_backoff_base_sec": max(
+            1.0,
+            float(source.get("resume_backoff_base_sec", DEFAULT_SCHEDULER_SETTINGS["resume_backoff_base_sec"]) or 5.0),
+        ),
+        "resume_backoff_cap_sec": max(
+            5.0,
+            float(source.get("resume_backoff_cap_sec", DEFAULT_SCHEDULER_SETTINGS["resume_backoff_cap_sec"]) or 60.0),
+        ),
+        "resume_wall_sec": max(
+            60.0,
+            float(source.get("resume_wall_sec", DEFAULT_SCHEDULER_SETTINGS["resume_wall_sec"]) or 240.0),
+        ),
+        "prompt_dedup_window_sec": max(
+            0.0,
+            float(source.get("prompt_dedup_window_sec", DEFAULT_SCHEDULER_SETTINGS["prompt_dedup_window_sec"]) or 0.0),
+        ),
+    }
+
+
+def _normalize_window_pair(value: object, default: list[str]) -> list[str]:
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        return [str(value[0] or default[0]), str(value[1] or default[1])]
+    return [str(default[0]), str(default[1])]
+
+
+def _normalize_proactive_refresh_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    workdays_raw = source.get("workdays", DEFAULT_PROACTIVE_REFRESH_SETTINGS["workdays"])
+    workdays: list[int] = []
+    if isinstance(workdays_raw, (list, tuple)):
+        for item in workdays_raw:
+            try:
+                day = int(item)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= day <= 7 and day not in workdays:
+                workdays.append(day)
+    if not workdays:
+        workdays = [1, 2, 3, 4, 5]
+    return {
+        "enabled": _normalize_bool(source.get("enabled"), bool(DEFAULT_PROACTIVE_REFRESH_SETTINGS["enabled"])),
+        "timezone": str(source.get("timezone") or DEFAULT_PROACTIVE_REFRESH_SETTINGS["timezone"]).strip()
+        or "Asia/Singapore",
+        "timezone_from_egress": _normalize_bool(
+            source.get("timezone_from_egress"),
+            bool(DEFAULT_PROACTIVE_REFRESH_SETTINGS["timezone_from_egress"]),
+        ),
+        "p_work": max(0.0, min(1.0, float(source.get("p_work", DEFAULT_PROACTIVE_REFRESH_SETTINGS["p_work"]) or 0.0))),
+        "p_rest": max(0.0, min(1.0, float(source.get("p_rest", DEFAULT_PROACTIVE_REFRESH_SETTINGS["p_rest"]) or 0.0))),
+        "window_work": _normalize_window_pair(
+            source.get("window_work"),
+            list(DEFAULT_PROACTIVE_REFRESH_SETTINGS["window_work"]),  # type: ignore[arg-type]
+        ),
+        "window_rest": _normalize_window_pair(
+            source.get("window_rest"),
+            list(DEFAULT_PROACTIVE_REFRESH_SETTINGS["window_rest"]),  # type: ignore[arg-type]
+        ),
+        "workdays": workdays,
+        "per_account_per_day": max(
+            1,
+            _normalize_positive_int(
+                source.get("per_account_per_day"),
+                int(DEFAULT_PROACTIVE_REFRESH_SETTINGS["per_account_per_day"]),
+                1,
+            ),
+        ),
+        "minute_cap_k": max(
+            1,
+            _normalize_positive_int(
+                source.get("minute_cap_k"),
+                int(DEFAULT_PROACTIVE_REFRESH_SETTINGS["minute_cap_k"]),
+                1,
+            ),
+        ),
+        "minute_cap_k_rest": max(
+            1,
+            _normalize_positive_int(
+                source.get("minute_cap_k_rest"),
+                int(DEFAULT_PROACTIVE_REFRESH_SETTINGS["minute_cap_k_rest"]),
+                1,
+            ),
+        ),
+        "slot_jitter_minutes": _normalize_positive_int(
+            source.get("slot_jitter_minutes"),
+            int(DEFAULT_PROACTIVE_REFRESH_SETTINGS["slot_jitter_minutes"]),
+            0,
+        ),
+        "tick_sec": max(15.0, float(source.get("tick_sec", DEFAULT_PROACTIVE_REFRESH_SETTINGS["tick_sec"]) or 60.0)),
+        "startup_delay_sec": max(
+            0.0,
+            float(source.get("startup_delay_sec", DEFAULT_PROACTIVE_REFRESH_SETTINGS["startup_delay_sec"]) or 0.0),
+        ),
+    }
 
 
 def _normalize_workload_settings(value: object) -> dict[str, object]:
@@ -727,6 +949,14 @@ def _normalize_workload_settings(value: object) -> dict[str, object]:
                 source.get("global_text_inflight"),
                 int(DEFAULT_WORKLOAD_SETTINGS["global_text_inflight"]),
                 1,
+            ),
+        ),
+        "auto_live_min_ready": max(
+            0,
+            _normalize_positive_int(
+                source.get("auto_live_min_ready"),
+                int(DEFAULT_WORKLOAD_SETTINGS["auto_live_min_ready"]),
+                0,
             ),
         ),
     }
@@ -1219,6 +1449,8 @@ class ConfigStore:
         data["account_refresh_all"] = self.get_account_refresh_all_settings()
         data["account_maintenance_loop"] = self.get_account_maintenance_loop_settings()
         data["outlook_auto_recovery"] = self.get_outlook_auto_recovery_settings()
+        data["scheduler"] = self.get_scheduler_settings()
+        data["proactive_refresh"] = self.get_proactive_refresh_settings()
         data["panda_sync"] = self.get_public_panda_sync_settings()
         data.pop("auth-key", None)
         return data
@@ -1252,6 +1484,12 @@ class ConfigStore:
 
     def get_outlook_auto_recovery_settings(self) -> dict[str, object]:
         return _normalize_outlook_auto_recovery_settings(self.data.get("outlook_auto_recovery"))
+
+    def get_scheduler_settings(self) -> dict[str, object]:
+        return _normalize_scheduler_settings(self.data.get("scheduler"))
+
+    def get_proactive_refresh_settings(self) -> dict[str, object]:
+        return _normalize_proactive_refresh_settings(self.data.get("proactive_refresh"))
 
     def get_workload_settings(self) -> dict[str, object]:
         return _normalize_workload_settings(self.data.get("workload"))
@@ -1310,6 +1548,10 @@ class ConfigStore:
             next_data["account_maintenance_loop"] = _normalize_account_maintenance_loop_settings(next_data.get("account_maintenance_loop"))
         if "outlook_auto_recovery" in next_data:
             next_data["outlook_auto_recovery"] = _normalize_outlook_auto_recovery_settings(next_data.get("outlook_auto_recovery"))
+        if "scheduler" in next_data:
+            next_data["scheduler"] = _normalize_scheduler_settings(next_data.get("scheduler"))
+        if "proactive_refresh" in next_data:
+            next_data["proactive_refresh"] = _normalize_proactive_refresh_settings(next_data.get("proactive_refresh"))
         if "workload" in next_data:
             next_data["workload"] = _normalize_workload_settings(next_data.get("workload"))
         if "panda_sync" in next_data:

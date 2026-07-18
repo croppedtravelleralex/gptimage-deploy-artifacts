@@ -2,6 +2,22 @@
 
 ## Unreleased
 
++ [修复] 软熔断/上游 429 不再把账号 `status` 打成「限流」导致永久不可调度；软解除可愈合历史误写；`is_rate_limit_http_error` 收紧为明确 429。回归测 `test_humanlike_softband_heal.py`。
++ [功能] 拟人化调度全量接线（docs/10 Phase B 续优化 + C）：选号夜间/午餐软权重；`timezone_from_egress`；文本 gap；上游 429→`apply_429_cooldown`；submit 间隔 Uniform 抖动；`C_g=max(cfg,D)`；fail_streak/cohort/新号 soft；resume 退避+总墙取消；prompt 短窗去重；`workload.auto_live_min_ready`（默认 0）。单测 `test_humanlike_scheduler.py` 13 passed。
++ [运维] 2026-07-18 Phase A+B 落地 Panda：关 maintenance/recovery；`submit_start_min_interval_ms=5000`；`scheduler.enabled=true`（gap/soft band）；`proactive_refresh` SG 日历 `p_rest=0.35`；备份 `config.phaseA-before-20260718-101054.json`；公网 health healthy。
++ [文档] `docs/10-human-like-workload-plan.md` v2.2：§4.6 现网/v2.1/Hard 吞吐对照（小时≈持平、日≈−30%；Hard 小时≈−41%、日≈−48%）；§5.4 降封天花板（v2.1≈30–50%，Hard≈45–60%，≥70% 不现实）；默认推 v2.1。
++ [文档] `docs/10-human-like-workload-plan.md` v2.1：探活时区 `Asia/Singapore`（跟 SG 代理）；休息日 `p_rest=0.35` 低频非零；§5 降封分信号估计（总风险直觉约 30–50%，禁止伪精确承诺）；夜间/午餐软权重、失败冷却、新号限额续优化；性能参数表同步。
++ [文档] `docs/10-human-like-workload-plan.md` v2：去过时开源权威（L0–L3）；容量 Uniform/Poisson 抖动与日熔断软带；工作日随机探活；落地性能/参数总表；Phase A–D。
+- [回滚/修复] 2026-07-17：逆向协议生图链路回滚误改（仅协议层）：去掉 SSE `post_ready=15s`；estuary 下载恢复 `session.get` + 显式 Bearer；`skipped_mainline` 不再当「换号失败」；生图模型一律允许 conversation poll；poll 勿用 initial file_id 预填 last_hit_key；下载 404/403 短重试。S3/upload 仍用无鉴权 resource session。Panda 验收：观察号 iv***3 `ok=true` b64≈725KB ~73s，备份 `git-artifacts-deploy-20260717-224254`。
+- [运维] 2026-07-17 20:51：指纹分化 + `/me` 轻头回退 + maturity 字段已 artifacts 部署 Panda（备份 `git-artifacts-deploy-20260717-205132`）；health ok，markers OK。
++ [优化] 账号指纹轻微分化：`build_diversified_fp(seed)` 在 Chrome 120/124/131 × Windows/macOS × accept-language 间稳定选型；完整 fp 不重写 device/session。
++ [修复] `/me`（及 accounts/check）遇 CF 边缘 403 后改用轻量头（Bearer+device/session+UA）重试，缓解 Olivia 类间歇拦截。
++ [新增] 成熟度字段透传 `maturity_stage` / `maturity_checked_at` / `cohort_id`；`panda_canary_observe.py --write-maturity`。
++ [文档] 澄清 FlareSolverr：注册走 Camoufox，Panda 全局 clearance 保持关；重写 `02-current-state` 摘要并刷新 `09` / ACC-010 过时证据。
++ [运维] 2026-07-17：CF403 文案 + `/me` 边缘重试已经 artifacts 最小 overlay 部署到 Panda（备份 `git-artifacts-deploy-20260717-185949`）；公网 accounts 已无「Web 验证 403，需重登」。
++ [修复] 账号页不再把 `/backend-api/* 403` 误写成「需重登」；改为提示 CF/出口边缘拦截（可重试/换节点）。事故恢复文案同步去掉强制重登暗示。
++ [修复] `OpenAIBackendAPI`：`/me`、`conversation/init`、`accounts/check` 识别 CF HTML 403，错误前缀 `cf_edge_block:`，并做最多 3 次短暂重试。
++ [运维] `panda_rebind_unique_proxies.py`：共享 binding 号池换独立 Webshare；`update_account_identity(clear_isolation=True)` 允许解除 isolation。
 + [修复] 生图/聊天 `_bootstrap`：CF HTML 403 等边缘拦截时软失败回退默认 PoW；首页头经 `build_headers` 合并 clearance；生图 prepare/start 遇 CF 边缘 403 短暂重试。
 + [新增] 账号页：全宽平铺、类型/来源与 Token/邮箱合并列、默认 100/页、去 Panda 列与成功失败列、流量可读、流水贝塞尔+坐标轴。
 + [新增] Canonical `chatgpt_web_request` builder + `RequestPhaseTracker` 阶段耗时；聊天/生图出站收敛。

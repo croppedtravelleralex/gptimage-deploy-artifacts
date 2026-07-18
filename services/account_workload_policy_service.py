@@ -69,7 +69,21 @@ class AccountWorkloadPolicyService:
 
     @property
     def mode(self) -> str:
-        return str(self.settings().get("mode") or "shadow").strip().lower()
+        settings = self.settings()
+        configured = str(settings.get("mode") or "shadow").strip().lower()
+        if configured == "live":
+            return "live"
+        auto_min = int(settings.get("auto_live_min_ready") or 0)
+        if auto_min <= 0:
+            return configured if configured in {"shadow", "live"} else "shadow"
+        try:
+            snapshot = self.build_snapshot()
+            ready = int(snapshot.dispatchable_image_accounts or 0)
+        except Exception:
+            ready = 0
+        if ready >= auto_min:
+            return "live"
+        return "shadow"
 
     @property
     def text_queue_mode(self) -> str:

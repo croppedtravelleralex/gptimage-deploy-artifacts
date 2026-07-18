@@ -6,8 +6,9 @@ from pydantic import BaseModel, Field
 
 from api.image_inputs import parse_image_edit_request, read_image_sources, read_image_sources_with_asset_ids
 from api.support import require_identity, resolve_image_base_url
+from services.config import config
 from services.content_filter import check_request
-from services.image_task_service import ImageTaskQueueFullError, image_task_service
+from services.image_task_service import ImageTaskQueueFullError, ImageTaskDuplicatePromptError, image_task_service
 from services.log_service import LoggedCall
 
 
@@ -25,6 +26,27 @@ class ResumePollRequest(BaseModel):
 
 def _parse_task_ids(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _image_generation_paused() -> bool:
+    if bool(config.data.get("image_generation_paused")):
+        return True
+    try:
+        settings = config.get_image_task_queue_settings()
+        return not bool(settings.get("enabled", True))
+    except Exception:
+        return False
+
+
+def _raise_image_generation_paused() -> None:
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "error": "image generation is paused to preserve the account pool",
+            "code": "image_generation_paused",
+        },
+        headers={"Retry-After": "300"},
+    )
 
 
 async def filter_or_log(call: LoggedCall, text: str) -> None:
@@ -61,6 +83,8 @@ def create_router() -> APIRouter:
         authorization: str | None = Header(default=None),
     ):
         identity = require_identity(authorization)
+        if _image_generation_paused():
+            _raise_image_generation_paused()
         await filter_or_log(LoggedCall(identity, "/api/image-tasks/generations", body.model, "文生图任务", request_text=body.prompt), body.prompt)
         try:
             return await run_in_threadpool(
@@ -81,6 +105,12 @@ def create_router() -> APIRouter:
                 detail={"error": str(exc)},
                 headers={"Retry-After": "5"},
             ) from exc
+        except ImageTaskDuplicatePromptError as exc:
+            raise HTTPException(
+                status_code=429,
+                detail={"error": str(exc), "code": "duplicate_prompt"},
+                headers={"Retry-After": "30"},
+            ) from exc
 
     @router.post("/api/image-tasks/edits")
     async def create_edit_task(
@@ -88,6 +118,8 @@ def create_router() -> APIRouter:
         authorization: str | None = Header(default=None),
     ):
         identity = require_identity(authorization)
+        if _image_generation_paused():
+            _raise_image_generation_paused()
         payload, image_sources, mask_sources = await parse_image_edit_request(request)
         client_task_id = str(payload.get("client_task_id") or "").strip()
         if not client_task_id:
@@ -126,6 +158,12 @@ def create_router() -> APIRouter:
                 detail={"error": str(exc)},
                 headers={"Retry-After": "5"},
             ) from exc
+        except ImageTaskDuplicatePromptError as exc:
+            raise HTTPException(
+                status_code=429,
+                detail={"error": str(exc), "code": "duplicate_prompt"},
+                headers={"Retry-After": "30"},
+            ) from exc
 
     @router.post("/api/image-tasks/{task_id}/resume-poll")
     async def resume_image_poll(
@@ -135,6 +173,8 @@ def create_router() -> APIRouter:
         authorization: str | None = Header(default=None),
     ):
         identity = require_identity(authorization)
+        if _image_generation_paused():
+            _raise_image_generation_paused()
         try:
             return await run_in_threadpool(
                 image_task_service.resume_poll,

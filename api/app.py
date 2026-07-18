@@ -15,7 +15,9 @@ from services.account_maintenance_loop_service import account_maintenance_loop_s
 from services.config import config
 from services.image_service import start_image_cleanup_scheduler
 from services.image_task_service import image_task_service
+from services.outlook_auto_recovery_loop_service import outlook_auto_recovery_loop_service
 from services.panda_staging_service import panda_staging_service
+from services.proactive_refresh_loop_service import proactive_refresh_loop_service
 from services.register_service import register_service
 
 
@@ -30,6 +32,8 @@ def create_app() -> FastAPI:
         register_service.start_if_enabled()
         image_task_service.start_background()
         account_maintenance_loop_service.start_background()
+        outlook_auto_recovery_loop_service.start_background()
+        proactive_refresh_loop_service.start_background()
         panda_staging_service.start_background()
         backup_service.start()
         config.cleanup_old_images()
@@ -41,6 +45,8 @@ def create_app() -> FastAPI:
             cleanup_thread.join(timeout=1)
             image_task_service.stop()
             account_maintenance_loop_service.stop_background()
+            outlook_auto_recovery_loop_service.stop_background()
+            proactive_refresh_loop_service.stop_background()
             panda_staging_service.stop_background()
             backup_service.stop()
 

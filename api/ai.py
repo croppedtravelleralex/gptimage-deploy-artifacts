@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import threading
 import time
 
@@ -10,12 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api.image_inputs import parse_image_edit_request, read_image_sources, read_image_sources_with_asset_ids
 from api.support import require_identity, resolve_image_base_url
-from services.account_service import account_service
 from services.config import config
 from services.content_filter import check_request, request_shape, request_text
 from services.editable_file_task_service import editable_file_task_service
 from services.image_sync_adapter import build_openai_image_response, new_client_task_id, run_edit_sync, run_generation_sync
 from services.image_task_service import (
+    ImageTaskDuplicatePromptError,
     ImageTaskQueueFullError,
     ImageTaskWaitTimeoutError,
     image_task_service,
@@ -30,6 +31,8 @@ from services.protocol import (
     openai_v1_response,
     openai_search,
 )
+from services.protocol.error_response import openai_error_response
+from utils.helper import has_response_image_generation_tool, is_image_chat_request
 
 PANDA_ASYNC_PROMPT_PREFIXES = ("panda-async:", "panda_async:")
 PANDA_TASK_PROMPT_PREFIXES = (
@@ -47,40 +50,101 @@ _IMAGE_SYNC_ADMISSION_LOCK = threading.Lock()
 _IMAGE_SYNC_WAIT_INFLIGHT = 0
 
 
+def _image_generation_paused() -> bool:
+    if bool(config.data.get("image_generation_paused")):
+        return True
+    try:
+        settings = config.get_image_task_queue_settings()
+        return not bool(settings.get("enabled", True))
+    except Exception:
+        return False
+
+
+def _raise_image_generation_paused() -> None:
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "error": "image generation is paused to preserve the account pool",
+            "code": "image_generation_paused",
+        },
+        headers={"Retry-After": "300"},
+    )
+
+
 def _image_sync_admission_limit() -> int:
     try:
-        return max(1, int(config.image_global_concurrency or 6))
+        return max(1, int(config.newapi_image_sync_admission_max))
     except Exception:
-        return 6
+        return 12
 
 
-def _image_global_slots_busy(limit: int) -> bool:
+def _image_sync_admission_max_eta_secs() -> float:
     try:
-        stats = account_service.get_image_candidate_runtime_stats()
-        global_limit = int(stats.get("image_global_concurrency_limit") or limit)
-        inflight = int(stats.get("image_inflight_count") or 0)
-        return global_limit > 0 and inflight >= min(limit, global_limit)
+        return max(30.0, float(config.newapi_image_sync_admission_max_eta_secs))
     except Exception:
-        return False
+        return 180.0
 
 
-def _try_enter_image_sync_admission() -> bool:
-    """Limit public synchronous image waits; overloaded requests should become async tasks."""
+def _sync_wait_inflight_count() -> int:
+    with _IMAGE_SYNC_ADMISSION_LOCK:
+        return int(_IMAGE_SYNC_WAIT_INFLIGHT)
+
+
+def _try_enter_image_sync_admission(identity: dict[str, object] | None = None) -> tuple[bool, int]:
+    """Admit a synchronous OpenAI-compatible wait seat.
+
+    Returns (admitted, estimated_wait_secs). Upstream inflight is intentionally
+    NOT used as a hard reject — sync-over-async should queue and wait.
+    """
     global _IMAGE_SYNC_WAIT_INFLIGHT
     limit = _image_sync_admission_limit()
-    if _image_global_slots_busy(limit):
-        return False
+    max_eta = _image_sync_admission_max_eta_secs()
+    identity = identity or {}
     with _IMAGE_SYNC_ADMISSION_LOCK:
-        if _IMAGE_SYNC_WAIT_INFLIGHT >= limit:
-            return False
-        _IMAGE_SYNC_WAIT_INFLIGHT += 1
-        return True
+        current_waiters = int(_IMAGE_SYNC_WAIT_INFLIGHT)
+        if current_waiters >= limit:
+            try:
+                eta = int(image_task_service.estimate_sync_eta_secs(identity, extra_waiters=current_waiters))
+            except Exception:
+                eta = int(max_eta)
+            return False, max(5, eta)
+        try:
+            eta = int(image_task_service.estimate_sync_eta_secs(identity, extra_waiters=current_waiters + 1))
+        except Exception:
+            eta = 0
+        if eta > max_eta:
+            return False, max(5, eta)
+        _IMAGE_SYNC_WAIT_INFLIGHT = current_waiters + 1
+        return True, max(0, eta)
 
 
 def _leave_image_sync_admission() -> None:
     global _IMAGE_SYNC_WAIT_INFLIGHT
     with _IMAGE_SYNC_ADMISSION_LOCK:
         _IMAGE_SYNC_WAIT_INFLIGHT = max(0, _IMAGE_SYNC_WAIT_INFLIGHT - 1)
+
+
+def _image_service_busy_response(*, estimated_wait_secs: int, reason: str = "image_service_busy") -> JSONResponse:
+    retry_after = max(5, min(300, int(math.ceil(float(estimated_wait_secs or 5)))))
+    message = (
+        f"image service busy: estimated wait {retry_after}s exceeds sync budget"
+        if reason == "eta_exceeded" or estimated_wait_secs > _image_sync_admission_max_eta_secs()
+        else "image service busy: sync admission seats full"
+    )
+    return openai_error_response(
+        {
+            "error": {
+                "message": message,
+                "type": "rate_limit_error",
+                "param": {"estimated_wait_secs": retry_after},
+                "code": "image_service_busy",
+            }
+        },
+        429,
+        headers={"Retry-After": str(retry_after)},
+        code="image_service_busy",
+        param={"estimated_wait_secs": retry_after},
+    )
 
 
 def _parse_panda_prompt_tunnel(prompt: str) -> tuple[str, bool, str]:
@@ -170,6 +234,13 @@ async def _run_image_sync_call(call: LoggedCall, runner, **kwargs):
             detail={"error": str(exc)},
             headers={"Retry-After": "5"},
         ) from exc
+    except ImageTaskDuplicatePromptError as exc:
+        call.log("调用失败", status="failed", error=str(exc))
+        raise HTTPException(
+            status_code=429,
+            detail={"error": str(exc), "code": "duplicate_prompt"},
+            headers={"Retry-After": "30"},
+        ) from exc
     except ImageTaskWaitTimeoutError as exc:
         call.log(
             "调用超时",
@@ -200,8 +271,17 @@ async def _run_image_sync_or_auto_async_call(
         async_kwargs: dict[str, object],
         sync_kwargs: dict[str, object],
 ):
-    if not _try_enter_image_sync_admission():
-        return await async_submitter(call, call.identity, **async_kwargs)
+    # async_submitter is only used by explicit panda_async paths; standard sync
+    # clients must never receive an empty image.task 200 on overload.
+    del async_submitter
+    admitted, estimated_wait_secs = _try_enter_image_sync_admission(call.identity)
+    if not admitted:
+        call.log(
+            "调用拒绝",
+            status="busy",
+            error=f"image_service_busy estimated_wait_secs={estimated_wait_secs}",
+        )
+        return _image_service_busy_response(estimated_wait_secs=estimated_wait_secs)
     try:
         return await _run_image_sync_call(call, sync_runner, **sync_kwargs)
     finally:
@@ -211,7 +291,7 @@ async def _run_image_sync_or_auto_async_call(
 def _task_summary(task: dict[str, object]) -> dict[str, object]:
     status = str(task.get("status") or "").strip()
     data = task.get("data")
-    return {
+    summary = {
         "id": str(task.get("id") or task.get("task_id") or ""),
         "task_id": str(task.get("id") or task.get("task_id") or ""),
         "status": status,
@@ -224,6 +304,11 @@ def _task_summary(task: dict[str, object]) -> dict[str, object]:
         "running_limit": task.get("running_limit"),
         "accepted_limit": task.get("accepted_limit"),
     }
+    if task.get("queue_position") is not None:
+        summary["queue_position"] = task.get("queue_position")
+    if task.get("estimated_start_after_secs") is not None:
+        summary["estimated_start_after_secs"] = task.get("estimated_start_after_secs")
+    return summary
 
 
 def _image_task_envelope(task: dict[str, object]) -> dict[str, object]:
@@ -239,6 +324,12 @@ def _image_task_envelope(task: dict[str, object]) -> dict[str, object]:
         "data": [],
         "panda_task": summary,
     }
+    if summary.get("queue_position") is not None:
+        payload["queue_position"] = summary["queue_position"]
+    if summary.get("estimated_start_after_secs") is not None:
+        payload["estimated_start_after_secs"] = summary["estimated_start_after_secs"]
+    if summary.get("running_limit") is not None:
+        payload["running_limit"] = summary["running_limit"]
     if summary.get("error"):
         # NewAPI treats a top-level "error" field as a failed channel call even
         # when HTTP status is 200.  For async task status polling, keep the
@@ -285,7 +376,9 @@ async def _run_image_task_status_call(call: LoggedCall, identity: dict[str, obje
 async def _run_generation_async_submit_call(call: LoggedCall, identity: dict[str, object], **kwargs):
     try:
         task = await run_in_threadpool(image_task_service.submit_generation, identity, **kwargs)
-        result = _image_task_envelope(task)
+        task_id = str(task.get("id") or kwargs.get("client_task_id") or "")
+        enriched = await run_in_threadpool(image_task_service.queue_snapshot_for_task, identity, task_id)
+        result = _image_task_envelope(enriched or task)
         call.log("异步任务已入队", result)
         return result
     except ValueError as exc:
@@ -298,12 +391,21 @@ async def _run_generation_async_submit_call(call: LoggedCall, identity: dict[str
             detail={"error": str(exc)},
             headers={"Retry-After": "5"},
         ) from exc
+    except ImageTaskDuplicatePromptError as exc:
+        call.log("异步任务入队失败", status="failed", error=str(exc))
+        raise HTTPException(
+            status_code=429,
+            detail={"error": str(exc), "code": "duplicate_prompt"},
+            headers={"Retry-After": "30"},
+        ) from exc
 
 
 async def _run_edit_async_submit_call(call: LoggedCall, identity: dict[str, object], **kwargs):
     try:
         task = await run_in_threadpool(image_task_service.submit_edit, identity, **kwargs)
-        result = _image_task_envelope(task)
+        task_id = str(task.get("id") or kwargs.get("client_task_id") or "")
+        enriched = await run_in_threadpool(image_task_service.queue_snapshot_for_task, identity, task_id)
+        result = _image_task_envelope(enriched or task)
         call.log("异步任务已入队", result)
         return result
     except ValueError as exc:
@@ -315,6 +417,13 @@ async def _run_edit_async_submit_call(call: LoggedCall, identity: dict[str, obje
             status_code=429,
             detail={"error": str(exc)},
             headers={"Retry-After": "5"},
+        ) from exc
+    except ImageTaskDuplicatePromptError as exc:
+        call.log("异步任务入队失败", status="failed", error=str(exc))
+        raise HTTPException(
+            status_code=429,
+            detail={"error": str(exc), "code": "duplicate_prompt"},
+            headers={"Retry-After": "30"},
         ) from exc
 
 
@@ -342,6 +451,9 @@ def create_router() -> APIRouter:
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=prompt)
         if body.panda_task_id or prompt_task_id:
             return await _run_image_task_status_call(call, identity, body.panda_task_id or prompt_task_id)
+        if _image_generation_paused():
+            call.log("调用拒绝", status="paused", error="image_generation_paused")
+            _raise_image_generation_paused()
         await filter_or_log(call, prompt)
         if body.stream:
             return await call.run(openai_v1_image_generations.handle, payload)
@@ -390,6 +502,9 @@ def create_router() -> APIRouter:
         call = LoggedCall(identity, "/v1/images/edits", model, "图生图", request_text=prompt)
         if payload.get("panda_task_id") or prompt_task_id:
             return await _run_image_task_status_call(call, identity, str(payload.get("panda_task_id") or prompt_task_id or ""))
+        if _image_generation_paused():
+            call.log("调用拒绝", status="paused", error="image_generation_paused")
+            _raise_image_generation_paused()
         await filter_or_log(call, prompt)
         asset_ids = [str(item).strip() for item in (payload.get("asset_ids") or []) if str(item).strip()]
         if image_sources:
@@ -460,6 +575,9 @@ def create_router() -> APIRouter:
             request_text=request_preview,
             request_shape=request_shape(payload.get("messages")),
         )
+        if _image_generation_paused() and is_image_chat_request(payload):
+            call.log("调用拒绝", status="paused", error="image_generation_paused")
+            _raise_image_generation_paused()
         await filter_or_log(call, request_preview)
         return await call.run(openai_v1_chat_complete.handle, payload)
 
@@ -477,6 +595,9 @@ def create_router() -> APIRouter:
             request_text=request_preview,
             request_shape=request_shape(payload.get("input")),
         )
+        if _image_generation_paused() and has_response_image_generation_tool(payload):
+            call.log("调用拒绝", status="paused", error="image_generation_paused")
+            _raise_image_generation_paused()
         await filter_or_log(call, request_preview)
         return await call.run(openai_v1_response.handle, payload)
 

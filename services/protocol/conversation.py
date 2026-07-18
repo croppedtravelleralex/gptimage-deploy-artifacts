@@ -142,6 +142,24 @@ def is_tls_connection_error(message: str) -> bool:
     )
 
 
+def is_rate_limit_http_error(message: object = None, status_code: object = None) -> bool:
+    """仅识别明确的 HTTP 429 / too-many-requests；避免泛化「rate limit」误伤。"""
+    try:
+        if int(status_code or 0) == 429:
+            return True
+    except (TypeError, ValueError):
+        pass
+    text = str(message or "").lower()
+    return (
+        "http 429" in text
+        or "http_429" in text
+        or "status=429" in text
+        or "status_code=429" in text
+        or "too many requests" in text
+        or "rate_limit_exceeded" in text
+    )
+
+
 def is_pre_conversation_transient_error(message: str) -> bool:
     text = str(message or "").lower()
     return (
@@ -204,12 +222,8 @@ def is_model_text_reply_instead_of_image(message: str) -> bool:
     """
     if not message:
         return False
-    try:
-        payload = json.loads(message)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        payload = None
-    if isinstance(payload, dict) and payload.get("skipped_mainline") is True:
-        return True
+    # 注意：bare {"skipped_mainline":true} 是 picture_v2 对 image_gen 工具的调用载荷，
+    # 不是「主链路失败 / 可换号」信号；不得在此当成文本代图。
     if REFERENCED_IMAGE_IDS_RE.search(message):
         return True
     # 检测部分工具参数 JSON（模型返回了工具参数但未触发工具）
@@ -1028,7 +1042,13 @@ def stream_image_outputs(
         error_text = detailed_error or message or "Image generation was rejected by upstream policy."
         yield ImageOutput(kind="message", model=request.model, index=index, total=total, text=error_text, conversation_id=conversation_id)
         return
-    should_poll_for_image = bool(request.images) or last.get("turn_use_case") == "image gen"
+    # 生图模型请求一律允许按 conversation 轮询：SSE 可能只先出现 tool 调用
+    # （含 skipped_mainline），图在随后数十秒才写入 conversation。
+    should_poll_for_image = (
+        bool(request.images)
+        or last.get("turn_use_case") == "image gen"
+        or is_supported_image_model(request.model)
+    )
     if message and not file_ids and not sediment_ids and not should_poll_for_image:
         yield ImageOutput(kind="message", model=request.model, index=index, total=total, text=message, conversation_id=conversation_id)
         return
@@ -1621,6 +1641,11 @@ def _generate_single_image(
             ) from exc
         except ImageGenerationError as exc:
             account_service.mark_image_result(token, False)
+            if is_rate_limit_http_error(exc, getattr(exc, "status_code", None)):
+                try:
+                    account_service.apply_429_cooldown(token, exc)
+                except Exception:
+                    pass
             if account_email and not getattr(exc, "account_email", ""):
                 exc.account_email = account_email
             error_text = str(exc)
@@ -1665,6 +1690,11 @@ def _generate_single_image(
         except Exception as exc:
             account_service.mark_image_result(token, False)
             last_error = str(exc)
+            if is_rate_limit_http_error(last_error, getattr(exc, "status_code", None)):
+                try:
+                    account_service.apply_429_cooldown(token, exc)
+                except Exception:
+                    pass
             logger.warning({
                 "event": "image_stream_fail",
                 "request_token": token,

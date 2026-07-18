@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import math
 import sqlite3
@@ -15,6 +16,7 @@ from typing import Any
 from services.account_service import account_service
 from services.config import DATA_DIR, config
 from services.content_filter import request_text
+from services.humanlike_scheduler import compute_resume_delay_seconds, compute_submit_interval_ms
 from services.log_service import LOG_TYPE_CALL, log_service
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
 
@@ -34,6 +36,10 @@ _SUCCESS_DURATION_EWMA_ALPHA = 0.2
 
 class ImageTaskQueueFullError(RuntimeError):
     """异步生图队列已满或被熔断保护暂停。"""
+
+
+class ImageTaskDuplicatePromptError(RuntimeError):
+    """同 owner 短窗内重复 prompt 被拒绝。"""
 
 
 class ImageTaskWaitTimeoutError(TimeoutError):
@@ -295,6 +301,7 @@ class ImageTaskService:
         self._poll_threads: list[threading.Thread] = []
         self._tasks: dict[str, dict[str, Any]] = {}
         self._runtime_recovered = False
+        self._recent_prompt_hashes: dict[str, float] = {}
         self._success_duration_ewma_secs = _SUCCESS_DURATION_EWMA_INITIAL_SECS
         self._last_submit_start_ts = 0.0
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -316,6 +323,64 @@ class ImageTaskService:
         if callable(getter):
             return getter()
         return {}
+
+    def _effective_submit_interval_ms(self) -> int:
+        try:
+            base = max(0, int(self._queue_settings().get("submit_start_min_interval_ms") or 0))
+        except Exception:
+            base = 0
+        settings = config.get_scheduler_settings()
+        if not settings.get("enabled") or base <= 0:
+            return base
+        return compute_submit_interval_ms(
+            base,
+            jitter_lo=float(settings.get("submit_interval_jitter_lo") or 0.7),
+            jitter_hi=float(settings.get("submit_interval_jitter_hi") or 1.3),
+        )
+
+    def _resume_delay_secs(self, attempts: int) -> float:
+        settings = config.get_scheduler_settings()
+        if not settings.get("enabled"):
+            return min(300.0, 30.0 * max(1, int(attempts or 1)))
+        return compute_resume_delay_seconds(
+            int(attempts or 1),
+            first_delay_sec=float(settings.get("resume_first_delay_sec") or 5),
+            backoff_base_sec=float(settings.get("resume_backoff_base_sec") or 5),
+            backoff_cap_sec=float(settings.get("resume_backoff_cap_sec") or 60),
+        )
+
+    def _resume_wall_secs(self) -> float:
+        settings = config.get_scheduler_settings()
+        if not settings.get("enabled"):
+            return 300.0
+        return max(60.0, float(settings.get("resume_wall_sec") or 240.0))
+
+    def _resume_deadline_ts(self, now: float | None = None) -> float:
+        return float(now if now is not None else time.time()) + self._resume_wall_secs()
+
+    def _prompt_fingerprint(self, owner: str, prompt: str) -> str:
+        digest = hashlib.sha256(str(prompt or "").strip().encode("utf-8")).hexdigest()
+        return f"{owner}:{digest}"
+
+    def _enforce_prompt_dedup_locked(self, owner: str, payload: dict[str, Any]) -> None:
+        settings = config.get_scheduler_settings()
+        window = float(settings.get("prompt_dedup_window_sec") or 0.0)
+        if not settings.get("enabled") or window <= 0:
+            return
+        prompt = _clean(payload.get("prompt"))
+        if not prompt:
+            return
+        now = time.time()
+        stale = [key for key, ts in self._recent_prompt_hashes.items() if now - float(ts) > window]
+        for key in stale:
+            self._recent_prompt_hashes.pop(key, None)
+        fingerprint = self._prompt_fingerprint(owner, prompt)
+        last = float(self._recent_prompt_hashes.get(fingerprint) or 0.0)
+        if last > 0 and (now - last) < window:
+            raise ImageTaskDuplicatePromptError(
+                f"duplicate prompt within {int(window)}s window; please wait or vary the prompt"
+            )
+        self._recent_prompt_hashes[fingerprint] = now
 
     def _recover_runtime_tasks_locked(self) -> None:
         if self._runtime_recovered:
@@ -594,6 +659,7 @@ class ImageTaskService:
                     self._save_locked()
                 return _public_task(task)
             self._enforce_queue_limits_locked(owner)
+            self._enforce_prompt_dedup_locked(owner, payload)
             task = {
                 "id": task_id,
                 "owner_id": owner,
@@ -753,7 +819,7 @@ class ImageTaskService:
         if self._deadlock_guard_tripped_locked():
             return None
         try:
-            interval_ms = max(0, int(self._queue_settings().get("submit_start_min_interval_ms") or 0))
+            interval_ms = self._effective_submit_interval_ms()
         except Exception:
             interval_ms = 0
         if interval_ms > 0 and self._last_submit_start_ts > 0:
@@ -792,7 +858,7 @@ class ImageTaskService:
                 if run_args is None:
                     wait_secs = 0.5
                     try:
-                        interval_ms = max(0, int(self._queue_settings().get("submit_start_min_interval_ms") or 0))
+                        interval_ms = self._effective_submit_interval_ms()
                     except Exception:
                         interval_ms = 0
                     if interval_ms > 0 and self._last_submit_start_ts > 0:
@@ -972,7 +1038,7 @@ class ImageTaskService:
                         conversation_id=conversation_id,
                         resume_timeout_secs=resume_timeout_secs,
                         **({"resume_access_token": resume_access_token} if resume_access_token else {}),
-                        next_resume_ts=time.time() + 1.0,
+                        next_resume_ts=time.time() + self._resume_delay_secs(1),
                     )
                 self._log_call(
                     identity,
@@ -1079,7 +1145,7 @@ class ImageTaskService:
                     conversation_id=conversation_id,
                     resume_timeout_secs=resume_timeout_secs,
                     **({"resume_access_token": resume_access_token} if resume_access_token else {}),
-                    next_resume_ts=time.time() + 1.0,
+                    next_resume_ts=time.time() + self._resume_delay_secs(1),
                 )
                 self._log_call(
                     identity,
@@ -1153,6 +1219,21 @@ class ImageTaskService:
             conversation_id = _clean(task.get("conversation_id"))
             if not conversation_id:
                 task.update(status=TASK_STATUS_ERROR, error="timeout_pending task has no conversation_id", updated_at=_now_iso(), updated_ts=now)
+                self._save_task_locked(key)
+                continue
+            deadline = float(task.get("resume_deadline_ts") or 0.0)
+            if deadline <= 0:
+                anchor = float(task.get("updated_ts") or task.get("created_ts") or now)
+                deadline = anchor + self._resume_wall_secs()
+                task["resume_deadline_ts"] = deadline
+            if now > deadline:
+                task.update(
+                    status=TASK_STATUS_ERROR,
+                    progress="failed",
+                    error=f"续轮询总墙钟已超时取消（>{int(self._resume_wall_secs())}s）",
+                    updated_at=_now_iso(),
+                    updated_ts=now,
+                )
                 self._save_task_locked(key)
                 continue
             if float(task.get("next_resume_ts") or 0.0) > now:
@@ -1244,16 +1325,20 @@ class ImageTaskService:
             except Exception:
                 max_attempts = 3
             if task and attempts < max_attempts:
-                task.update(
-                    status=TASK_STATUS_TIMEOUT_PENDING,
-                    progress="timeout_pending",
-                    error=error_message,
-                    data=[],
-                    duration_ms=int((time.time() - started) * 1000),
-                    next_resume_ts=time.time() + min(300.0, 30.0 * max(1, attempts)),
-                    updated_at=_now_iso(),
-                    updated_ts=time.time(),
-                )
+                now_ts = time.time()
+                updates = {
+                    "status": TASK_STATUS_TIMEOUT_PENDING,
+                    "progress": "timeout_pending",
+                    "error": error_message,
+                    "data": [],
+                    "duration_ms": int((now_ts - started) * 1000),
+                    "next_resume_ts": now_ts + self._resume_delay_secs(attempts),
+                    "updated_at": _now_iso(),
+                    "updated_ts": now_ts,
+                }
+                if not float(task.get("resume_deadline_ts") or 0.0):
+                    updates["resume_deadline_ts"] = self._resume_deadline_ts(now_ts)
+                task.update(updates)
                 self._save_task_locked(key)
                 self._condition.notify_all()
                 self._log_call(identity, mode, model, started, "续轮询硬超时待重试", status="timeout_pending", error=error_message)
@@ -1292,6 +1377,7 @@ class ImageTaskService:
                 identity=dict(identity),
                 resume_timeout_secs=max(5.0, min(600.0, float(extra_timeout_secs))),
                 next_resume_ts=time.time(),
+                resume_deadline_ts=self._resume_deadline_ts(),
                 updated_at=_now_iso(),
                 updated_ts=time.time(),
             )
@@ -1360,10 +1446,12 @@ class ImageTaskService:
                         error=error_message,
                         data=[],
                         duration_ms=int((time.time() - started) * 1000),
-                        next_resume_ts=time.time() + min(300.0, 30.0 * max(1, attempts)),
+                        next_resume_ts=time.time() + self._resume_delay_secs(attempts),
                         updated_at=_now_iso(),
                         updated_ts=time.time(),
                     )
+                    if not float(task.get("resume_deadline_ts") or 0.0):
+                        task["resume_deadline_ts"] = self._resume_deadline_ts()
                     self._save_task_locked(key)
                     self._condition.notify_all()
                     return
@@ -1419,9 +1507,17 @@ class ImageTaskService:
             task = self._tasks.get(key)
             if task is None:
                 return
+            prev_status = _clean(task.get("status"))
             task.update(updates)
+            now = time.time()
             task["updated_at"] = _now_iso()
-            task["updated_ts"] = time.time()
+            task["updated_ts"] = now
+            if (
+                _clean(task.get("status")) == TASK_STATUS_TIMEOUT_PENDING
+                and prev_status != TASK_STATUS_TIMEOUT_PENDING
+                and not float(task.get("resume_deadline_ts") or 0.0)
+            ):
+                task["resume_deadline_ts"] = self._resume_deadline_ts(now)
             self._save_task_locked(key)
             self._condition.notify_all()
 
@@ -1608,7 +1704,8 @@ class ImageTaskService:
                 if _clean(task.get("conversation_id")):
                     task["status"] = TASK_STATUS_TIMEOUT_PENDING
                     task["progress"] = "timeout_pending"
-                    task["next_resume_ts"] = time.time() + 1.0
+                    task["next_resume_ts"] = time.time() + self._resume_delay_secs(1)
+                    task["resume_deadline_ts"] = self._resume_deadline_ts()
                     task["error"] = task.get("error") or "服务已重启，任务进入续轮询"
                 elif isinstance(task.get("payload"), dict) and isinstance(task.get("identity"), dict):
                     task["status"] = TASK_STATUS_QUEUED

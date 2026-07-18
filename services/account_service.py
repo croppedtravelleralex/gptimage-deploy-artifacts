@@ -59,6 +59,7 @@ class AccountService:
         self._accounts = self._load_accounts()
         self._image_inflight: dict[str, int] = {}
         self._image_preflight_failed_until: dict[str, float] = {}
+        self._cohort_pause_until: dict[str, float] = {}
         self._token_aliases: dict[str, str] = {}
         self._cumulative_total = self._load_cumulative_total()
         self._last_refresh_tokens: list[str] = []
@@ -234,11 +235,180 @@ class AccountService:
             return False
         if account.get("status") in {"禁用", "限流", "异常"}:
             return False
+        if bool(account.get("image_soft_capped")):
+            restore_at = AccountService._parse_time(account.get("restore_at") or account.get("image_gen_window_reset_at"))
+            if restore_at is None:
+                return False
+            now = datetime.now(timezone.utc)
+            if restore_at.tzinfo is None:
+                restore_at = restore_at.replace(tzinfo=timezone.utc)
+            if now < restore_at:
+                return False
+            # 窗口已过：软熔断失效，允许调度（不依赖 status 自愈）
         if AccountService._is_true_unlimited_image_account(account):
             return True
         if bool(account.get("image_quota_unknown")):
             return True
         return int(account.get("quota") or 0) > 0
+
+    def _is_image_interval_ready(self, account: dict) -> bool:
+        settings = config.get_scheduler_settings()
+        if not settings.get("enabled"):
+            return True
+        # fail-streak / 429 cooldown
+        try:
+            cool_until = float(account.get("image_fail_cooldown_until") or 0)
+        except (TypeError, ValueError):
+            cool_until = 0.0
+        if cool_until > time.time():
+            return False
+        next_ok = account.get("image_next_ok_ts")
+        try:
+            next_ok_ts = float(next_ok)
+        except (TypeError, ValueError):
+            return True
+        if next_ok_ts <= 0:
+            return True
+        return time.time() >= next_ok_ts
+
+    def _is_text_interval_ready(self, account: dict) -> bool:
+        settings = config.get_scheduler_settings()
+        if not settings.get("enabled"):
+            return True
+        next_ok = account.get("text_next_ok_ts")
+        try:
+            next_ok_ts = float(next_ok)
+        except (TypeError, ValueError):
+            return True
+        if next_ok_ts <= 0:
+            return True
+        return time.time() >= next_ok_ts
+
+    def _cohort_paused(self, account: dict) -> bool:
+        settings = config.get_scheduler_settings()
+        if not settings.get("enabled"):
+            return False
+        cohort = str(account.get("cohort_id") or "").strip()
+        if not cohort:
+            return False
+        until = float(self._cohort_pause_until.get(cohort) or 0)
+        return until > time.time()
+
+    def _note_cohort_terminal(self, account: dict) -> None:
+        settings = config.get_scheduler_settings()
+        if not settings.get("enabled"):
+            return
+        cohort = str(account.get("cohort_id") or "").strip()
+        if not cohort:
+            return
+        threshold = int(settings.get("cohort_terminal_threshold") or 2)
+        pause_hours = float(settings.get("cohort_pause_hours") or 24)
+        if not hasattr(self, "_cohort_terminal_hits"):
+            self._cohort_terminal_hits = {}
+        self._cohort_terminal_hits[cohort] = int(self._cohort_terminal_hits.get(cohort) or 0) + 1
+        if self._cohort_terminal_hits[cohort] >= threshold:
+            self._cohort_pause_until[cohort] = time.time() + pause_hours * 3600.0
+
+    def _apply_humanlike_quota_fields(self, account: dict) -> dict:
+        """根据 limits_progress 更新 peak/soft band；scheduler 关闭时仅同步 peak 字段。"""
+        from services.humanlike_scheduler import effective_daily_soft, update_quota_peak_state
+
+        settings = config.get_scheduler_settings()
+        limits = account.get("limits_progress")
+        derived = self._extract_image_quota_state(limits)
+        if derived is None:
+            return account
+        remaining, restore_at = derived
+        soft = effective_daily_soft(
+            float(settings.get("daily_usage_ratio") or 0.7),
+            account,
+            new_account_cap=float(settings.get("new_account_usage_cap") or 0.4),
+        )
+        state = update_quota_peak_state(
+            remaining=remaining,
+            reset_after=restore_at,
+            prev_peak=int(account.get("image_gen_window_peak") or 0),
+            prev_reset_at=str(account.get("image_gen_window_reset_at") or "") or None,
+            prev_soft_band=float(account["image_soft_band"]) if account.get("image_soft_band") is not None else None,
+            soft=soft,
+        )
+        account["image_gen_window_peak"] = state.peak
+        account["image_gen_window_reset_at"] = state.reset_at
+        account["image_soft_band"] = state.soft_band
+        account["image_soft_used_ratio"] = state.used_ratio
+        if settings.get("enabled") and state.soft_capped:
+            # 软熔断只用 flag，禁止改 status=限流（否则 restore 后仍被 status 门禁卡死）
+            account["image_soft_capped"] = True
+            if state.reset_at:
+                account["restore_at"] = state.reset_at
+        elif remaining > 0 and account.get("image_soft_capped") and not state.soft_capped:
+            account["image_soft_capped"] = False
+            # 愈合历史误写：软熔断曾把 status 打成限流
+            if account.get("status") == "限流":
+                account["status"] = "正常"
+        return account
+
+    def _stamp_image_next_ok(self, account: dict) -> dict:
+        from services.humanlike_scheduler import compute_submit_gap_seconds
+
+        settings = config.get_scheduler_settings()
+        if not settings.get("enabled"):
+            return account
+        gap = compute_submit_gap_seconds(
+            base_sec=float(settings.get("image_min_interval_sec") or 60),
+            jitter_lo=float(settings.get("jitter_lo") or 0.65),
+            jitter_hi=float(settings.get("jitter_hi") or 1.45),
+            poisson_lambda_sec=float(settings.get("extra_poisson_lambda_sec") or 8),
+        )
+        account["image_next_ok_ts"] = time.time() + gap
+        account["image_last_gap_sec"] = gap
+        return account
+
+    def _stamp_text_next_ok(self, account: dict) -> dict:
+        from services.humanlike_scheduler import compute_submit_gap_seconds
+
+        settings = config.get_scheduler_settings()
+        if not settings.get("enabled"):
+            return account
+        gap = compute_submit_gap_seconds(
+            base_sec=float(settings.get("text_min_interval_sec") or 30),
+            jitter_lo=float(settings.get("jitter_lo") or 0.65),
+            jitter_hi=float(settings.get("jitter_hi") or 1.45),
+            poisson_lambda_sec=float(settings.get("text_poisson_lambda_sec") or 5),
+        )
+        account["text_next_ok_ts"] = time.time() + gap
+        account["text_last_gap_sec"] = gap
+        return account
+
+    def apply_429_cooldown(self, access_token: str, error: object = None) -> None:
+        """上游 429 时按 scheduler.cooldown_429_sec 冷却账号（不改 status，避免永久卡死）。"""
+        settings = config.get_scheduler_settings()
+        if not settings.get("enabled") or not access_token:
+            return
+        cool = float(settings.get("cooldown_429_sec") or 900)
+        with self._lock:
+            token = self._resolve_access_token_locked(access_token)
+            current = self._accounts.get(token)
+            if current is None:
+                return
+            next_item = dict(current)
+            next_item["image_fail_cooldown_until"] = time.time() + cool
+            next_item["last_refresh_error"] = str(error or "http_429")[:500]
+            account = self._normalize_account(next_item)
+            if account is None:
+                return
+            self._accounts[token] = account
+            self._persist_upsert_accounts([account])
+
+    def _effective_image_global_concurrency(self, ready_count: int | None = None) -> int:
+        configured = max(0, int(config.image_global_concurrency or 0))
+        settings = config.get_scheduler_settings()
+        if not settings.get("enabled") or not settings.get("auto_scale_global_concurrency"):
+            return configured
+        if ready_count is None:
+            ready_count = len(self._list_ready_candidate_tokens())
+        floor = configured if configured > 0 else 10
+        return max(floor, int(ready_count or 0))
 
     @classmethod
     def _is_true_unlimited_image_account(cls, account: dict) -> bool:
@@ -443,17 +613,39 @@ class AccountService:
             return False
         return True
 
-    def _image_candidate_sort_key(self, account: dict) -> tuple[int, int, float, int, float]:
+    def _image_candidate_sort_key(self, account: dict) -> tuple[float, int, int, float, int, float]:
+        from services.humanlike_scheduler import night_or_lunch_soft_weight, resolve_account_tz_name
+
         refreshed_at = self._image_quota_refresh_time(account)
         last_used_at = self._parse_time(account.get("last_used_at"))
         refresh_ts = refreshed_at.timestamp() if refreshed_at is not None else 0.0
         used_ts = last_used_at.timestamp() if last_used_at is not None else 0.0
         quota = int(account.get("quota") or 0)
-        # Prefer spreading load across unused / least recently used accounts.
-        # Putting newest quota refresh first repeatedly hammers the account that
-        # was just verified/relogged, which is exactly the wrong behavior after a
-        # recovery batch where many accounts are refreshed within seconds.
-        return (0 if refreshed_at is not None else 1, 0 if last_used_at is None else 1, used_ts, -quota, -refresh_ts)
+        settings = config.get_scheduler_settings()
+        weight = 1.0
+        if settings.get("enabled"):
+            pro = config.get_proactive_refresh_settings()
+            tz = resolve_account_tz_name(
+                account,
+                timezone_from_egress=bool(pro.get("timezone_from_egress")),
+                default_tz=str(pro.get("timezone") or "Asia/Singapore"),
+            )
+            weight = night_or_lunch_soft_weight(
+                datetime.now(timezone.utc),
+                tz,
+                night_weight=float(settings.get("night_soft_weight") or 0.4),
+                lunch_weight=float(settings.get("lunch_soft_weight") or 0.85),
+            )
+        # Lower weight → sort later: encode as (1/weight) ascending preference for higher weight first.
+        weight_rank = 1.0 / max(0.05, float(weight))
+        return (
+            weight_rank,
+            0 if refreshed_at is not None else 1,
+            0 if last_used_at is None else 1,
+            used_ts,
+            -quota,
+            -refresh_ts,
+        )
 
     def _is_image_preflight_backed_off(self, access_token: str) -> bool:
         token = self._resolve_access_token_locked(access_token)
@@ -619,13 +811,21 @@ class AccountService:
         derived_quota_state = self._extract_image_quota_state(normalized["limits_progress"])
         if (
             derived_quota_state is not None
-            and normalized["status"] == "正常"
             and not self._is_true_unlimited_image_account(normalized)
+            and (
+                normalized["status"] == "正常"
+                or bool(normalized.get("image_soft_capped"))
+                or (
+                    normalized["status"] == "限流"
+                    and int(derived_quota_state[0] or 0) > 0
+                )
+            )
         ):
             derived_quota, derived_restore_at = derived_quota_state
             normalized["quota"] = derived_quota
             normalized["restore_at"] = derived_restore_at
             normalized["image_quota_unknown"] = False
+            normalized = self._apply_humanlike_quota_fields(normalized)
         normalized["default_model_slug"] = normalized.get("default_model_slug") or None
         normalized["restore_at"] = normalized.get("restore_at") or None
         normalized["success"] = int(normalized.get("success") or 0)
@@ -640,6 +840,9 @@ class AccountService:
             except (TypeError, ValueError):
                 normalized[traffic_key] = None
         normalized["traffic_updated_at"] = normalized.get("traffic_updated_at") or None
+        normalized["maturity_stage"] = str(normalized.get("maturity_stage") or "").strip() or None
+        normalized["maturity_checked_at"] = normalized.get("maturity_checked_at") or None
+        normalized["cohort_id"] = str(normalized.get("cohort_id") or "").strip() or None
         normalized["invalid_count"] = int(normalized.get("invalid_count") or 0)
         normalized["last_used_at"] = normalized.get("last_used_at")
         normalized["last_invalid_at"] = normalized.get("last_invalid_at") or None
@@ -1053,10 +1256,11 @@ class AccountService:
         platform_oauth_client_id = self._OAUTH_CLIENT_ID
         platform_oauth_redirect_uri = "https://platform.openai.com/auth/callback"
 
-        from services.account_fingerprint import build_aligned_chrome_fp
+        from services.account_fingerprint import build_diversified_fp
         from services.proxy_service import proxy_settings
 
-        fp = build_aligned_chrome_fp()
+        seed = str((account or {}).get("email") or proxy or "login")
+        fp = build_diversified_fp(seed)
         user_agent = fp["user-agent"]
         device_id = fp["oai-device-id"]
 
@@ -1411,14 +1615,16 @@ class AccountService:
             plan_types: set[str] | tuple[str, ...] | None = None,
     ) -> list[str]:
         excluded = set(excluded_tokens or set())
-        recent_candidates: list[tuple[tuple[int, float, int, float], str]] = []
-        fallback_candidates: list[tuple[tuple[int, float, int, float], str]] = []
+        recent_candidates: list[tuple[tuple, str]] = []
+        fallback_candidates: list[tuple[tuple, str]] = []
         with self._lock:
             accounts = [dict(item) for item in self._accounts.values()]
             for item in accounts:
                 token = str(item.get("access_token") or "")
                 if (
                         self._is_image_account_available(item)
+                        and self._is_image_interval_ready(item)
+                        and not self._cohort_paused(item)
                         and not self._has_image_account_failure_evidence(item)
                         and not self._requires_panda_receive_verification(item)
                         and self._account_matches_plan_type(item, plan_type)
@@ -1471,7 +1677,6 @@ class AccountService:
         - dispatchable_candidate_count：再扣除全局并发闸门后，当前真正可派发的候选数。
         """
         max_account_concurrency = max(1, int(config.image_account_concurrency or 1))
-        global_limit = max(0, int(config.image_global_concurrency or 0))
         queue_timeout = float(config.image_global_queue_timeout_secs or 0.0)
 
         with self._image_slot_condition:
@@ -1495,6 +1700,7 @@ class AccountService:
                 source_type=source_type,
                 plan_types=plan_types,
             )
+            global_limit = self._effective_image_global_concurrency(len(ready_tokens))
             available_tokens = [
                 token
                 for token in ready_tokens
@@ -1527,7 +1733,8 @@ class AccountService:
         with self._image_slot_condition:
             queue_started_at = time.monotonic()
             while True:
-                global_limit = int(config.image_global_concurrency or 0)
+                ready = self._list_ready_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types)
+                global_limit = self._effective_image_global_concurrency(len(ready))
                 if (
                         not skip_global_limit
                         and global_limit > 0
@@ -1540,7 +1747,7 @@ class AccountService:
                         )
                     self._image_slot_condition.wait(timeout=min(1.0, queue_timeout))
                     continue
-                if not self._list_ready_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types):
+                if not ready:
                     raise RuntimeError(
                         f"no available {plan_type or source_type or ''} image quota".replace("  ", " ").strip()
                         if plan_type or source_type else "no available image quota"
@@ -1652,6 +1859,8 @@ class AccountService:
                 if account.get("status") not in {"禁用", "异常"}
                    and (token := account.get("access_token") or "")
                    and token not in excluded
+                   and self._is_text_interval_ready(account)
+                   and not self._cohort_paused(account)
             ]
             if not candidates:
                 return ""
@@ -1688,6 +1897,7 @@ class AccountService:
                 return
             next_item = dict(current)
             next_item["last_used_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            next_item = self._stamp_text_next_ok(next_item)
             account = self._normalize_account(next_item)
             if account is None:
                 return
@@ -2054,8 +2264,13 @@ class AccountService:
         *,
         reason: str = "",
         quiet: bool = True,
+        clear_isolation: bool = False,
     ) -> dict | None:
-        """显式身份修复/迁移入口：允许改绑 proxy / fp，并写审计字段。"""
+        """显式身份修复/迁移入口：允许改绑 proxy / fp，并写审计字段。
+
+        clear_isolation=True 时允许把 identity_isolated 升回 verified_ready
+        （仅用于确认已换到独立 proxy binding 的运维换绑）。
+        """
 
         if not access_token:
             return None
@@ -2065,7 +2280,8 @@ class AccountService:
             if current is None:
                 return None
             incoming = dict(updates or {})
-            incoming = self._preserve_identity_isolated(current, incoming)
+            if not clear_isolation:
+                incoming = self._preserve_identity_isolated(current, incoming)
             protected, _ = merge_account_identity(current, incoming, allow_rebind=True)
             merged = {
                 **current,
@@ -2149,6 +2365,7 @@ class AccountService:
             next_item["last_refresh_error_at"] = now.isoformat()
             account = self._normalize_account(next_item)
             if account is not None:
+                self._note_cohort_terminal(account)
                 self._accounts[access_token] = account
                 self._persist_upsert_accounts([account])
             if should_defer:
@@ -2175,6 +2392,7 @@ class AccountService:
             image_quota_unknown = bool(next_item.get("image_quota_unknown"))
             if success:
                 next_item["success"] = int(next_item.get("success") or 0) + 1
+                next_item["image_fail_streak"] = 0
                 if not is_true_unlimited and not image_quota_unknown:
                     next_item["quota"] = max(0, int(next_item.get("quota") or 0) - 1)
                 if not is_true_unlimited and not image_quota_unknown and next_item["quota"] == 0:
@@ -2182,8 +2400,22 @@ class AccountService:
                     next_item["restore_at"] = next_item.get("restore_at") or None
                 elif next_item.get("status") == "限流":
                     next_item["status"] = "正常"
+                next_item = self._stamp_image_next_ok(next_item)
+                next_item = self._apply_humanlike_quota_fields(next_item)
             else:
                 next_item["fail"] = int(next_item.get("fail") or 0) + 1
+                streak = int(next_item.get("image_fail_streak") or 0) + 1
+                next_item["image_fail_streak"] = streak
+                settings = config.get_scheduler_settings()
+                if settings.get("enabled") and streak >= int(settings.get("fail_streak_threshold") or 3):
+                    from services.humanlike_scheduler import fail_cooldown_seconds
+
+                    cool = fail_cooldown_seconds(
+                        min_sec=float(settings.get("fail_cooldown_min_sec") or 1800),
+                        max_sec=float(settings.get("fail_cooldown_max_sec") or 5400),
+                    )
+                    next_item["image_fail_cooldown_until"] = time.time() + cool
+                next_item = self._stamp_image_next_ok(next_item)
             account = self._normalize_account(next_item)
             if account is None:
                 return None
