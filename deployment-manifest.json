@@ -7,7 +7,7 @@
   "files": {
     "services/openai_backend_api.py": "91001d147685b658e3ea2757939037510cdab4d5f61473b8ebbe31b656e9a460",
     "services/protocol/chatgpt_web_request.py": "9426c5ff4756c370dd2a56261caedcf415e763e15bebd7bfcc24af890be2c430",
-    "services/config.py": "94054cd3887c43ebf548a8bc1110f31562a69dbdfae577cf6bae98f9a5f77574",
+    "services/config.py": "6607876b07d0d4f21b5263a2114f0c942494c04d85420e2d51cb33c489454706",
     "utils/turnstile.py": "9817bf49777d027ee44aace935acc23b8248e3877336381d9487c063d4695891"
   },
   "verification": {
