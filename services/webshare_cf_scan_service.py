@@ -45,8 +45,21 @@ def _settings() -> dict[str, Any]:
 
 def _pool_path(settings: dict[str, Any]) -> Path | None:
     override = str(settings.get("pool_path") or "").strip()
-    if override:
-        return Path(override)
+    if not override:
+        return None
+    candidate = Path(override)
+    if candidate.is_file():
+        return candidate
+    try:
+        from services.config import DATA_DIR
+
+        basename = candidate.name
+        for rel in (Path("runlogs") / basename, Path(basename)):
+            under_data = Path(DATA_DIR) / rel
+            if under_data.is_file():
+                return under_data
+    except Exception:
+        pass
     return None
 
 

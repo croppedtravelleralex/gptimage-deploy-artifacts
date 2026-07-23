@@ -139,7 +139,7 @@ pool_candidates = [
 ]
 for candidate in pool_candidates:
     if Path(candidate).is_file():
-        scan["pool_path"] = candidate
+        scan["pool_path"] = Path(candidate).name
         break
 data["webshare_cf_scan"] = scan
 path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -163,6 +163,7 @@ docker exec \
   /app/services/proxy_cf_probe.py \
   /app/services/webshare_cf_scan_service.py \
   /app/services/proxy_quarantine.py \
+  /app/services/proxy_cf_failover.py \
   /app/api/ops.py \
   /app/api/app.py \
   /app/api/support.py
