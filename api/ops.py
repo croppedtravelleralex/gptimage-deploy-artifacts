@@ -18,6 +18,7 @@ from services.risk_dashboard_service import build_calendar, build_dashboard
 from services.risk_metrics_store import list_reports
 from services.text_nurture_service import text_nurture_service
 from services.account_warmup_service import account_warmup_service
+from services.webshare_cf_scan_service import webshare_cf_scan_service
 
 
 class NurtureEnableRequest(BaseModel):
@@ -159,6 +160,24 @@ def create_router() -> APIRouter:
                 body.custom_matrix,
             )
         except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+
+    @router.get("/api/ops/webshare-cf-scan/status")
+    async def webshare_cf_scan_status(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return await run_in_threadpool(webshare_cf_scan_service.status)
+
+    @router.get("/api/ops/webshare-cf-scan/inventory")
+    async def webshare_cf_scan_inventory(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return await run_in_threadpool(webshare_cf_scan_service.inventory)
+
+    @router.post("/api/ops/webshare-cf-scan/run-once")
+    async def webshare_cf_scan_run_once(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        try:
+            return await run_in_threadpool(webshare_cf_scan_service.run_once, True)
+        except Exception as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
     @router.get("/api/ops/humanlike-dashboard")

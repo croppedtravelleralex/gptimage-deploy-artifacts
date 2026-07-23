@@ -15,6 +15,9 @@ PY_FILES=(
   services/config.py
   services/account_service.py
   services/risk_dashboard_service.py
+  services/proxy_cf_probe.py
+  services/webshare_cf_scan_service.py
+  services/proxy_quarantine.py
   api/ops.py
   api/app.py
   api/support.py
@@ -110,8 +113,35 @@ nurture.update(
     }
 )
 data["text_nurture"] = nurture
+scan = dict(data.get("webshare_cf_scan") or {})
+scan.update(
+    {
+        "enabled": True,
+        "interval_min_sec": 3600,
+        "interval_max_sec": 14400,
+        "batch_size": 20,
+        "workers": 4,
+        "auto_quarantine": True,
+        "skip_quarantined": True,
+        "active_window": ["08:00", "23:00"],
+        "timezone": "Asia/Singapore",
+        "startup_delay_sec": 180,
+        "probe_timeout_sec": 45.0,
+    }
+)
+pool_candidates = [
+    "/root/gptimage/data/runlogs/webshare_100_proxies.secret.txt",
+    "/root/gptimage/data/runlogs/webshare_pool_100.txt",
+    "/root/gptimage/data/runlogs/webshare_good_csrf_200.secret.txt",
+]
+for candidate in pool_candidates:
+    if Path(candidate).is_file():
+        scan["pool_path"] = candidate
+        break
+data["webshare_cf_scan"] = scan
 path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 print("config_nurture_ok")
+print("config_webshare_cf_scan_ok", scan.get("pool_path") or "default_pool")
 PY
 
 DEPLOYED=1
@@ -127,6 +157,9 @@ docker exec \
   /app/services/config.py \
   /app/services/account_service.py \
   /app/services/risk_dashboard_service.py \
+  /app/services/proxy_cf_probe.py \
+  /app/services/webshare_cf_scan_service.py \
+  /app/services/proxy_quarantine.py \
   /app/api/ops.py \
   /app/api/app.py \
   /app/api/support.py
@@ -148,6 +181,7 @@ test "$HEALTH_OK" = "1"
 AUTH=$(python3 -c "import json; print(json.load(open('$ROOT/config.json')).get('auth-key',''))")
 curl -fsS -H "Authorization: Bearer $AUTH" 'http://127.0.0.1:8012/api/ops/nurture/status' > "$BACKUP/nurture-status.json"
 curl -fsS -H "Authorization: Bearer $AUTH" 'http://127.0.0.1:8012/api/ops/ip-nurture/presets' > "$BACKUP/ip-nurture-presets.json"
+curl -fsS -H "Authorization: Bearer $AUTH" 'http://127.0.0.1:8012/api/ops/webshare-cf-scan/status' > "$BACKUP/webshare-cf-scan-status.json"
 python3 - "$BACKUP" <<'PY'
 import json
 import sys
@@ -156,10 +190,23 @@ from pathlib import Path
 backup = Path(sys.argv[1])
 nurture = json.loads((backup / "nurture-status.json").read_text(encoding="utf-8"))
 presets = json.loads((backup / "ip-nurture-presets.json").read_text(encoding="utf-8"))
+scan = json.loads((backup / "webshare-cf-scan-status.json").read_text(encoding="utf-8"))
 print("nurture_enabled", nurture.get("enabled"), "running", nurture.get("running"))
 print("presets", len(presets.get("presets") or []))
+print(
+    "webshare_cf_scan",
+    scan.get("enabled"),
+    "pool",
+    (scan.get("counts") or {}).get("pool_total"),
+    "available",
+    (scan.get("counts") or {}).get("available_count"),
+    "cf403",
+    (scan.get("counts") or {}).get("cf403_count"),
+)
 assert len(presets.get("presets") or []) >= 25
 assert nurture.get("enabled") is True
+assert "inventory" in scan
+assert "counts" in scan
 PY
 
 DEPLOYED=0

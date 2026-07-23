@@ -770,6 +770,21 @@ DEFAULT_PROACTIVE_REFRESH_SETTINGS: dict[str, object] = {
     "startup_delay_sec": 30,
 }
 
+DEFAULT_WEBSHARE_CF_SCAN_SETTINGS: dict[str, object] = {
+    "enabled": False,
+    "pool_path": "",
+    "interval_min_sec": 3600,
+    "interval_max_sec": 14400,
+    "batch_size": 20,
+    "workers": 4,
+    "auto_quarantine": True,
+    "skip_quarantined": True,
+    "active_window": ["08:00", "23:00"],
+    "timezone": "Asia/Singapore",
+    "startup_delay_sec": 120,
+    "probe_timeout_sec": 45.0,
+}
+
 
 def _normalize_str_list(value: object, *, default: list[str]) -> list[str]:
     if not isinstance(value, list):
@@ -1003,6 +1018,59 @@ def _normalize_proactive_refresh_settings(value: object) -> dict[str, object]:
         "startup_delay_sec": max(
             0.0,
             float(source.get("startup_delay_sec", DEFAULT_PROACTIVE_REFRESH_SETTINGS["startup_delay_sec"]) or 0.0),
+        ),
+    }
+
+
+def _normalize_webshare_cf_scan_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    interval_min = max(300.0, float(source.get("interval_min_sec", DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["interval_min_sec"]) or 3600))
+    interval_max = max(
+        interval_min,
+        float(source.get("interval_max_sec", DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["interval_max_sec"]) or interval_min),
+    )
+    return {
+        "enabled": _normalize_bool(source.get("enabled"), bool(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["enabled"])),
+        "pool_path": str(source.get("pool_path") or DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["pool_path"]).strip(),
+        "interval_min_sec": interval_min,
+        "interval_max_sec": interval_max,
+        "batch_size": max(
+            1,
+            _normalize_positive_int(
+                source.get("batch_size"),
+                int(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["batch_size"]),
+                1,
+            ),
+        ),
+        "workers": max(
+            1,
+            _normalize_positive_int(
+                source.get("workers"),
+                int(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["workers"]),
+                1,
+            ),
+        ),
+        "auto_quarantine": _normalize_bool(
+            source.get("auto_quarantine"),
+            bool(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["auto_quarantine"]),
+        ),
+        "skip_quarantined": _normalize_bool(
+            source.get("skip_quarantined"),
+            bool(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["skip_quarantined"]),
+        ),
+        "active_window": _normalize_window_pair(
+            source.get("active_window"),
+            list(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["active_window"]),  # type: ignore[arg-type]
+        ),
+        "timezone": str(source.get("timezone") or DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["timezone"]).strip()
+        or "Asia/Singapore",
+        "startup_delay_sec": max(
+            0.0,
+            float(source.get("startup_delay_sec", DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["startup_delay_sec"]) or 0.0),
+        ),
+        "probe_timeout_sec": max(
+            10.0,
+            float(source.get("probe_timeout_sec", DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["probe_timeout_sec"]) or 45.0),
         ),
     }
 
@@ -1632,6 +1700,7 @@ class ConfigStore:
         data["outlook_auto_recovery"] = self.get_outlook_auto_recovery_settings()
         data["scheduler"] = self.get_scheduler_settings()
         data["proactive_refresh"] = self.get_proactive_refresh_settings()
+        data["webshare_cf_scan"] = self.get_webshare_cf_scan_settings()
         data["panda_sync"] = self.get_public_panda_sync_settings()
         data.pop("auth-key", None)
         return data
@@ -1671,6 +1740,9 @@ class ConfigStore:
 
     def get_proactive_refresh_settings(self) -> dict[str, object]:
         return _normalize_proactive_refresh_settings(self.data.get("proactive_refresh"))
+
+    def get_webshare_cf_scan_settings(self) -> dict[str, object]:
+        return _normalize_webshare_cf_scan_settings(self.data.get("webshare_cf_scan"))
 
     def get_workload_settings(self) -> dict[str, object]:
         return _normalize_workload_settings(self.data.get("workload"))
@@ -1736,6 +1808,8 @@ class ConfigStore:
             next_data["scheduler"] = _normalize_scheduler_settings(next_data.get("scheduler"))
         if "proactive_refresh" in next_data:
             next_data["proactive_refresh"] = _normalize_proactive_refresh_settings(next_data.get("proactive_refresh"))
+        if "webshare_cf_scan" in next_data:
+            next_data["webshare_cf_scan"] = _normalize_webshare_cf_scan_settings(next_data.get("webshare_cf_scan"))
         if "workload" in next_data:
             next_data["workload"] = _normalize_workload_settings(next_data.get("workload"))
         if "text_nurture" in next_data:
