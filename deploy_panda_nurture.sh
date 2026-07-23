@@ -18,6 +18,7 @@ PY_FILES=(
   services/proxy_cf_probe.py
   services/webshare_cf_scan_service.py
   services/proxy_quarantine.py
+  services/proxy_cf_failover.py
   api/ops.py
   api/app.py
   api/support.py

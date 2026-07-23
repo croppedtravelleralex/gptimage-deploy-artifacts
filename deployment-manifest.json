@@ -3,17 +3,18 @@
   "files": {
     "services/ip_nurture_schedule.py": "1b068b15d0e7bc04aba57d2629a9bf2d75bc8574070e90a2882d943026322de1",
     "services/text_nurture_service.py": "c366c0d0499ad17adc4d0493a24f48b3cf68cdb447bebf1736a2d20a22998e5c",
-    "services/config.py": "a80536dd3542ad502556c617ed88db8d373ca5bdae3f36447329fcd5d311fa09",
-    "services/account_service.py": "0b91bfa60b6cc10470dd43393e29d38ed8aa63912b8b66f945632adb40941ad5",
+    "services/config.py": "9cfc5cce537f0460ed67bbaf7bc2497966907539ac59111368c2fa9dd43ad41b",
+    "services/account_service.py": "443eefcf27a8eddc1c59c285b8cf45ad635857b889ac1994c755c52211fab156",
     "services/risk_dashboard_service.py": "c94a306f2ab76faabb1e237b8fdb88cc0461c130fb7d19ac4c8f50d057723757",
     "services/proxy_cf_probe.py": "02b60c0644676badbd3fe99c389ad7ab921d9dd3138ae27394e43dc571527c54",
     "services/webshare_cf_scan_service.py": "8e4d284fde5c16b7ee760c54ce4edfc4840b554dcc617771422b06b6f4d772f1",
     "services/proxy_quarantine.py": "9b617906bcc34e73c77708637b440c6a62ca7c6b58862d0c48b35701c3854408",
+    "services/proxy_cf_failover.py": "31df28554b5b16b2586e869375e3971a75c6c894b2935981664c69de0f5c936d",
     "api/ops.py": "f5edd649d16329b89147fc827051a0c47016ecaf141195f7b6b614d751d9a91d",
     "api/app.py": "bb15231df6e9bd361a8909e5fa02cceb0fbacb456605d586f8828ae93b7190d1",
     "api/support.py": "5fcdc4259b55107e55f2822ec8fdafa692f9c2c1ed4e6fe643ec2161bbf83856",
-    "web_dist.tgz": "8e7513332b1b04327a73419618c72c8a1f77a88b110d71808f320035b1bc3c07",
-    "deploy_panda_nurture.sh": "4d7f832c557fc7831356f84590e21f862d174d589bee3dc5966d19a5077f6b5e",
+    "web_dist.tgz": "b413d7cd230bdddbc6cafa0618ec82819f88ff610af62c2dedb1fed2c4263d39",
+    "deploy_panda_nurture.sh": "e7421d00a8c489c300cb5f4e84319e34203074d5d49f1153bd6cba30d87e4f67",
     "README.md": "ff8adc19e1e8e8349e11f0ab13c551a15d795d9c654de44975b9682b27f4c8ca"
   }
 }

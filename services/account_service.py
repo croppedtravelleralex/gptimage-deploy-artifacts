@@ -2022,6 +2022,7 @@ class AccountService:
             plan_types: set[str] | tuple[str, ...] | None = None,
             skip_global_limit: bool = False,
             preferred_email: str = "",
+            excluded_tokens: set[str] | None = None,
     ) -> str:
         """从候选池中获取一个可用的图片生图 token。
 
@@ -2093,7 +2094,7 @@ class AccountService:
             plan_types=plan_types,
         ))
         max_attempts = min(max(1, int(config.image_token_max_attempts or 20)), max(1, candidate_count))
-        attempted_tokens: set[str] = set()
+        attempted_tokens: set[str] = set(excluded_tokens or set())
         try:
             for _attempt in range(max_attempts):
                 access_token = self._acquire_next_candidate_token(

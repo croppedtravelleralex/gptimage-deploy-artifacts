@@ -76,6 +76,16 @@ DEFAULT_IMAGE_TASK_QUEUE = {
     "pre_conversation_retry_backoff_secs": 1,
 }
 
+DEFAULT_IMAGE_PIPELINE = {
+    "enabled": True,
+    "prompt_slots": 10,
+    "sse_slots": 10,
+    "download_concurrency": 8,
+    "asset_upload_concurrency": 8,
+    "global_queue_max": 200,
+    "relaxed_per_user_running": True,
+}
+
 DEFAULT_IMAGE_REFERENCE_ASSETS = {
     "asset_ttl_seconds": 6 * 3600,
     "upload_global_concurrency": 6,
@@ -381,6 +391,34 @@ def _normalize_image_task_queue_settings(value: object) -> dict[str, object]:
         "pre_conversation_timeout_secs": _normalize_positive_int(source.get("pre_conversation_timeout_secs"), int(DEFAULT_IMAGE_TASK_QUEUE["pre_conversation_timeout_secs"]), 30),
         "pre_conversation_max_attempts": _normalize_positive_int(source.get("pre_conversation_max_attempts"), int(DEFAULT_IMAGE_TASK_QUEUE["pre_conversation_max_attempts"]), 1),
         "pre_conversation_retry_backoff_secs": _normalize_positive_int(source.get("pre_conversation_retry_backoff_secs"), int(DEFAULT_IMAGE_TASK_QUEUE["pre_conversation_retry_backoff_secs"]), 0),
+    }
+
+
+def _normalize_image_pipeline_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    return {
+        "enabled": _normalize_bool(source.get("enabled"), bool(DEFAULT_IMAGE_PIPELINE["enabled"])),
+        "prompt_slots": _normalize_positive_int(source.get("prompt_slots"), int(DEFAULT_IMAGE_PIPELINE["prompt_slots"]), 1),
+        "sse_slots": _normalize_positive_int(source.get("sse_slots"), int(DEFAULT_IMAGE_PIPELINE["sse_slots"]), 1),
+        "download_concurrency": _normalize_positive_int(
+            source.get("download_concurrency"),
+            int(DEFAULT_IMAGE_PIPELINE["download_concurrency"]),
+            1,
+        ),
+        "asset_upload_concurrency": _normalize_positive_int(
+            source.get("asset_upload_concurrency"),
+            int(DEFAULT_IMAGE_PIPELINE["asset_upload_concurrency"]),
+            1,
+        ),
+        "global_queue_max": _normalize_positive_int(
+            source.get("global_queue_max"),
+            int(DEFAULT_IMAGE_PIPELINE["global_queue_max"]),
+            1,
+        ),
+        "relaxed_per_user_running": _normalize_bool(
+            source.get("relaxed_per_user_running"),
+            bool(DEFAULT_IMAGE_PIPELINE["relaxed_per_user_running"]),
+        ),
     }
 
 
@@ -1841,6 +1879,9 @@ class ConfigStore:
 
     def get_image_task_queue_settings(self) -> dict[str, object]:
         return _normalize_image_task_queue_settings(self.data.get("image_task_queue"))
+
+    def get_image_pipeline_settings(self) -> dict[str, object]:
+        return _normalize_image_pipeline_settings(self.data.get("image_pipeline"))
 
     def get_image_reference_assets_settings(self) -> dict[str, object]:
         return _normalize_image_reference_assets_settings(self.data.get("image_reference_assets"))
