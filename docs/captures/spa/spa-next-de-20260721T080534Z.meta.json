@@ -1,0 +1,15 @@
+{
+  "har": "D:\\SelfMadeTool\\AutoRegister\\gptimage\\docs\\captures\\spa\\spa-next-de-20260721T080534Z.har",
+  "captured_at": "20260721T080534Z",
+  "proxy": "http://127.0.0.1:7897",
+  "email": "qaflow0ytb7bbp0z@proton.me",
+  "has_session_token": true,
+  "phases": {
+    "upload_attached": true,
+    "search_on": false,
+    "search_off_confirmed": true,
+    "i2i_attempted": true,
+    "i2i_mode": true
+  },
+  "probe_png": "D:\\SelfMadeTool\\AutoRegister\\gptimage\\data\\runlogs\\spa_repro\\bench3\\probe.png"
+}

@@ -1,0 +1,11 @@
+{
+  "har": "D:\\SelfMadeTool\\AutoRegister\\gptimage\\docs\\captures\\spa\\spa-camoufox-20260721T044906Z.har",
+  "email": "qaflow0ytb7bbp0z@proton.me",
+  "session_email": "qaflow0ytb7bbp0z@proton.me",
+  "proxy": "http://127.0.0.1:7897",
+  "url": "https://chatgpt.com/c/6a5efa70-5914-83ec-b561-fd85678d41bd",
+  "captured_at": "20260721T044906Z",
+  "logged_in": true,
+  "login_method": "http_otp_cookie_inject",
+  "has_access_token": true
+}

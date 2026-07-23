@@ -1,0 +1,123 @@
+{
+  "schema_version": "pure-http-webshare-cf-scan/v1",
+  "generated_at": "2026-07-22T13:20:59.511248+00:00",
+  "workers": 5,
+  "probe": "home+requirements_prepare",
+  "summary": {
+    "total": 5,
+    "ok": 1,
+    "cf403": 4
+  },
+  "nodes": [
+    {
+      "ok": false,
+      "proxy_hash": "77844d41cb2a",
+      "egress": {
+        "ok": true,
+        "ip": "92.113.246.215",
+        "elapsed_ms": 511
+      },
+      "home_status": 403,
+      "requirements_ok": false,
+      "cf_observability": {
+        "home_403_soft_fail": true,
+        "home_status": 403,
+        "requirements_cf403": 0,
+        "start_cf403": 0,
+        "tasks_cf403": 0,
+        "propagated_cf": 0
+      },
+      "cf_classification": "cf403",
+      "elapsed_ms": 896,
+      "index": 1
+    },
+    {
+      "ok": false,
+      "proxy_hash": "49675fdabb54",
+      "egress": {
+        "ok": true,
+        "ip": "92.113.246.176",
+        "elapsed_ms": 274
+      },
+      "home_status": 403,
+      "requirements_ok": false,
+      "cf_observability": {
+        "home_403_soft_fail": true,
+        "home_status": 403,
+        "requirements_cf403": 0,
+        "start_cf403": 0,
+        "tasks_cf403": 0,
+        "propagated_cf": 0
+      },
+      "cf_classification": "cf403",
+      "elapsed_ms": 1532,
+      "index": 2
+    },
+    {
+      "ok": true,
+      "proxy_hash": "bea148d29157",
+      "egress": {
+        "ok": true,
+        "ip": "82.21.231.148",
+        "elapsed_ms": 313
+      },
+      "home_status": 200,
+      "requirements_ok": true,
+      "cf_observability": {
+        "home_403_soft_fail": false,
+        "home_status": 200,
+        "requirements_cf403": 0,
+        "start_cf403": 0,
+        "tasks_cf403": 0,
+        "propagated_cf": 0
+      },
+      "cf_classification": "none",
+      "elapsed_ms": 1103,
+      "index": 3
+    },
+    {
+      "ok": false,
+      "proxy_hash": "0cdecec0cf20",
+      "egress": {
+        "ok": true,
+        "ip": "92.113.241.215",
+        "elapsed_ms": 680
+      },
+      "home_status": 403,
+      "requirements_ok": false,
+      "cf_observability": {
+        "home_403_soft_fail": true,
+        "home_status": 403,
+        "requirements_cf403": 0,
+        "start_cf403": 0,
+        "tasks_cf403": 0,
+        "propagated_cf": 0
+      },
+      "cf_classification": "cf403",
+      "elapsed_ms": 835,
+      "index": 4
+    },
+    {
+      "ok": false,
+      "proxy_hash": "e8614fef1bc1",
+      "egress": {
+        "ok": true,
+        "ip": "92.113.236.188",
+        "elapsed_ms": 689
+      },
+      "home_status": 403,
+      "requirements_ok": false,
+      "cf_observability": {
+        "home_403_soft_fail": true,
+        "home_status": 403,
+        "requirements_cf403": 0,
+        "start_cf403": 0,
+        "tasks_cf403": 0,
+        "propagated_cf": 0
+      },
+      "cf_classification": "cf403",
+      "elapsed_ms": 990,
+      "index": 5
+    }
+  ]
+}

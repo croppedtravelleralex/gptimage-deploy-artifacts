@@ -29,7 +29,14 @@ from services.protocol.web_search_tool import (
     search_query_from_messages,
     text_with_url_citations,
 )
-from utils.helper import build_chat_image_markdown_content, extract_chat_image, extract_chat_prompt, is_image_chat_request, parse_image_count
+from utils.helper import (
+    build_chat_image_markdown_content,
+    extract_chat_image,
+    extract_chat_prompt,
+    is_image_chat_request,
+    is_supported_image_model,
+    parse_image_count,
+)
 from utils.image_tokens import (
     chat_usage_from_image_usage,
     count_image_inputs_tokens,
@@ -127,15 +134,29 @@ def stream_text_chat_completion(
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
     sent_role = False
+    account_email = ""
+    try:
+        from services.account_service import account_service
+
+        acct = account_service.get_account(getattr(backend, "access_token", "") or "") or {}
+        account_email = str(acct.get("email") or "").strip()
+    except Exception:
+        account_email = ""
     request = ConversationRequest(model=model, messages=messages, thinking_effort=thinking_effort)
     for delta_text in stream_text_deltas(backend, request):
         if not sent_role:
             sent_role = True
-            yield completion_chunk(model, {"role": "assistant", "content": delta_text}, None, completion_id, created)
+            chunk = completion_chunk(model, {"role": "assistant", "content": delta_text}, None, completion_id, created)
+            if account_email:
+                chunk["_account_email"] = account_email
+            yield chunk
         else:
             yield completion_chunk(model, {"content": delta_text}, None, completion_id, created)
     if not sent_role:
-        yield completion_chunk(model, {"role": "assistant", "content": ""}, None, completion_id, created)
+        chunk = completion_chunk(model, {"role": "assistant", "content": ""}, None, completion_id, created)
+        if account_email:
+            chunk["_account_email"] = account_email
+        yield chunk
     yield completion_chunk(model, {}, "stop", completion_id, created)
 
 
@@ -163,6 +184,8 @@ def chat_messages_from_body(body: dict[str, Any]) -> list[dict[str, Any]]:
 
 def chat_image_args(body: dict[str, Any]) -> tuple[str, str, int, list[tuple[bytes, str, str]]]:
     model = str(body.get("model") or "gpt-image-2").strip() or "gpt-image-2"
+    if not is_supported_image_model(model):
+        model = "gpt-image-2"
     prompt = extract_chat_prompt(body)
     if not prompt:
         raise HTTPException(status_code=400, detail={"error": "prompt is required"})
@@ -215,11 +238,14 @@ def stream_web_search_chat_completion(messages: list[dict[str, Any]], model: str
     query = search_query_from_messages(messages)
     if not query:
         raise HTTPException(status_code=400, detail={"error": "messages or prompt is required for web search"})
-    text, _annotations = text_with_url_citations(run_web_search(query))
-    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
-    created = int(time.time())
-    yield completion_chunk(model, {"role": "assistant", "content": text}, None, completion_id, created)
-    yield completion_chunk(model, {}, "stop", completion_id, created)
+    backend = text_backend()
+    try:
+        yield from backend.iter_search(query)
+    finally:
+        close = getattr(backend, "close", None)
+        if callable(close):
+            close()
+
 
 
 def image_result_content(result: dict[str, Any]) -> str:
@@ -229,35 +255,119 @@ def image_result_content(result: dict[str, Any]) -> str:
     return str(result.get("message") or "Image generation completed.")
 
 
+def _log_chat_image_ops(
+    *,
+    model: str,
+    prompt: str,
+    access_token: str = "",
+    account_email: str = "",
+    latency_ms: int = 0,
+    outcome: str = "ok",
+    outcome_code: str = "",
+) -> None:
+    try:
+        from services.log_service import log_llm_ops
+
+        log_llm_ops(
+            source="L0",
+            kind="chat_image",
+            access_token=access_token,
+            account_email=account_email,
+            latency_ms=latency_ms,
+            outcome=outcome,
+            outcome_code=outcome_code,
+            prompt_shape={
+                "chars": len(str(prompt or "")),
+                "has_images": True,
+                "model": str(model or ""),
+            },
+            summary="llm_ops L0/chat_image",
+        )
+    except Exception:
+        pass
+
+
 def image_chat_response(body: dict[str, Any]) -> dict[str, Any]:
     model, prompt, n, images = chat_image_args(body)
-    result = collect_image_outputs(stream_image_outputs_with_pool(ConversationRequest(
-        prompt=prompt,
-        model=model,
-        n=n,
-        response_format="b64_json",
-        images=encode_images(images) or None,
-    )))
-    response = completion_response(model, image_result_content(result), int(result.get("created") or 0) or None)
-    usage = image_usage(
-        input_text_tokens=count_text_tokens(prompt, model),
-        input_image_tokens=count_image_inputs_tokens(images, model),
-        output_tokens=count_image_output_items_tokens(result.get("data")),
-    )
-    response["usage"] = chat_usage_from_image_usage(usage)
-    return response
+    started = time.monotonic()
+    account_email = ""
+    access_token = ""
+    outcome = "ok"
+    outcome_code = ""
+    try:
+        result = collect_image_outputs(stream_image_outputs_with_pool(ConversationRequest(
+            prompt=prompt,
+            model=model,
+            n=n,
+            response_format="b64_json",
+            images=encode_images(images) or None,
+        )))
+        data = result.get("data") if isinstance(result, dict) else None
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and item.get("account_email"):
+                    account_email = str(item.get("account_email") or "")
+                    break
+        response = completion_response(model, image_result_content(result), int(result.get("created") or 0) or None)
+        usage = image_usage(
+            input_text_tokens=count_text_tokens(prompt, model),
+            input_image_tokens=count_image_inputs_tokens(images, model),
+            output_tokens=count_image_output_items_tokens(result.get("data")),
+        )
+        response["usage"] = chat_usage_from_image_usage(usage)
+        return response
+    except Exception as exc:
+        outcome = "error"
+        outcome_code = type(exc).__name__
+        raise
+    finally:
+        _log_chat_image_ops(
+            model=model,
+            prompt=prompt,
+            access_token=access_token,
+            account_email=account_email,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            outcome=outcome,
+            outcome_code=outcome_code,
+        )
 
 
 def image_chat_events(body: dict[str, Any]) -> Iterator[dict[str, Any]]:
     model, prompt, n, images = chat_image_args(body)
-    image_outputs = stream_image_outputs_with_pool(ConversationRequest(
-        prompt=prompt,
-        model=model,
-        n=n,
-        response_format="b64_json",
-        images=encode_images(images) or None,
-    ))
-    yield from stream_image_chat_completion(image_outputs, model)
+    started = time.monotonic()
+    account_email = ""
+    outcome = "ok"
+    outcome_code = ""
+    try:
+        image_outputs = stream_image_outputs_with_pool(ConversationRequest(
+            prompt=prompt,
+            model=model,
+            n=n,
+            response_format="b64_json",
+            images=encode_images(images) or None,
+        ))
+
+        def _tracked() -> Iterator[ImageOutput]:
+            nonlocal account_email
+            for output in image_outputs:
+                if getattr(output, "account_email", None):
+                    account_email = str(output.account_email or account_email)
+                yield output
+
+        yield from stream_image_chat_completion(_tracked(), model)
+    except Exception as exc:
+        outcome = "error"
+        outcome_code = type(exc).__name__
+        raise
+    finally:
+        _log_chat_image_ops(
+            model=model,
+            prompt=prompt,
+            account_email=account_email,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            outcome=outcome,
+            outcome_code=outcome_code,
+        )
 
 
 def stream_image_chat_completion(image_outputs: Iterable[ImageOutput], model: str) -> Iterator[dict[str, Any]]:
@@ -306,11 +416,24 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
         return web_search_chat_response(messages, model)
     thinking_effort = thinking_effort_from_body(body)
     key = cache_key(body, messages, stream=False)
-    return chat_completion_cache.get_or_compute_response(
+    backend = text_backend()
+    account_email = ""
+    try:
+        from services.account_service import account_service
+
+        acct = account_service.get_account(getattr(backend, "access_token", "") or "") or {}
+        account_email = str(acct.get("email") or "").strip()
+    except Exception:
+        account_email = ""
+    result = chat_completion_cache.get_or_compute_response(
         key,
         lambda: completion_response(
             model,
-            collect_text(text_backend(), ConversationRequest(model=model, messages=messages, thinking_effort=thinking_effort)),
+            collect_text(backend, ConversationRequest(model=model, messages=messages, thinking_effort=thinking_effort)),
             messages=messages,
         ),
     )
+    if account_email and isinstance(result, dict):
+        result = dict(result)
+        result["_account_email"] = account_email
+    return result

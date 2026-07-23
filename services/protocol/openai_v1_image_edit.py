@@ -83,6 +83,7 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
         images=encoded_images,
         message_as_error=True,
         progress_callback=progress_callback,
+        cancel_event=body.get("cancel_event"),
         poll_timeout_secs=poll_timeout_secs,
         queue_coordinated=bool(body.get("queue_coordinated")),
     ))

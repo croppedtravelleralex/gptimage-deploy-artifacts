@@ -48,6 +48,17 @@ PANDA_TASK_PROMPT_PREFIXES = (
 
 _IMAGE_SYNC_ADMISSION_LOCK = threading.Lock()
 _IMAGE_SYNC_WAIT_INFLIGHT = 0
+_IMAGE_SYNC_BUSY_429_COUNT = 0
+
+
+def _image_sync_wait_inflight() -> int:
+    """Alias used by risk dashboard / metrics."""
+    return _sync_wait_inflight_count()
+
+
+def _image_sync_busy_429_count() -> int:
+    with _IMAGE_SYNC_ADMISSION_LOCK:
+        return int(_IMAGE_SYNC_BUSY_429_COUNT)
 
 
 def _image_generation_paused() -> bool:
@@ -125,6 +136,9 @@ def _leave_image_sync_admission() -> None:
 
 
 def _image_service_busy_response(*, estimated_wait_secs: int, reason: str = "image_service_busy") -> JSONResponse:
+    global _IMAGE_SYNC_BUSY_429_COUNT
+    with _IMAGE_SYNC_ADMISSION_LOCK:
+        _IMAGE_SYNC_BUSY_429_COUNT = int(_IMAGE_SYNC_BUSY_429_COUNT) + 1
     retry_after = max(5, min(300, int(math.ceil(float(estimated_wait_secs or 5)))))
     message = (
         f"image service busy: estimated wait {retry_after}s exceeds sync budget"
@@ -205,7 +219,10 @@ class AnthropicMessageRequest(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    prompt: str = Field(..., min_length=1)
+    prompt: str = ""
+    # data URL or raw base64; uploaded upstream as multimodal attachments
+    images: list[str] = Field(default_factory=list)
+    stream: bool = False
 
 
 class EditableFileTaskRequest(BaseModel):
@@ -443,8 +460,12 @@ def create_router() -> APIRouter:
             body: ImageGenerationRequest,
             request: Request,
             authorization: str | None = Header(default=None),
+            x_preferred_account_email: str | None = Header(default=None, alias="X-Preferred-Account-Email"),
     ):
+        from services.request_account_context import set_preferred_account_email
+
         identity = require_identity(authorization)
+        set_preferred_account_email(x_preferred_account_email)
         payload = body.model_dump(mode="python")
         payload["base_url"] = resolve_image_base_url(request)
         prompt, prompt_async, prompt_task_id = _parse_panda_prompt_tunnel(body.prompt)
@@ -562,20 +583,29 @@ def create_router() -> APIRouter:
         )
 
     @router.post("/v1/chat/completions")
-    async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):
+    async def create_chat_completion(
+        body: ChatCompletionRequest,
+        authorization: str | None = Header(default=None),
+        x_preferred_account_email: str | None = Header(default=None, alias="X-Preferred-Account-Email"),
+    ):
+        from services.request_account_context import set_preferred_account_email
+
         identity = require_identity(authorization)
         payload = body.model_dump(mode="python")
+        prefer = str(x_preferred_account_email or payload.pop("preferred_account_email", "") or "").strip()
+        set_preferred_account_email(prefer)
         model = str(payload.get("model") or "auto")
         request_preview = request_text(payload.get("prompt"), payload.get("messages"))
+        image_chat = is_image_chat_request(payload)
         call = LoggedCall(
             identity,
             "/v1/chat/completions",
             model,
-            "文本生成",
+            "对话生图" if image_chat else "文本生成",
             request_text=request_preview,
             request_shape=request_shape(payload.get("messages")),
         )
-        if _image_generation_paused() and is_image_chat_request(payload):
+        if _image_generation_paused() and image_chat:
             call.log("调用拒绝", status="paused", error="image_generation_paused")
             _raise_image_generation_paused()
         await filter_or_log(call, request_preview)
@@ -617,11 +647,25 @@ def create_router() -> APIRouter:
         return await call.run(anthropic_v1_messages.handle, payload, sse="anthropic")
 
     @router.post("/v1/search")
-    async def search(body: SearchRequest, authorization: str | None = Header(default=None)):
+    async def search(
+        body: SearchRequest,
+        authorization: str | None = Header(default=None),
+        x_preferred_account_email: str | None = Header(default=None, alias="X-Preferred-Account-Email"),
+    ):
+        from services.request_account_context import set_preferred_account_email
+
         identity = require_identity(authorization)
-        call = LoggedCall(identity, "/v1/search", openai_search.MODEL, "搜索", request_text=body.prompt)
-        await filter_or_log(call, body.prompt)
-        return await call.run(openai_search.handle, body.model_dump(mode="python"))
+        set_preferred_account_email(x_preferred_account_email)
+        prompt = str(body.prompt or "").strip()
+        images = [str(item or "").strip() for item in (body.images or []) if str(item or "").strip()]
+        if not prompt and not images:
+            raise HTTPException(status_code=400, detail={"error": "prompt or images is required"})
+        if not prompt and images:
+            prompt = "请结合附件图片进行联网搜索，并给出结论与来源。"
+        payload = {"prompt": prompt, "images": images, "stream": bool(body.stream)}
+        call = LoggedCall(identity, "/v1/search", openai_search.MODEL, "搜索", request_text=prompt)
+        await filter_or_log(call, prompt)
+        return await call.run(openai_search.handle, payload)
 
     @router.get("/v1/editable-file-tasks")
     async def list_editable_file_tasks(ids: str = "", authorization: str | None = Header(default=None)):

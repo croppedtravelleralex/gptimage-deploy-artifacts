@@ -43,6 +43,22 @@ class FakeSession:
         self.close_calls += 1
 
 
+class FakeResponse:
+    def __init__(self, status_code: int, payload):
+        self.status_code = status_code
+        if isinstance(payload, str):
+            self.text = payload
+            self._json = None
+        else:
+            import json
+
+            self._json = payload
+            self.text = json.dumps(payload)
+
+    def json(self):
+        return self._json
+
+
 class FakeAccountService:
     def __init__(self):
         self.update_calls = []
@@ -160,6 +176,80 @@ class OpenAIBackendAPIProxyRuntimeTests(unittest.TestCase):
         self.assertFalse(
             OpenAIBackendAPI._is_cf_edge_block(UpstreamHTTPError("/backend-api/f/conversation", 401, {"e": 1}))
         )
+
+    def test_raise_on_error_marks_cf_html_403(self) -> None:
+        class Resp:
+            status_code = 403
+            text = "<html><body>Just a moment</body></html>"
+
+        with patch.object(openai_backend_api, "account_service", FakeAccountService()), patch.object(
+            openai_backend_api.requests, "Session", FakeSession
+        ):
+            api = OpenAIBackendAPI("access-token")
+            with self.assertRaises(RuntimeError) as ctx:
+                api._raise_on_error(Resp(), "/backend-api/me")
+        self.assertIn("cf_edge_block", str(ctx.exception))
+
+    def test_get_me_retries_cf_html_403_then_ok(self) -> None:
+        class FlakySession(FakeSession):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.calls = 0
+                self.header_shapes = []
+
+            def get(self, *args, **kwargs):
+                self.calls += 1
+                headers = dict(kwargs.get("headers") or {})
+                self.header_shapes.append({
+                    "has_sec_ch": "Sec-Ch-Ua" in headers,
+                    "has_target_path": "X-OpenAI-Target-Path" in headers,
+                    "has_device": "OAI-Device-Id" in headers,
+                })
+                if self.calls < 3:
+                    return FakeResponse(403, "<html>cloudflare</html>")
+                return FakeResponse(200, {"object": "user", "id": "u1", "email": "a@b.com"})
+
+        with patch.object(openai_backend_api, "account_service", FakeAccountService()), patch.object(
+            openai_backend_api.requests, "Session", FlakySession
+        ), patch.object(openai_backend_api.time, "sleep", return_value=None), patch.object(
+            openai_backend_api, "proxy_settings", FakeProxySettings()
+        ):
+            api = OpenAIBackendAPI("access-token")
+            payload = api._get_me()
+        self.assertEqual(payload.get("email"), "a@b.com")
+        self.assertEqual(api.session.calls, 3)
+        # attempt1 full headers; later attempts switch to light headers
+        self.assertTrue(api.session.header_shapes[0]["has_sec_ch"])
+        self.assertTrue(api.session.header_shapes[0]["has_target_path"])
+        self.assertFalse(api.session.header_shapes[1]["has_sec_ch"])
+        self.assertFalse(api.session.header_shapes[1]["has_target_path"])
+        self.assertTrue(api.session.header_shapes[1]["has_device"])
+
+    def test_get_me_switches_to_light_headers_after_first_cf(self) -> None:
+        class OnceCfSession(FakeSession):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.calls = 0
+                self.saw_light = False
+
+            def get(self, *args, **kwargs):
+                self.calls += 1
+                headers = dict(kwargs.get("headers") or {})
+                if "Sec-Ch-Ua" not in headers and "OAI-Device-Id" in headers:
+                    self.saw_light = True
+                    return FakeResponse(200, {"object": "user", "id": "u2", "email": "light@b.com"})
+                return FakeResponse(403, "<html>Just a moment</html>")
+
+        with patch.object(openai_backend_api, "account_service", FakeAccountService()), patch.object(
+            openai_backend_api.requests, "Session", OnceCfSession
+        ), patch.object(openai_backend_api.time, "sleep", return_value=None), patch.object(
+            openai_backend_api, "proxy_settings", FakeProxySettings()
+        ):
+            api = OpenAIBackendAPI("access-token")
+            payload = api._get_me()
+        self.assertEqual(payload.get("email"), "light@b.com")
+        self.assertTrue(api.session.saw_light)
+        self.assertEqual(api.session.calls, 2)
 
 
 if __name__ == "__main__":

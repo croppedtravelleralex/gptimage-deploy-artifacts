@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import math
 import secrets
 import time
 import uuid
@@ -19,6 +21,8 @@ from services.account_identity import (
 from services.config import config
 from services.log_service import (
     LOG_TYPE_ACCOUNT,
+    LOG_TYPE_CALL,
+    LOG_TYPE_LLM_OPS,
     log_service,
 )
 from services.storage.base import StorageBackend
@@ -255,8 +259,34 @@ class AccountService:
         return AccountService._quota_window_due_for_lazy_refresh(account)
 
     @staticmethod
+    def _lazy_refresh_jitter_seconds(account: dict) -> float:
+        """Stable per-account stagger after restore_at so free-tier windows don't wake together."""
+        try:
+            hours = float((config.get_scheduler_settings() or {}).get("lazy_refresh_jitter_hours") or 0)
+        except Exception:
+            hours = 6.0
+        hours = max(0.0, min(24.0, hours))
+        if hours <= 0:
+            return 0.0
+        key = str(account.get("email") or account.get("user_id") or account.get("access_token") or "").strip().lower()
+        if not key:
+            return 0.0
+        digest = hashlib.sha256(f"lazy-jitter-v1:{key}".encode("utf-8")).hexdigest()
+        u = int(digest[:8], 16) / float(0xFFFFFFFF)
+        return u * hours * 3600.0
+
+    @classmethod
+    def _lazy_refresh_eligible_at(cls, account: dict) -> datetime | None:
+        restore_at = cls._parse_time(account.get("restore_at") or account.get("image_gen_window_reset_at"))
+        if restore_at is None:
+            return None
+        if restore_at.tzinfo is None:
+            restore_at = restore_at.replace(tzinfo=timezone.utc)
+        return restore_at + timedelta(seconds=cls._lazy_refresh_jitter_seconds(account))
+
+    @staticmethod
     def _quota_window_due_for_lazy_refresh(account: dict) -> bool:
-        """账面额度耗尽且已过 restore_at：应在真实取号时再拉一次 limits。"""
+        """账面额度耗尽且已过 restore_at（再加账号级错峰）：应在真实取号时再拉一次 limits。"""
         if not isinstance(account, dict):
             return False
         if account.get("status") != "正常":
@@ -267,12 +297,10 @@ class AccountService:
             return False
         if int(account.get("quota") or 0) > 0:
             return False
-        restore_at = AccountService._parse_time(account.get("restore_at") or account.get("image_gen_window_reset_at"))
-        if restore_at is None:
+        eligible_at = AccountService._lazy_refresh_eligible_at(account)
+        if eligible_at is None:
             return False
-        if restore_at.tzinfo is None:
-            restore_at = restore_at.replace(tzinfo=timezone.utc)
-        return datetime.now(timezone.utc) >= restore_at
+        return datetime.now(timezone.utc) >= eligible_at
 
     def _is_image_interval_ready(self, account: dict) -> bool:
         settings = config.get_scheduler_settings()
@@ -347,6 +375,13 @@ class AccountService:
             account,
             new_account_cap=float(settings.get("new_account_usage_cap") or 0.4),
         )
+        override_raw = account.get("image_soft_band_override")
+        soft_band_override: float | None = None
+        try:
+            if override_raw is not None and str(override_raw).strip() != "":
+                soft_band_override = float(override_raw)
+        except (TypeError, ValueError):
+            soft_band_override = None
         state = update_quota_peak_state(
             remaining=remaining,
             reset_after=restore_at,
@@ -354,6 +389,7 @@ class AccountService:
             prev_reset_at=str(account.get("image_gen_window_reset_at") or "") or None,
             prev_soft_band=float(account["image_soft_band"]) if account.get("image_soft_band") is not None else None,
             soft=soft,
+            soft_band_override=soft_band_override,
         )
         account["image_gen_window_peak"] = state.peak
         account["image_gen_window_reset_at"] = state.reset_at
@@ -458,9 +494,11 @@ class AccountService:
             if feature_name != "image_gen":
                 continue
             try:
-                remaining = max(0, int(item.get("remaining")))
+                remaining = int(item.get("remaining"))
             except (TypeError, ValueError):
                 continue
+            if remaining < 0:
+                return None
             restore_at = str(item.get("reset_after") or "").strip() or None
             return remaining, restore_at
         return None
@@ -479,8 +517,73 @@ class AccountService:
             return True
         return (datetime.now(timezone.utc) - refreshed_at) <= timedelta(hours=max_age_hours)
 
+    def _proxy_binding_max_accounts(self) -> int:
+        try:
+            return max(1, int(getattr(config, "proxy_binding_max_accounts", 5) or 5))
+        except (TypeError, ValueError):
+            return 5
+
+    def _image_binding_inflight_max(self) -> int:
+        """同一 proxy_binding 同时生图路上限，降低共享出口 CF 暴死。"""
+        try:
+            return max(1, int(getattr(config, "image_binding_inflight_max", 1) or 1))
+        except (TypeError, ValueError):
+            return 1
+
+    def _account_binding_hash(self, account: dict | None) -> str:
+        from services.account_identity import proxy_binding_hash
+
+        item = account or {}
+        return str(item.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(item.get("proxy"))
+
+    def _binding_image_inflight_locked(self, binding: str) -> int:
+        if not binding:
+            return 0
+        total = 0
+        for token, count in self._image_inflight.items():
+            if int(count or 0) <= 0:
+                continue
+            account = self._accounts.get(token) or {}
+            if self._account_binding_hash(account) == binding:
+                total += int(count or 0)
+        return total
+
+    def _count_active_binding_peers(
+        self,
+        binding: str,
+        *,
+        exclude_token: str = "",
+    ) -> int:
+        """统计同一 binding 上计入容量的活跃账号数（不含禁用/隔离等）。"""
+        from services.account_identity import proxy_binding_hash
+
+        key = str(binding or "").strip()
+        if not key:
+            return 0
+        exclude = str(exclude_token or "").strip()
+        peers = 0
+        for token, item in self._accounts.items():
+            if exclude and token == exclude:
+                continue
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status") or "")
+            if status in {"禁用", "限流", "异常"}:
+                continue
+            if str(item.get("outlook_recovery_state") or "").strip().lower() == "terminal":
+                continue
+            receive = str(item.get("panda_receive_state") or "").strip().lower()
+            if receive in {"identity_isolated", "rejected"}:
+                continue
+            other_binding = str(item.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(
+                item.get("proxy")
+            )
+            if other_binding == key:
+                peers += 1
+        return peers
+
     def _active_proxy_binding_duplicate(self, account: dict) -> bool:
-        """同一活跃 proxy_binding_hash 绑定多个账号时禁止进入调度。"""
+        """同一活跃 proxy_binding 超过承载上限时禁止进入生图调度。"""
         from services.account_identity import proxy_binding_hash
 
         if not isinstance(account, dict):
@@ -488,31 +591,11 @@ class AccountService:
         binding = str(account.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(account.get("proxy"))
         if not binding:
             return False
-        peers = 0
-        for item in self._accounts.values():
-            if not isinstance(item, dict):
-                continue
-            status = str(item.get("status") or "")
-            # 仅「可调度态」同伴计入重复；禁用/限流/异常不挡唯一 canary
-            if status in {"禁用", "限流", "异常"}:
-                continue
-            if str(item.get("outlook_recovery_state") or "").strip().lower() == "terminal":
-                continue
-            receive = str(item.get("panda_receive_state") or "").strip().lower()
-            # canary 窗口：共享绑定的同伴可先标 identity_isolated，不计入活跃重复
-            if receive in {"identity_isolated", "rejected"}:
-                continue
-            other_binding = str(item.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(
-                item.get("proxy")
-            )
-            if other_binding == binding:
-                peers += 1
-                if peers > 1:
-                    return True
-        return False
+        peers = self._count_active_binding_peers(binding)
+        return peers > self._proxy_binding_max_accounts()
 
     def _enforce_shared_binding_isolation(self, account: dict, access_token: str) -> dict:
-        """同 binding 已有活跃号时，禁止新号静默进调度池：强制 identity_isolated。"""
+        """同 binding 已达承载上限时，禁止新号静默进调度池：强制 identity_isolated。"""
         from services.account_identity import proxy_binding_hash
         from utils.log import logger
 
@@ -527,31 +610,21 @@ class AccountService:
         binding = str(account.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(account.get("proxy"))
         if not binding:
             return account
-        for token, item in self._accounts.items():
-            if token == access_token or not isinstance(item, dict):
-                continue
-            other_status = str(item.get("status") or "")
-            if other_status in {"禁用", "限流", "异常"}:
-                continue
-            if str(item.get("outlook_recovery_state") or "").strip().lower() == "terminal":
-                continue
-            other_receive = str(item.get("panda_receive_state") or "").strip().lower()
-            if other_receive in {"identity_isolated", "rejected"}:
-                continue
-            other_binding = str(item.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(item.get("proxy"))
-            if other_binding != binding:
-                continue
-            next_account = dict(account)
-            next_account["panda_receive_state"] = "identity_isolated"
-            logger.warning(
-                {
-                    "event": "shared_binding_forced_isolation",
-                    "proxy_binding_hash": binding,
-                    "peer_present": True,
-                }
-            )
-            return next_account
-        return account
+        max_accounts = self._proxy_binding_max_accounts()
+        peers = self._count_active_binding_peers(binding, exclude_token=access_token)
+        if peers < max_accounts:
+            return account
+        next_account = dict(account)
+        next_account["panda_receive_state"] = "identity_isolated"
+        logger.warning(
+            {
+                "event": "shared_binding_forced_isolation",
+                "proxy_binding_hash": binding,
+                "peer_count": peers,
+                "max_accounts": max_accounts,
+            }
+        )
+        return next_account
 
     def _preserve_identity_isolated(self, current: dict, updates: dict) -> dict:
         """禁止运维路径把 identity_isolated 同伴冲回 verified_ready。"""
@@ -820,7 +893,16 @@ class AccountService:
             normalized.pop("type", None)
         normalized["type"] = normalized.get("type") or "free"
         normalized["status"] = normalized.get("status") or "正常"
-        normalized["quota"] = max(0, int(normalized.get("quota") if normalized.get("quota") is not None else 0))
+        try:
+            raw_quota = normalized.get("quota")
+            quota_int = int(raw_quota if raw_quota is not None else 0)
+        except (TypeError, ValueError):
+            quota_int = 0
+        if quota_int < 0:
+            normalized["quota"] = 0
+            normalized["image_quota_unknown"] = True
+        else:
+            normalized["quota"] = quota_int
         normalized["image_quota_unknown"] = bool(normalized.get("image_quota_unknown"))
         normalized["email"] = normalized.get("email") or None
         normalized["user_id"] = normalized.get("user_id") or None
@@ -907,6 +989,29 @@ class AccountService:
         conflict_fields = normalized.get("identity_last_conflict_fields")
         if not isinstance(conflict_fields, list):
             normalized["identity_last_conflict_fields"] = []
+        egress_daily = normalized.get("egress_daily")
+        normalized["egress_daily"] = egress_daily if isinstance(egress_daily, list) else []
+        cf_daily = normalized.get("cf_daily")
+        if isinstance(cf_daily, list):
+            cleaned_cf: list[dict] = []
+            for row in cf_daily:
+                if not isinstance(row, dict):
+                    continue
+                date = str(row.get("date") or "").strip()[:10]
+                if not date:
+                    continue
+                cleaned_cf.append(
+                    {
+                        "date": date,
+                        "ok": max(0, int(row.get("ok") or 0)),
+                        "cf": max(0, int(row.get("cf") or 0)),
+                        "image_fail": max(0, int(row.get("image_fail") or 0)),
+                    }
+                )
+            cleaned_cf.sort(key=lambda r: str(r.get("date") or ""))
+            normalized["cf_daily"] = cleaned_cf[-7:]
+        else:
+            normalized["cf_daily"] = []
         return normalized
 
     @staticmethod
@@ -1677,12 +1782,18 @@ class AccountService:
             plan_types: set[str] | tuple[str, ...] | None = None,
     ) -> list[str]:
         max_concurrency = max(1, int(config.image_account_concurrency or 1))
+        binding_limit = self._image_binding_inflight_max()
         with self._lock:
-            return [
-                token
-                for token in self._list_ready_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types)
-                if int(self._image_inflight.get(token, 0)) < max_concurrency
-            ]
+            available: list[str] = []
+            for token in self._list_ready_candidate_tokens(excluded_tokens, plan_type, source_type, plan_types):
+                if int(self._image_inflight.get(token, 0)) >= max_concurrency:
+                    continue
+                account = self._accounts.get(token) or {}
+                binding = self._account_binding_hash(account)
+                if binding and self._binding_image_inflight_locked(binding) >= binding_limit:
+                    continue
+                available.append(token)
+            return available
 
     def _total_image_inflight_locked(self) -> int:
         return sum(max(0, int(value or 0)) for value in self._image_inflight.values())
@@ -1745,6 +1856,115 @@ class AccountService:
             "image_global_limit_reached": global_limit_reached,
         }
 
+    def get_schedulable_breakdown(self) -> dict[str, Any]:
+        """Explain why accounts are excluded from image scheduling (SCHED-001).
+
+        Counts are mutually prioritized for `primary_reason` per account:
+        status → failure_evidence → receive_state → soft_cap/quota →
+        quota_freshness → dup_binding → interval → backoff → inflight.
+        An account may still appear in multiple raw buckets when useful.
+        """
+        max_account_concurrency = max(1, int(config.image_account_concurrency or 1))
+        now = time.time()
+        with self._lock:
+            items = list(self._accounts.values())
+            preflight_until = dict(self._image_preflight_failed_until)
+            inflight = dict(self._image_inflight)
+
+        buckets = {
+            "excluded_by_status": 0,
+            "excluded_by_failure_evidence": 0,
+            "excluded_by_receive_state": 0,
+            "excluded_by_quota": 0,
+            "excluded_by_quota_freshness": 0,
+            "excluded_by_dup_binding": 0,
+            "excluded_by_interval": 0,
+            "excluded_by_backoff": 0,
+            "excluded_by_inflight": 0,
+            "schedulable": 0,
+            "ready_not_dispatchable": 0,
+        }
+        primary_counts: dict[str, int] = {}
+        samples: dict[str, list[str]] = {key: [] for key in buckets}
+
+        def _sample(bucket: str, account: dict) -> None:
+            if len(samples[bucket]) >= 5:
+                return
+            email = str(account.get("email") or account.get("id") or "")[:64]
+            if email and email not in samples[bucket]:
+                samples[bucket].append(email)
+
+        for account in items:
+            if not isinstance(account, dict):
+                continue
+            token = str(account.get("access_token") or "")
+            primary = ""
+
+            status = str(account.get("status") or "")
+            if status in {"禁用", "限流", "异常"}:
+                buckets["excluded_by_status"] += 1
+                primary = primary or "status"
+                _sample("excluded_by_status", account)
+            if self._has_image_account_failure_evidence(account):
+                buckets["excluded_by_failure_evidence"] += 1
+                primary = primary or "failure_evidence"
+                _sample("excluded_by_failure_evidence", account)
+            if self._requires_panda_receive_verification(account):
+                buckets["excluded_by_receive_state"] += 1
+                primary = primary or "receive_state"
+                _sample("excluded_by_receive_state", account)
+            if not self._is_image_account_available(account):
+                # available already covers status/soft-cap/quota; avoid double-count status-only.
+                if status not in {"禁用", "限流", "异常"}:
+                    buckets["excluded_by_quota"] += 1
+                    primary = primary or "quota"
+                    _sample("excluded_by_quota", account)
+            elif config.image_require_recent_quota_refresh and not self._is_recent_image_quota(account):
+                buckets["excluded_by_quota_freshness"] += 1
+                primary = primary or "quota_freshness"
+                _sample("excluded_by_quota_freshness", account)
+            if self._active_proxy_binding_duplicate(account):
+                buckets["excluded_by_dup_binding"] += 1
+                primary = primary or "dup_binding"
+                _sample("excluded_by_dup_binding", account)
+
+            schedulable = self._is_image_account_schedulable(account)
+            if schedulable:
+                buckets["schedulable"] += 1
+                _sample("schedulable", account)
+                if not self._is_image_interval_ready(account):
+                    buckets["excluded_by_interval"] += 1
+                    primary = primary or "interval"
+                    _sample("excluded_by_interval", account)
+                until = float(preflight_until.get(token) or 0)
+                if until > now:
+                    buckets["excluded_by_backoff"] += 1
+                    primary = primary or "backoff"
+                    _sample("excluded_by_backoff", account)
+                if int(inflight.get(token) or 0) >= max_account_concurrency:
+                    buckets["excluded_by_inflight"] += 1
+                    primary = primary or "inflight"
+                    _sample("excluded_by_inflight", account)
+                    buckets["ready_not_dispatchable"] += 1
+                elif until > now or not self._is_image_interval_ready(account):
+                    buckets["ready_not_dispatchable"] += 1
+                else:
+                    primary = primary or "ok"
+            else:
+                primary = primary or "other"
+
+            primary_counts[primary] = int(primary_counts.get(primary) or 0) + 1
+
+        runtime = self.get_image_candidate_runtime_stats()
+        return {
+            "total": len(items),
+            "buckets": buckets,
+            "primary_reason_counts": primary_counts,
+            "samples": samples,
+            "runtime": runtime,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     def _acquire_next_candidate_token(
             self,
             excluded_tokens: set[str] | None = None,
@@ -1801,12 +2021,72 @@ class AccountService:
             source_type: str | None = None,
             plan_types: set[str] | tuple[str, ...] | None = None,
             skip_global_limit: bool = False,
+            preferred_email: str = "",
     ) -> str:
         """从候选池中获取一个可用的图片生图 token。
 
         基于本地缓存做初筛，然后通过 fetch_remote_info 做远程验证（token 有效性、配额等）。
         限制最大尝试次数防止 token rotation 导致无限循环。
         """
+        prefer = str(preferred_email or "").strip().lower()
+        if prefer:
+            prefer_token = ""
+            with self._lock:
+                for account in self._accounts.values():
+                    if str(account.get("email") or "").strip().lower() != prefer:
+                        continue
+                    token = str(account.get("access_token") or "")
+                    if not token:
+                        continue
+                    if account.get("status") in {"禁用", "异常"}:
+                        continue
+                    prefer_token = token
+                    break
+            # Sticky 不可用时降级到号池自动调度，避免对话页硬失败。
+            if prefer_token:
+                acquired = False
+                with self._image_slot_condition:
+                    current = int(self._image_inflight.get(prefer_token, 0))
+                    limit = max(1, int(getattr(config, "image_account_concurrency", 1) or 1))
+                    global_limit = max(1, int(getattr(config, "image_global_concurrency", 1) or 1))
+                    if not skip_global_limit and sum(int(v) for v in self._image_inflight.values()) >= global_limit:
+                        raise RuntimeError("image global concurrency limit reached")
+                    if current < limit:
+                        self._image_inflight[prefer_token] = current + 1
+                        acquired = True
+                if acquired:
+                    try:
+                        from services.account_workload_policy_service import account_workload_policy_service
+
+                        local_account = self.get_account(prefer_token) or {}
+                        gate = account_workload_policy_service.decide_for_account(
+                            local_account,
+                            "image",
+                            access_token=prefer_token,
+                        )
+                        if gate.mode == "live" and not gate.admitted:
+                            self.release_image_slot(prefer_token)
+                        elif (
+                            self._can_skip_image_preflight(local_account)
+                            and self._is_image_account_schedulable(local_account)
+                        ):
+                            return prefer_token
+                        else:
+                            account = self.fetch_remote_info(prefer_token, "get_available_access_token_preferred")
+                            resolved = str((account or {}).get("access_token") or prefer_token)
+                            if resolved != prefer_token:
+                                self.release_image_slot(prefer_token)
+                                with self._image_slot_condition:
+                                    self._image_inflight[resolved] = int(self._image_inflight.get(resolved, 0)) + 1
+                                prefer_token = resolved
+                            if self._is_image_account_schedulable(account or {}):
+                                return prefer_token
+                            self.release_image_slot(prefer_token)
+                    except RuntimeError:
+                        raise
+                    except Exception:
+                        self.release_image_slot(prefer_token)
+
         candidate_count = len(self._list_ready_candidate_tokens(
             plan_type=plan_type,
             source_type=source_type,
@@ -1814,72 +2094,113 @@ class AccountService:
         ))
         max_attempts = min(max(1, int(config.image_token_max_attempts or 20)), max(1, candidate_count))
         attempted_tokens: set[str] = set()
-        for _attempt in range(max_attempts):
-            access_token = self._acquire_next_candidate_token(
-                excluded_tokens=attempted_tokens,
-                plan_type=plan_type,
-                source_type=source_type,
-                plan_types=plan_types,
-                skip_global_limit=skip_global_limit,
-            )
-            attempted_tokens.add(access_token)
-            local_account = self.get_account(access_token)
-            try:
-                from services.account_workload_policy_service import account_workload_policy_service
-
-                gate = account_workload_policy_service.decide_for_account(
-                    local_account or {},
-                    "image",
-                    access_token=access_token,
+        try:
+            for _attempt in range(max_attempts):
+                access_token = self._acquire_next_candidate_token(
+                    excluded_tokens=attempted_tokens,
+                    plan_type=plan_type,
+                    source_type=source_type,
+                    plan_types=plan_types,
+                    skip_global_limit=skip_global_limit,
                 )
-                if gate.mode == "live" and not gate.admitted:
+                attempted_tokens.add(access_token)
+                local_account = self.get_account(access_token)
+                try:
+                    from services.account_workload_policy_service import account_workload_policy_service
+
+                    gate = account_workload_policy_service.decide_for_account(
+                        local_account or {},
+                        "image",
+                        access_token=access_token,
+                    )
+                    if gate.mode == "live" and not gate.admitted:
+                        self.release_image_slot(access_token)
+                        continue
+                except Exception:
+                    pass
+                if (
+                        self._can_skip_image_preflight(local_account)
+                        and not self._quota_window_due_for_lazy_refresh(local_account or {})
+                        and self._account_matches_plan_type(local_account or {}, plan_type)
+                        and self._account_matches_any_plan_type(local_account or {}, plan_types)
+                        and self._account_matches_source_type(local_account or {}, source_type)
+                ):
+                    return str((local_account or {}).get("access_token") or access_token)
+                refresh_event = (
+                    "lazy_quota_window_refresh"
+                    if self._quota_window_due_for_lazy_refresh(local_account or {})
+                    else "get_available_access_token"
+                )
+                try:
+                    account = self.fetch_remote_info(access_token, refresh_event)
+                except Exception as exc:
+                    self._record_image_preflight_failure(access_token, exc)
                     self.release_image_slot(access_token)
                     continue
-            except Exception:
-                pass
-            if (
-                    self._can_skip_image_preflight(local_account)
-                    and not self._quota_window_due_for_lazy_refresh(local_account or {})
-                    and self._account_matches_plan_type(local_account or {}, plan_type)
-                    and self._account_matches_any_plan_type(local_account or {}, plan_types)
-                    and self._account_matches_source_type(local_account or {}, source_type)
-            ):
-                return str((local_account or {}).get("access_token") or access_token)
-            refresh_event = (
-                "lazy_quota_window_refresh"
-                if self._quota_window_due_for_lazy_refresh(local_account or {})
-                else "get_available_access_token"
-            )
-            try:
-                account = self.fetch_remote_info(access_token, refresh_event)
-            except Exception as exc:
-                self._record_image_preflight_failure(access_token, exc)
+                # fetch_remote_info 内部可能因 token rotation 导致 access_token 变化，
+                # 把新 token 也加入排除列表，防止重复尝试
+                resolved = str((account or {}).get("access_token") or "")
+                if resolved and resolved != access_token:
+                    attempted_tokens.add(resolved)
+                self._clear_image_preflight_failure(access_token)
+                if resolved:
+                    self._clear_image_preflight_failure(resolved)
+                if (
+                        self._is_image_account_schedulable(account or {})
+                        and self._account_matches_plan_type(account or {}, plan_type)
+                        and self._account_matches_any_plan_type(account or {}, plan_types)
+                        and self._account_matches_source_type(account or {}, source_type)
+                ):
+                    return str((account or {}).get("access_token") or access_token)
                 self.release_image_slot(access_token)
-                continue
-            # fetch_remote_info 内部可能因 token rotation 导致 access_token 变化，
-            # 把新 token 也加入排除列表，防止重复尝试
-            resolved = str((account or {}).get("access_token") or "")
-            if resolved and resolved != access_token:
-                attempted_tokens.add(resolved)
-            self._clear_image_preflight_failure(access_token)
-            if resolved:
-                self._clear_image_preflight_failure(resolved)
-            if (
-                    self._is_image_account_schedulable(account or {})
-                    and self._account_matches_plan_type(account or {}, plan_type)
-                    and self._account_matches_any_plan_type(account or {}, plan_types)
-                    and self._account_matches_source_type(account or {}, source_type)
-            ):
-                return str((account or {}).get("access_token") or access_token)
-            self.release_image_slot(access_token)
-        raise RuntimeError(
-            f"no available {plan_type or source_type or ''} image quota (tried {len(attempted_tokens)} tokens)".replace("  ", " ").strip()
-            if plan_type or source_type else f"no available image quota (tried {len(attempted_tokens)} tokens)"
-        )
+            err = RuntimeError(
+                f"no available {plan_type or source_type or ''} image quota (tried {len(attempted_tokens)} tokens)".replace("  ", " ").strip()
+                if plan_type or source_type else f"no available image quota (tried {len(attempted_tokens)} tokens)"
+            )
+        except RuntimeError as exc:
+            if "no available" in str(exc).lower() and "image quota" in str(exc).lower():
+                err = exc
+            else:
+                raise
+        try:
+            setattr(err, "breakdown", self.get_schedulable_breakdown())
+        except Exception:
+            setattr(err, "breakdown", None)
+        raise err
 
-    def get_text_access_token(self, excluded_tokens: set[str] | None = None) -> str:
+    def get_text_access_token(
+        self,
+        excluded_tokens: set[str] | None = None,
+        *,
+        preferred_email: str = "",
+    ) -> str:
         excluded = set(excluded_tokens or set())
+        prefer = str(preferred_email or "").strip().lower()
         from services.account_workload_policy_service import account_workload_policy_service
+
+        if prefer:
+            prefer_token = ""
+            with self._lock:
+                for account in self._accounts.values():
+                    if str(account.get("email") or "").strip().lower() != prefer:
+                        continue
+                    token = str(account.get("access_token") or "")
+                    if not token or token in excluded:
+                        continue
+                    if account.get("status") in {"禁用", "异常"}:
+                        continue
+                    prefer_token = token
+                    break
+            if prefer_token:
+                return self.refresh_access_token(prefer_token, event="get_text_access_token") or prefer_token
+
+        # Snapshot hot emails outside account lock to avoid AB-BA with warmup._lock.
+        try:
+            from services.account_warmup_service import account_warmup_service
+
+            hot = {str(e).strip().lower() for e in account_warmup_service.hot_emails()}
+        except Exception:
+            hot = set()
 
         with self._lock:
             candidates = [
@@ -1893,7 +2214,16 @@ class AccountService:
             ]
             if not candidates:
                 return ""
-            ordered = list(candidates)
+            if hot:
+                hot_tokens: list[str] = []
+                cold_tokens: list[str] = []
+                for token in candidates:
+                    acc = self._accounts.get(token) or {}
+                    email = str(acc.get("email") or "").strip().lower()
+                    (hot_tokens if email in hot else cold_tokens).append(token)
+                ordered = hot_tokens + cold_tokens if hot_tokens else list(candidates)
+            else:
+                ordered = list(candidates)
             start = self._index % len(ordered)
             self._index += 1
             rotated = ordered[start:] + ordered[:start]
@@ -1933,6 +2263,47 @@ class AccountService:
             self._accounts[access_token] = account
             self._persist_upsert_accounts([account])
 
+    def remember_text_conversation(
+        self,
+        access_token: str,
+        *,
+        conversation_id: str = "",
+        parent_message_id: str = "",
+    ) -> None:
+        """Persist independent text-session ids for nurture continue (never image cid)."""
+        if not access_token:
+            return
+        cid = str(conversation_id or "").strip()
+        parent = str(parent_message_id or "").strip()
+        if not cid and not parent:
+            return
+        with self._lock:
+            access_token = self._resolve_access_token_locked(access_token)
+            current = self._accounts.get(access_token)
+            if current is None:
+                return
+            persist = bool(current.get("chat_persist_history")) or bool(
+                getattr(config, "text_chat_persist_history", False)
+            )
+            reuse = bool(current.get("chat_reuse_conversation")) or bool(
+                getattr(config, "text_chat_reuse_conversation", False)
+            )
+            if not (persist and reuse):
+                return
+            image_cid = str(current.get("last_image_conversation_id") or "").strip()
+            if cid and image_cid and cid == image_cid:
+                return
+            next_item = dict(current)
+            if cid:
+                next_item["text_conversation_id"] = cid
+            if parent:
+                next_item["text_parent_message_id"] = parent
+            account = self._normalize_account(next_item)
+            if account is None:
+                return
+            self._accounts[access_token] = account
+            self._persist_upsert_accounts([account])
+
     def record_account_traffic(
             self,
             access_token: str,
@@ -1965,6 +2336,134 @@ class AccountService:
             next_item["traffic_downloaded_bytes"] = total_downloaded
             next_item["traffic_total_bytes"] = total_uploaded + total_downloaded
             next_item["traffic_updated_at"] = self._now()
+            account = self._normalize_account(next_item)
+            if account is None:
+                return False
+            self._accounts[access_token] = account
+            self._persist_upsert_accounts([account])
+            # 文本/生图流量路径顺带采样当日出口，供号池 IP 漂移 7 灯
+            try:
+                self.record_egress_sample(access_token, status="ok")
+            except Exception:
+                pass
+            # 有真实业务流量即记一次被动成功样本（CF 灯）
+            try:
+                self.record_cf_sample(access_token, kind="ok")
+            except Exception:
+                pass
+            return True
+
+    @staticmethod
+    def _looks_like_cf_edge_message(message: object) -> bool:
+        text = str(message or "").lower()
+        return (
+            "cloudflare_or_edge_html_block" in text
+            or "cf_edge_block" in text
+            or "cloudflare_or_edge" in text
+        )
+
+    def record_cf_sample(self, access_token: str, *, kind: str) -> bool:
+        """被动累计 Asia/Shanghai 当日 CF/成功/生图失败（最多保留 7 天）。不做主动探测。"""
+        if not access_token:
+            return False
+        key = str(kind or "").strip().lower()
+        if key not in {"ok", "cf", "image_fail"}:
+            return False
+        with self._lock:
+            access_token = self._resolve_access_token_locked(access_token)
+            current = self._accounts.get(access_token)
+            if current is None:
+                return False
+            next_item = dict(current)
+            day = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+            history = list(next_item.get("cf_daily") or [])
+            if not isinstance(history, list):
+                history = []
+            row: dict | None = None
+            for item in history:
+                if isinstance(item, dict) and str(item.get("date") or "") == day:
+                    row = dict(item)
+                    break
+            if row is None:
+                row = {"date": day, "ok": 0, "cf": 0, "image_fail": 0}
+            row["ok"] = max(0, int(row.get("ok") or 0))
+            row["cf"] = max(0, int(row.get("cf") or 0))
+            row["image_fail"] = max(0, int(row.get("image_fail") or 0))
+            row[key] = int(row.get(key) or 0) + 1
+            history = [item for item in history if isinstance(item, dict) and str(item.get("date") or "") != day]
+            history.append(row)
+            history.sort(key=lambda r: str(r.get("date") or ""))
+            next_item["cf_daily"] = history[-7:]
+            account = self._normalize_account(next_item)
+            if account is None:
+                return False
+            self._accounts[access_token] = account
+            self._persist_upsert_accounts([account])
+            return True
+
+    def reset_observability_lights(self, access_token: str) -> bool:
+        """清空 cf_daily / egress_daily，用于换绑干净代理后重置指示灯。"""
+        if not access_token:
+            return False
+        with self._lock:
+            access_token = self._resolve_access_token_locked(access_token)
+            current = self._accounts.get(access_token)
+            if current is None:
+                return False
+            next_item = dict(current)
+            next_item["cf_daily"] = []
+            next_item["egress_daily"] = []
+            account = self._normalize_account(next_item)
+            if account is None:
+                return False
+            self._accounts[access_token] = account
+            self._persist_upsert_accounts([account])
+            return True
+
+    def record_egress_sample(
+        self,
+        access_token: str,
+        *,
+        ip: str = "",
+        hash_value: str = "",
+        status: str = "ok",
+    ) -> bool:
+        """写入/更新 Asia/Shanghai 当日出口样本（最多保留 7 天）。"""
+        if not access_token:
+            return False
+        with self._lock:
+            access_token = self._resolve_access_token_locked(access_token)
+            current = self._accounts.get(access_token)
+            if current is None:
+                return False
+            next_item = dict(current)
+            sample_ip = str(ip or next_item.get("proxy_egress_ip") or "").strip()
+            sample_hash = str(hash_value or next_item.get("proxy_egress_hash") or "").strip()
+            day = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+            st = str(status or "ok").strip().lower() or "ok"
+            if st not in {"ok", "warn", "error"}:
+                st = "ok"
+            if not sample_ip and not sample_hash:
+                if st != "error":
+                    return False
+            reg = str(next_item.get("registration_egress_hash") or "").strip()
+            history = list(next_item.get("egress_daily") or [])
+            if not isinstance(history, list):
+                history = []
+            prev_hash = ""
+            for row in history:
+                if isinstance(row, dict) and str(row.get("date") or "") < day:
+                    prev_hash = str(row.get("hash") or "").strip() or prev_hash
+            if st == "ok" and sample_hash:
+                if reg and sample_hash != reg:
+                    st = "warn"
+                elif prev_hash and sample_hash != prev_hash:
+                    st = "warn"
+            sample = {"date": day, "ip": sample_ip, "hash": sample_hash[:16], "status": st}
+            history = [row for row in history if isinstance(row, dict) and str(row.get("date") or "") != day]
+            history.append(sample)
+            history.sort(key=lambda r: str(r.get("date") or ""))
+            next_item["egress_daily"] = history[-7:]
             account = self._normalize_account(next_item)
             if account is None:
                 return False
@@ -2040,12 +2539,53 @@ class AccountService:
         image_inflight 为内存态并发计数(账号正在生成、尚未结束的图片数)。号池空闲时
         若某账号该值持续 > 0，说明其并发槽位泄漏、已被静默排除出调度，可借此在 UI 上诊断。
         """
+        now = time.time()
+        now_dt = datetime.now(timezone.utc)
+
+        def _iso_utc(ts: float | None) -> str | None:
+            if ts is None or ts <= 0:
+                return None
+            try:
+                return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+            except (TypeError, ValueError, OSError, OverflowError):
+                return None
+
+        def _secs_until(ts: float | None) -> int | None:
+            if ts is None or ts <= 0:
+                return None
+            return max(0, int(math.ceil(float(ts) - now)))
+
         with self._lock:
             result = []
             for item in self._accounts.values():
                 account = dict(item)
                 token = account.get("access_token") or ""
                 account["image_inflight"] = int(self._image_inflight.get(token, 0))
+
+                lazy_at = self._lazy_refresh_eligible_at(account)
+                if lazy_at is not None:
+                    if lazy_at.tzinfo is None:
+                        lazy_at = lazy_at.replace(tzinfo=timezone.utc)
+                    account["lazy_refresh_eligible_at"] = lazy_at.isoformat()
+                    account["lazy_refresh_in_sec"] = max(0, int(math.ceil((lazy_at - now_dt).total_seconds())))
+                else:
+                    account["lazy_refresh_eligible_at"] = None
+                    account["lazy_refresh_in_sec"] = None
+
+                try:
+                    image_next = float(account.get("image_next_ok_ts") or 0)
+                except (TypeError, ValueError):
+                    image_next = 0.0
+                account["image_next_ok_at"] = _iso_utc(image_next if image_next > 0 else None)
+                account["image_next_ok_in_sec"] = _secs_until(image_next if image_next > 0 else None)
+
+                try:
+                    text_next = float(account.get("text_next_ok_ts") or 0)
+                except (TypeError, ValueError):
+                    text_next = 0.0
+                account["text_next_ok_at"] = _iso_utc(text_next if text_next > 0 else None)
+                account["text_next_ok_in_sec"] = _secs_until(text_next if text_next > 0 else None)
+
                 result.append(account)
             return result
 
@@ -2263,6 +2803,11 @@ class AccountService:
             incoming = self._preserve_identity_isolated(current, incoming)
             protected, conflicts = merge_account_identity(current, incoming, allow_rebind=False)
             merged = {**current, **incoming, **protected, "access_token": access_token}
+            if any(
+                key in incoming
+                for key in ("quota", "limits_progress", "image_quota_unknown", "restore_at", "status")
+            ):
+                merged["last_quota_refresh_at"] = datetime.now(timezone.utc).isoformat()
             if conflicts:
                 merged["identity_conflict_count"] = int(current.get("identity_conflict_count") or 0) + 1
                 merged["identity_last_conflict_fields"] = conflicts
@@ -2285,6 +2830,187 @@ class AccountService:
                                 {"token": anonymize_token(access_token), "status": account.get("status")})
             return dict(account)
         return None
+
+    def set_soft_band_override(
+        self,
+        access_token: str,
+        *,
+        percent: float | None,
+        quiet: bool = True,
+    ) -> dict | None:
+        """手动指定软限流阈值（百分比 5–99）；传 None 清除覆盖，恢复自动抽带。"""
+        token = str(access_token or "").strip()
+        if not token:
+            return None
+        updates: dict[str, object] = {}
+        if percent is None:
+            updates["image_soft_band_override"] = None
+        else:
+            value = max(5.0, min(99.0, float(percent))) / 100.0
+            updates["image_soft_band_override"] = round(value, 4)
+            updates["image_soft_band"] = round(value, 4)
+        account = self.update_account(token, updates, quiet=True)
+        if account is None:
+            return None
+        # 立刻按覆盖阈值重算熔断态
+        with self._lock:
+            live = self._accounts.get(account["access_token"])
+            if live is not None:
+                refreshed = self._apply_humanlike_quota_fields(dict(live))
+                self._accounts[account["access_token"]] = refreshed
+                self._persist_upsert_accounts([refreshed])
+                account = dict(refreshed)
+        if not quiet:
+            log_service.add(
+                LOG_TYPE_ACCOUNT,
+                "手动软限流%",
+                {
+                    "token": anonymize_token(account.get("access_token")),
+                    "override": account.get("image_soft_band_override"),
+                    "band": account.get("image_soft_band"),
+                },
+            )
+        return account
+
+    def get_accounts_usage_recent(self, days: int = 6) -> dict[str, Any]:
+        """按邮箱聚合今日+过去 N-1 日的生图/对话次数（供号池「记录」列）。"""
+        days = max(1, min(int(days or 6), 14))
+        today = datetime.now(timezone(timedelta(hours=8))).date()
+        dates = [(today - timedelta(days=offset)).isoformat() for offset in range(days - 1, -1, -1)]
+        empty_day = {
+            "images": 0,
+            "images_api": 0,
+            "images_chat": 0,
+            "dialogues": 0,
+            "dialogues_real": 0,
+            "dialogues_nurture": 0,
+        }
+        buckets: dict[str, dict[str, dict[str, int]]] = {}
+
+        def touch(email: str, day: str, key: str) -> None:
+            mail = str(email or "").strip().lower()
+            if not mail or day not in dates:
+                return
+            daymap = buckets.setdefault(mail, {d: dict(empty_day) for d in dates})
+            daymap[day][key] = int(daymap[day].get(key) or 0) + 1
+            if key in {"images_api", "images_chat"}:
+                daymap[day]["images"] = int(daymap[day].get("images") or 0) + 1
+            if key in {"dialogues_real", "dialogues_nurture"}:
+                daymap[day]["dialogues"] = int(daymap[day].get("dialogues") or 0) + 1
+
+        start = dates[0]
+        end = dates[-1]
+        # 号池「记录」列只需近期成功 CALL；缩小扫描量加快强刷
+        for item in log_service.list(type=LOG_TYPE_CALL, start_date=start, end_date=end, limit=8000):
+            day = str(item.get("time") or "")[:10]
+            summary = str(item.get("summary") or "")
+            detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+            status = str(detail.get("status") or "").lower()
+            ok = status in {"success", "ok", ""} and "失败" not in summary and "超时" not in summary
+            if not ok:
+                continue
+            email = str(detail.get("account_email") or "")
+            if summary.startswith("对话生图"):
+                touch(email, day, "images_chat")
+            elif summary.startswith("文生图") or summary.startswith("图生图"):
+                touch(email, day, "images_api")
+            elif summary.startswith("文本生成"):
+                # 对话页真实聊天：以 CALL 为准（流式结束带 account_email），避免漏计
+                touch(email, day, "dialogues_real")
+
+        hash_to_email: dict[str, str] = {}
+        with self._lock:
+            for account in self._accounts.values():
+                token = str(account.get("access_token") or "")
+                email = str(account.get("email") or "").strip().lower()
+                if token and email:
+                    from services.log_service import _account_hash
+
+                    hash_to_email[_account_hash(token)] = email
+
+        for item in log_service.list(type=LOG_TYPE_LLM_OPS, start_date=start, end_date=end, limit=4000):
+            day = str(item.get("time") or "")[:10]
+            detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+            kind = str(detail.get("kind") or "").lower()
+            outcome = str(detail.get("outcome") or "").lower()
+            if outcome not in {"ok", "success", ""}:
+                continue
+            mail = str(detail.get("account_email") or detail.get("email") or "").strip()
+            if not mail:
+                mail = hash_to_email.get(str(detail.get("account_hash") or "").strip(), "")
+            # 真实对话已由 CALL「文本生成」计入；chat_image 已由 CALL「对话生图」计入
+            if kind == "nurture":
+                touch(mail, day, "dialogues_nurture")
+
+        by_email = {
+            email: [{"date": day, **daymap[day]} for day in dates]
+            for email, daymap in buckets.items()
+        }
+        return {"days": days, "dates": dates, "by_email": by_email}
+
+    @classmethod
+    def is_manual_scheduling_enabled(cls, account: dict | None) -> bool:
+        """人工调度开关：空 receive_state 视为可调度；仅 verified* 正式入池。"""
+        if not isinstance(account, dict):
+            return False
+        receive_state = str(account.get("panda_receive_state") or "").strip().lower()
+        if not receive_state:
+            return True
+        return receive_state in {"verified_ready", "verified", "local_verified"}
+
+    def set_account_scheduling(
+        self,
+        access_token: str,
+        *,
+        enabled: bool,
+        reason: str = "",
+        quiet: bool = True,
+    ) -> dict | None:
+        """人工进/出调度：进=verified_ready（clear_isolation），出=identity_isolated。"""
+        target_state = "verified_ready" if enabled else "identity_isolated"
+        default_reason = "manual_enter_schedule" if enabled else "manual_exit_schedule"
+        return self.update_account_identity(
+            access_token,
+            {"panda_receive_state": target_state},
+            reason=str(reason or "").strip() or default_reason,
+            quiet=quiet,
+            clear_isolation=bool(enabled),
+        )
+
+    def set_accounts_scheduling(
+        self,
+        access_tokens: list[str],
+        *,
+        enabled: bool,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        updated = 0
+        skipped = 0
+        errors: list[dict[str, str]] = []
+        last_item: dict | None = None
+        for raw in access_tokens:
+            token = str(raw or "").strip()
+            if not token:
+                skipped += 1
+                continue
+            try:
+                item = self.set_account_scheduling(token, enabled=enabled, reason=reason, quiet=True)
+            except Exception as exc:
+                errors.append({"token": anonymize_token(token), "error": str(exc)})
+                continue
+            if item is None:
+                skipped += 1
+                continue
+            updated += 1
+            last_item = item
+        return {
+            "updated": updated,
+            "skipped": skipped,
+            "errors": errors,
+            "enabled": bool(enabled),
+            "item": last_item,
+            "stats": self.get_stats(),
+        }
 
     def update_account_identity(
         self,
@@ -2324,6 +3050,14 @@ class AccountService:
             account = self._normalize_account(merged)
             if account is None:
                 return None
+            proxy_keys = ("proxy", "proxy_binding_hash", "proxy_egress_hash")
+            if any(str(account.get(k) or "") != str(current.get(k) or "") for k in proxy_keys):
+                account = dict(account)
+                account["cf_daily"] = []
+                account["egress_daily"] = []
+                account = self._normalize_account(account)
+                if account is None:
+                    return None
             self._accounts[access_token] = account
             if account != current:
                 self._persist_upsert_accounts([account])
@@ -2406,7 +3140,44 @@ class AccountService:
                 return False
         return True
 
-    def mark_image_result(self, access_token: str, success: bool) -> dict | None:
+    @staticmethod
+    def _decrement_stored_image_quota(account: dict) -> dict:
+        """Decrement cached quota and mirror into limits_progress.image_gen.remaining."""
+        item = dict(account)
+        if AccountService._is_true_unlimited_image_account(item) or bool(item.get("image_quota_unknown")):
+            return item
+        next_quota = max(0, int(item.get("quota") or 0) - 1)
+        item["quota"] = next_quota
+        limits = item.get("limits_progress")
+        if not isinstance(limits, list):
+            return item
+        updated: list[dict] = []
+        for entry in limits:
+            if not isinstance(entry, dict):
+                updated.append(entry)
+                continue
+            feature = str(entry.get("feature_name") or "").strip().lower().replace("-", "_")
+            if feature != "image_gen":
+                updated.append(entry)
+                continue
+            row = dict(entry)
+            try:
+                remaining = int(row.get("remaining"))
+            except (TypeError, ValueError):
+                remaining = next_quota + 1
+            row["remaining"] = max(0, remaining - 1)
+            updated.append(row)
+        item["limits_progress"] = updated
+        return item
+
+    def mark_image_result(
+        self,
+        access_token: str,
+        success: bool,
+        *,
+        error: object = None,
+        skip_cf_sample: bool = False,
+    ) -> dict | None:
         if not access_token:
             return None
         self.release_image_slot(access_token)
@@ -2423,7 +3194,7 @@ class AccountService:
                 next_item["success"] = int(next_item.get("success") or 0) + 1
                 next_item["image_fail_streak"] = 0
                 if not is_true_unlimited and not image_quota_unknown:
-                    next_item["quota"] = max(0, int(next_item.get("quota") or 0) - 1)
+                    next_item = self._decrement_stored_image_quota(next_item)
                 if not is_true_unlimited and not image_quota_unknown and next_item["quota"] == 0:
                     next_item["status"] = "限流"
                     next_item["restore_at"] = next_item.get("restore_at") or None
@@ -2458,8 +3229,25 @@ class AccountService:
             self._accounts[access_token] = account
             if account != current:
                 self._persist_upsert_accounts([account])
-            return dict(account)
-        return None
+        # 被动 CF 灯：成功记 ok；失败若是 CF 只记 cf，否则记 image_fail（避免双计）
+        if not skip_cf_sample:
+            try:
+                if success:
+                    # 成功通常已由 record_account_traffic 记过 ok；此处不再重复
+                    pass
+                elif self._looks_like_cf_edge_message(error):
+                    self.record_cf_sample(access_token, kind="cf")
+                    try:
+                        from services.proxy_cf_failover import swap_account_proxy_on_cf
+
+                        swap_account_proxy_on_cf(access_token)
+                    except Exception:
+                        pass
+                else:
+                    self.record_cf_sample(access_token, kind="image_fail")
+            except Exception:
+                pass
+        return dict(self._accounts.get(access_token) or account or {})
 
     def fetch_remote_info(
         self,
@@ -2874,6 +3662,9 @@ class AccountService:
             and not self._is_panda_upload_eligible(a)
         )
         schedulable = sum(1 for a in items if self._is_image_account_schedulable(a))
+        scheduling_enabled = sum(
+            1 for a in items if self.is_manual_scheduling_enabled(a) and a.get("status") == "正常"
+        )
         tainted = sum(1 for a in items if self._has_image_account_failure_evidence(a))
         panda_incoming = sum(1 for a in items if str(a.get("panda_receive_state") or "").lower() == "incoming")
         panda_verified = sum(1 for a in items if str(a.get("panda_receive_state") or "").lower() in {"verified", "verified_ready", "local_verified"})
@@ -2920,7 +3711,11 @@ class AccountService:
             "panda_upload_remote_pending_count": panda_incoming,
             "panda_upload_remote_verified_count": panda_verified,
             "panda_upload_remote_rejected_count": panda_rejected,
-            "schedulable": schedulable,
+            # 可调度 = 人工进调度且状态正常（与号池「进/出调度」开关一致）
+            "schedulable": scheduling_enabled,
+            "scheduling_enabled": scheduling_enabled,
+            # 生图即时候选（额度/失败证据/绑定等额外门槛），仅供运维 breakdown
+            "image_schedulable": schedulable,
             "tainted_count": tainted,
             "panda_incoming_count": panda_incoming,
             "panda_verified_count": panda_verified,
@@ -2944,6 +3739,12 @@ class AccountService:
                 "uploaded": 0,
                 "received": 0,
                 "deleted": 0,
+                "images": 0,
+                "images_api": 0,
+                "images_chat": 0,
+                "dialogues": 0,
+                "dialogues_real": 0,
+                "dialogues_nurture": 0,
             }
             for offset in range(days)
         }
@@ -2951,6 +3752,10 @@ class AccountService:
         def add(day: str | None, key: str, count: int = 1) -> None:
             if day in buckets and count > 0:
                 buckets[day][key] += count
+                if key in {"images_api", "images_chat"}:
+                    buckets[day]["images"] += count
+                if key in {"dialogues_real", "dialogues_nurture"}:
+                    buckets[day]["dialogues"] += count
 
         live_uploaded: dict[str, int] = {}
         live_received: dict[str, int] = {}
@@ -2975,6 +3780,32 @@ class AccountService:
             elif summary.startswith("删除 ") or summary.startswith("自动移除"):
                 add(day, "deleted", int(detail.get("removed") or 1))
 
+        # api 生图：call 文生图/图生图；对话生图：call 对话生图
+        for item in log_service.list(type=LOG_TYPE_CALL, start_date=start.isoformat(), end_date=today.isoformat(), limit=20000):
+            day = str(item.get("time") or "")[:10]
+            summary = str(item.get("summary") or "")
+            detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+            status = str(detail.get("status") or "").lower()
+            ok = status in {"success", "ok", ""} and "失败" not in summary and "超时" not in summary
+            if not ok:
+                continue
+            if summary.startswith("对话生图"):
+                add(day, "images_chat")
+            elif summary.startswith("文生图") or summary.startswith("图生图"):
+                add(day, "images_api")
+            elif summary.startswith("文本生成"):
+                add(day, "dialogues_real")
+
+        # 拟人对话（llm_ops nurture）；真实对话/对话生图以 CALL 为准，避免双计
+        for item in log_service.list(type=LOG_TYPE_LLM_OPS, start_date=start.isoformat(), end_date=today.isoformat(), limit=20000):
+            day = str(item.get("time") or "")[:10]
+            detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+            kind = str(detail.get("kind") or "").lower()
+            outcome = str(detail.get("outcome") or "").lower()
+            if outcome not in {"ok", "success", ""}:
+                continue
+            if kind == "nurture":
+                add(day, "dialogues_nurture")
         for day, count in live_uploaded.items():
             if day in buckets and buckets[day]["uploaded"] == 0:
                 buckets[day]["uploaded"] = count

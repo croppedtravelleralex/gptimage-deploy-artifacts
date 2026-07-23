@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from threading import Event
 
@@ -7,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from api import accounts, ai, image_assets, image_tasks, register, system
+from api import accounts, ai, image_assets, image_tasks, ops, register, system
 from api.errors import install_exception_handlers
 from api.support import resolve_web_asset, start_limited_account_watcher
 from services.backup_service import backup_service
@@ -19,6 +20,9 @@ from services.outlook_auto_recovery_loop_service import outlook_auto_recovery_lo
 from services.panda_staging_service import panda_staging_service
 from services.proactive_refresh_loop_service import proactive_refresh_loop_service
 from services.register_service import register_service
+from services.risk_audit_service import risk_audit_service
+from services.text_nurture_service import text_nurture_service
+from services.account_warmup_service import account_warmup_service
 
 
 def create_app() -> FastAPI:
@@ -29,12 +33,16 @@ def create_app() -> FastAPI:
         stop_event = Event()
         thread = start_limited_account_watcher(stop_event)
         cleanup_thread = start_image_cleanup_scheduler(stop_event)
-        register_service.start_if_enabled()
+        if os.getenv("CHATGPT2API_DISABLE_REGISTER", "").strip().lower() not in {"1", "true", "yes", "on"}:
+            register_service.start_if_enabled()
         image_task_service.start_background()
         account_maintenance_loop_service.start_background()
         outlook_auto_recovery_loop_service.start_background()
         proactive_refresh_loop_service.start_background()
         panda_staging_service.start_background()
+        text_nurture_service.start_background()
+        risk_audit_service.start_background()
+        account_warmup_service.start_background()
         backup_service.start()
         config.cleanup_old_images()
         try:
@@ -48,6 +56,9 @@ def create_app() -> FastAPI:
             outlook_auto_recovery_loop_service.stop_background()
             proactive_refresh_loop_service.stop_background()
             panda_staging_service.stop_background()
+            text_nurture_service.stop_background()
+            risk_audit_service.stop_background()
+            account_warmup_service.stop_background()
             backup_service.stop()
 
     app = FastAPI(title="chatgpt2api", version=app_version, lifespan=lifespan)
@@ -63,7 +74,9 @@ def create_app() -> FastAPI:
     app.include_router(accounts.create_router())
     app.include_router(image_assets.create_router())
     app.include_router(image_tasks.create_router())
-    app.include_router(register.create_router())
+    if os.getenv("CHATGPT2API_DISABLE_REGISTER", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        app.include_router(register.create_router())
+    app.include_router(ops.create_router())
     app.include_router(system.create_router(app_version))
 
     @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)

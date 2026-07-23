@@ -129,6 +129,56 @@ class AccountCapabilityTests(unittest.TestCase):
             self.assertFalse(account["image_quota_unknown"])
             self.assertEqual(account["restore_at"], "2026-06-30T13:57:04.555288+00:00")
 
+    def test_mark_image_result_decrements_limits_progress_remaining(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            service.add_account_items(
+                [
+                    {
+                        "access_token": "token-quota",
+                        "status": "正常",
+                        "quota": 24,
+                        "image_quota_unknown": False,
+                        "limits_progress": [
+                            {"feature_name": "image_gen", "remaining": 24, "reset_after": "2026-07-24T00:00:00+00:00"}
+                        ],
+                    }
+                ]
+            )
+            for _ in range(2):
+                service.mark_image_result("token-quota", success=True)
+            account = service.get_account("token-quota")
+            self.assertEqual(account["quota"], 22)
+            remaining = next(
+                item["remaining"]
+                for item in account["limits_progress"]
+                if item.get("feature_name") == "image_gen"
+            )
+            self.assertEqual(remaining, 22)
+
+    def test_negative_quota_from_remote_is_marked_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            service.add_account_items(
+                [
+                    {
+                        "access_token": "token-neg",
+                        "status": "正常",
+                        "quota": -1,
+                        "image_quota_unknown": False,
+                        "limits_progress": [
+                            {"feature_name": "image_gen", "remaining": -1, "reset_after": "2026-07-23T06:51:18+00:00"}
+                        ],
+                    }
+                ]
+            )
+
+            account = service.get_account("token-neg")
+
+            self.assertIsNotNone(account)
+            self.assertEqual(account["quota"], 0)
+            self.assertTrue(account["image_quota_unknown"])
+
     def test_limits_progress_does_not_restore_quota_for_abnormal_account(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))

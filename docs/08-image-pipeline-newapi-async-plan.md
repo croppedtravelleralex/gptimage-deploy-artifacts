@@ -697,3 +697,136 @@ duration=763.51s
 - 最终收尾：`healthy=true, image_inflight_count=0, unfinished=[]`。
 
 下一步：不要继续 30/36；先处理 edit 提交长尾、非 hard-timeout slot 滞后、上游 connection timeout 降级与重试策略。
+## 2026-07-10 IMG-017：conversation-ready deadline、可取消 hard timeout 与流资源回收
+
+状态：**已部署 Panda；直连同步 canary 与线程/连接验收通过；NewAPI 外层待正式环境变量复测**。
+
+### 现象与生产证据
+
+部署 IMG-016 首 payload deadline 后，仍出现 3 条新失败：
+
+```text
+sync-F-1gEBG5g3AwxN_HVu8icw  315000ms
+sync-vuS7njaJVmZqprpwyp7euA 315000ms
+sync-6r-fdDEN-pG3kJ8jypSNiA 315000ms
+```
+
+共同特征：
+
+- 约 4～5 秒进入 `image_upstream_phase=generating`。
+- 之后没有 `image_stream_resolve_start`，任务侧也没有 `conversation_id`。
+- strace 显示 curl 线程周期性收到约 76-byte TLS 数据；不是完全无 body，而是上游持续发送小型 control/heartbeat。
+- DB 在 315 秒转 error 后，底层 handler/curl 线程仍可存活十余分钟；进程线程数和代理 `ESTABLISHED/CLOSE_WAIT` 会累积。
+- 三个失败账号和 Webshare 代理均不同，且历史有成功记录，排除单账号/单代理永久失效。
+
+### 根因链
+
+```text
+非空 ping/control SSE payload
+  -> 被“首个非空 data 即 ready”误判
+  -> 45 秒 deadline 被提前解除
+  -> 后续 response_queue.get() 无 timeout
+  -> heartbeat 使 libcurl low-speed timeout 不触发
+  -> Panda 315 秒安全网只改 DB/释放 slot，不能取消底层流
+  -> handler/curl 线程与代理连接继续存活
+  -> NewAPI 同步适配器读到 Panda error
+  -> RuntimeError 经 _image_error_response() 映射为 HTTP 502
+```
+
+因此 NewAPI 不是独立超时源；`status_code=502` 是 Panda hard-timeout 终态错误的映射结果。
+
+### 实现
+
+1. **conversation-ready deadline**
+   - pre-conversation ready predicate 必须捕获真实 `conversation_id`。
+   - ping/control/heartbeat 仍可透传解析，但不能解除 45 秒 deadline。
+   - 日志事件统一为 `image_pre_conversation_sse_ready[_deadline]`，带 `ready_label`。
+
+2. **post-ready 15 秒切轮询**
+   - 捕获 `conversation_id` 后，SSE 最多再保留 15 秒墙钟窗口。
+   - control heartbeat 不延长该窗口。
+   - 到期设置 `quit_now`、非阻塞结束 generator，保留已解析状态并转 `/backend-api/tasks` / conversation poll。
+
+3. **取消信号贯穿**
+   - `ImageTaskService` 创建 `cancel_event`。
+   - generation/edit handler 传到 `ConversationRequest`。
+   - backend、queue reader 与 `_poll_image_results()` 的 sleep/循环均检查同一事件。
+   - hard timeout 设置事件后等待 1 秒宽限，并记录 `runner_alive_after_cancel`。
+
+4. **已捕获会话的 hard timeout 不再终态 502**
+   - progress callback 原子保存 `conversation_id` 与当前 `resume_access_token`。
+   - hard timeout 若已有会话：释放 slot、任务转 `timeout_pending`、`next_resume_ts=now+1`，由 poll worker 继续原任务。
+   - 无会话时才沿用 transient backoff + mark-fail。
+
+5. **单一 slot 记账与资源回收**
+   - `ImageStreamCancelledError` 不在 conversation 层重复 `mark_image_result(False)`；由 task service 统一释放。
+   - `OpenAIBackendAPI.close()` 幂等关闭 session，并对 curl_cffi stream executor 调用 `shutdown(wait=False, cancel_futures=True)`。
+   - image 与 text backend 均显式 close，降低 executor/连接残留风险。
+
+### 验证
+
+本地：
+
+```text
+相关回归：85 passed
+multi-image/poll 相关：13 passed
+合计：98 passed
+py_compile：passed
+git diff --check：passed
+```
+
+新增/强化用例覆盖：
+
+- control payload 不满足 conversation-ready deadline。
+- post-ready control heartbeat 不延长 15 秒 deadline。
+- cancel 立即中止 queue-backed SSE。
+- cancel 中断 image poll sleep。
+- conversation metadata progress 同时携带所属 access token。
+- hard timeout 已捕获会话时 runner 接收 cancel、任务进入 `timeout_pending`、slot 仅释放一次。
+- backend close 幂等并 shutdown stream executor。
+
+Panda 部署：
+
+```text
+备份：/root/gptimage/backups/img017-conversation-deadline-cancel-20260710-214942/
+容器 compile：passed
+容器目标测试：11 + 21 + 3 = 35 passed
+health：healthy=true, total=12, schedulable=12, dispatchable=12, image_inflight_count=0
+```
+
+真实直连同步 canary：
+
+```text
+task_id=sync-zKrDisvuqd_XiyLkwLvHvA
+HTTP 200
+elapsed=78.91s
+duration_ms=78777
+status=success
+conversation_id=6a50fad1-c09c-83ec-b1ff-41c90c014b59
+threads=2 -> 2
+after_tcp={LISTEN: 2}
+unfinished={}
+recent bad markers=0
+```
+
+部署脚本前两次分别因只读 bind mount 的 pycache 写入、裸 `python` 不含项目依赖而自动回滚；第三次改用临时 `PYTHONPYCACHEPREFIX` 与容器真实 `uv run python` 后完成。两次失败均未让新代码生效，旧版本健康状态保持正常。
+
+### 剩余边界
+
+- 当前环境没有 `NEWAPI_API_KEY/NEWAPI_BASE_URL`，未读取或搜索密钥；需后续用正式环境变量做 1～3 次 NewAPI 低并发同步复测。
+- 非流式 HTTP 请求本身仍不能被 Python `Event` 强制中断；如果 hard timeout 正好落在单次 `/backend-api` 请求内，`runner_alive_after_cancel` 可能短时为 true，但请求有自身 timeout，且任务已可进入 `timeout_pending`。后续若再次出现持续残留，再评估进程级隔离/kill，而不是盲目增加线程。
+- 不继续 24/30/36 压测；先观察真实低并发是否彻底消除 `315s + no conversation_id captured` 与线程/连接累积。
+
+## 2026-07-11 IMG-018：标准同步过载 429 + ETA 准入 + 削峰
+
+状态：**已部署 Panda**；NewAPI single/C2/C3 通过（零空 data 200）。
+
+要点：
+
+1. 标准同步客户端过载不再返回空 `image.task` 200，改为 429 `image_service_busy`。
+2. admission 与上游 inflight 解耦；`admission_max=12` + EWMA `max_eta_secs=180`。
+3. `submit_start_min_interval_ms=1500` 削开工尖峰；小池 soft burst `dispatchable>=8`。
+4. 生产升档：`global=6` / `per_user=2` / `submit_workers=2`。
+5. 验收脚本：`scripts/img018_sync_admission_acceptance.py`；单元：`test/test_image_sync_admission_eta.py`。
+
+回滚：`/root/gptimage/backups/img018-sync-eta-pacing-20260711-092302/ROLLBACK.sh`

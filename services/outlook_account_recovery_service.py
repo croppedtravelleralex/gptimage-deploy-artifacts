@@ -16,6 +16,7 @@ from typing import Any, Callable
 
 from services.account_service import account_service
 from services.config import BASE_DIR, DATA_DIR
+from services import yumail_otp
 from utils.log import logger
 
 
@@ -136,11 +137,17 @@ class OutlookAccountRecoveryService:
             or (self.data_dir / "runlogs" / "webshare_good_csrf_200.secret.txt")
         ).resolve()
         self.recovery_script = (self.base_dir / "scripts" / "recover_panda_outlook_accounts.py").resolve()
+        self.camoufox_script = (self.base_dir / "scripts" / "outlook_camoufox_password_relogin.py").resolve()
         self.timeout_secs = max(60.0, float(timeout_secs))
         self._worker_launcher = worker_launcher or self._launch_thread
         self._lock = threading.Lock()
         self._progress: dict[str, dict[str, Any]] = {}
         self._active_progress_id = ""
+
+    @property
+    def recovery_backend(self) -> str:
+        value = str(os.getenv("OUTLOOK_RECOVERY_BACKEND") or "http").strip().lower()
+        return value if value in {"http", "camoufox"} else "http"
 
     @staticmethod
     def _launch_thread(worker: Callable[[], None]) -> None:
@@ -171,8 +178,24 @@ class OutlookAccountRecoveryService:
             raise ValueError("OpenAI 账号已删除或停用，已停止自动恢复；官方恢复后请重新导入账号")
         if not _has_recovery_evidence(account):
             raise ValueError("仅允许恢复异常、rejected 或明确 token invalidated 的账号")
-        self._assert_protected_secret(self.credentials_file, "Outlook 恢复凭据")
-        if not self.recovery_script.is_file():
+        has_password = bool(str(account.get("password") or "").strip())
+        has_credentials = self.credentials_file.is_file()
+        has_yumail = yumail_otp.is_configured()
+        if not has_password:
+            raise ValueError("need_openai_password: 账号缺少 OpenAI 密码，无法密码重登")
+        if not has_credentials and not has_yumail:
+            raise ValueError(
+                "yumail_not_configured: 未配置 YuMail（YUMAIL_API_KEY）且无 Outlook 邮箱凭据文件，无法收 OTP"
+            )
+        # 仅当必须走 YuMail（无邮箱凭据）时才探针环回；有凭据文件时可独立恢复。
+        if not has_credentials:
+            probe = yumail_otp.probe_reachable()
+            if not probe.get("ok"):
+                raise RuntimeError(f"yumail_unreachable: {probe.get('error') or 'probe failed'}")
+        if self.recovery_backend == "camoufox":
+            if not self.camoufox_script.is_file():
+                raise FileNotFoundError("Outlook Camoufox 恢复引擎不存在")
+        elif not self.recovery_script.is_file():
             raise FileNotFoundError("Outlook 恢复引擎不存在")
         if self.proxy_file.exists():
             self._assert_protected_secret(self.proxy_file, "Webshare 代理文件")
@@ -223,9 +246,19 @@ class OutlookAccountRecoveryService:
 
     def check_prerequisites(self) -> tuple[bool, str]:
         try:
-            self._assert_protected_secret(self.credentials_file, "Outlook 恢复凭据")
-            if not self.recovery_script.is_file():
+            if self.recovery_backend == "camoufox":
+                if not self.camoufox_script.is_file():
+                    return False, "Outlook Camoufox 恢复引擎不存在"
+            elif not self.recovery_script.is_file():
                 return False, "Outlook 恢复引擎不存在"
+            has_credentials = self.credentials_file.is_file()
+            if not yumail_otp.is_configured() and not has_credentials:
+                return False, "yumail_not_configured: 未配置 YuMail 且无 Outlook 邮箱凭据"
+            # 与 _validate_target 对齐：仅当无邮箱凭据、必须走 YuMail 时才强制探针。
+            if not has_credentials and yumail_otp.is_configured():
+                probe = yumail_otp.probe_reachable()
+                if not probe.get("ok"):
+                    return False, f"yumail_unreachable: {probe.get('error') or 'probe failed'}"
             if self.proxy_file.exists():
                 self._assert_protected_secret(self.proxy_file, "Webshare 代理文件")
             return True, ""
@@ -273,13 +306,26 @@ class OutlookAccountRecoveryService:
         return report_dir, backup_dir
 
     def _build_command(self, email: str, report_dir: Path, backup_dir: Path) -> list[str]:
+        if self.recovery_backend == "camoufox":
+            command = [
+                sys.executable,
+                str(self.camoufox_script),
+                "--root",
+                str(self.base_dir),
+                "--email",
+                email,
+                "--report-dir",
+                str(report_dir),
+            ]
+            if self.proxy_file.is_file():
+                command.extend(["--proxy-file", str(self.proxy_file)])
+            return command
+
         command = [
             sys.executable,
             str(self.recovery_script),
             "--root",
             str(self.base_dir),
-            "--credentials-file",
-            str(self.credentials_file),
             "--target-email",
             email,
             "--limit",
@@ -288,7 +334,13 @@ class OutlookAccountRecoveryService:
             str(report_dir),
             "--backup-dir",
             str(backup_dir),
+            "--allow-account-password",
+            "--prefer-yumail-otp",
         ]
+        if self.credentials_file.is_file():
+            command.extend(["--credentials-file", str(self.credentials_file)])
+        else:
+            command.append("--skip-mailbox-if-missing")
         if self.proxy_file.is_file():
             command.extend(["--proxy-file", str(self.proxy_file)])
         return command

@@ -20,11 +20,13 @@ import { useAuthGuard } from "@/lib/use-auth-guard";
 const LogType = {
   Call: "call",
   Account: "account",
+  LlmOps: "llm_ops",
 } as const;
 
 const typeLabels: Record<string, string> = {
   [LogType.Call]: "调用日志",
   [LogType.Account]: "账号管理日志",
+  [LogType.LlmOps]: "LLM 操作日志",
 };
 
 function getDetailText(item: SystemLog, key: string) {
@@ -52,6 +54,8 @@ function getStatus(item: SystemLog) {
 function LogsContent() {
   const [items, setItems] = useState<SystemLog[]>([]);
   const [type, setType] = useState<string>(LogType.Call);
+  const [source, setSource] = useState("");
+  const [outcome, setOutcome] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [detailLog, setDetailLog] = useState<SystemLog | null>(null);
@@ -66,6 +70,7 @@ function LogsContent() {
   const detailUrls = getUrls(detailLog);
   const detailImages = detailUrls.map((url, index) => ({ id: `${index}`, src: url }));
   const isCallLog = type === LogType.Call;
+  const isLlmOps = type === LogType.LlmOps;
   const pageSize = 10;
   const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
   const safePage = Math.min(page, pageCount);
@@ -77,7 +82,13 @@ function LogsContent() {
   const loadLogs = async () => {
     setIsLoading(true);
     try {
-      const data = await fetchSystemLogs({ type, start_date: startDate, end_date: endDate });
+      const data = await fetchSystemLogs({
+        type,
+        start_date: startDate,
+        end_date: endDate,
+        source: isLlmOps ? source : undefined,
+        outcome: isLlmOps ? outcome : undefined,
+      });
       setItems(data.items);
       setSelectedIds((current) => current.filter((id) => data.items.some((item) => item.id === id)));
       setPage(1);
@@ -91,6 +102,8 @@ function LogsContent() {
   const clearFilters = () => {
     setStartDate("");
     setEndDate("");
+    setSource("");
+    setOutcome("");
   };
 
   const openDetail = (item: SystemLog) => {
@@ -131,7 +144,7 @@ function LogsContent() {
 
   useEffect(() => {
     void loadLogs();
-  }, [type, startDate, endDate]);
+  }, [type, startDate, endDate, source, outcome]);
 
   return (
     <section className="space-y-5">
@@ -146,8 +159,32 @@ function LogsContent() {
             <SelectContent>
               <SelectItem value={LogType.Call}>调用日志</SelectItem>
               <SelectItem value={LogType.Account}>账号管理日志</SelectItem>
+              <SelectItem value={LogType.LlmOps}>LLM 操作日志</SelectItem>
             </SelectContent>
           </Select>
+          {isLlmOps ? (
+            <>
+              <Select value={source || "__all__"} onValueChange={(value) => setSource(value === "__all__" ? "" : value)}>
+                <SelectTrigger className="h-10 w-[130px] rounded-xl border-stone-200 bg-white"><SelectValue placeholder="source" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">全部 source</SelectItem>
+                  <SelectItem value="L0">L0</SelectItem>
+                  <SelectItem value="L1">L1</SelectItem>
+                  <SelectItem value="L2">L2</SelectItem>
+                  <SelectItem value="ai_review">ai_review</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={outcome || "__all__"} onValueChange={(value) => setOutcome(value === "__all__" ? "" : value)}>
+                <SelectTrigger className="h-10 w-[130px] rounded-xl border-stone-200 bg-white"><SelectValue placeholder="outcome" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">全部 outcome</SelectItem>
+                  <SelectItem value="ok">ok</SelectItem>
+                  <SelectItem value="reject">reject</SelectItem>
+                  <SelectItem value="error">error</SelectItem>
+                </SelectContent>
+              </Select>
+            </>
+          ) : null}
           <DateRangeFilter startDate={startDate} endDate={endDate} onChange={(start, end) => { setStartDate(start); setEndDate(end); }} />
           <Button variant="outline" onClick={clearFilters} className="h-10 rounded-xl border-stone-200 bg-white px-4 text-stone-700">
             清除筛选条件
@@ -199,6 +236,11 @@ function LogsContent() {
                   {isCallLog ? <TableHead>调用耗时</TableHead> : null}
                   {isCallLog ? <TableHead>状态</TableHead> : null}
                   {isCallLog ? <TableHead className="w-36">图片</TableHead> : null}
+                  {isLlmOps ? <TableHead>source</TableHead> : null}
+                  {isLlmOps ? <TableHead>kind</TableHead> : null}
+                  {isLlmOps ? <TableHead>outcome</TableHead> : null}
+                  {isLlmOps ? <TableHead>耗时</TableHead> : null}
+                  {isLlmOps ? <TableHead>account_hash</TableHead> : null}
                   <TableHead>简述</TableHead>
                   <TableHead className="w-40">操作</TableHead>
                 </TableRow>
@@ -247,6 +289,24 @@ function LogsContent() {
                           )}
                         </TableCell>
                       ) : null}
+                      {isLlmOps ? <TableCell>{getDetailText(item, "source")}</TableCell> : null}
+                      {isLlmOps ? <TableCell>{getDetailText(item, "kind")}</TableCell> : null}
+                      {isLlmOps ? (
+                        <TableCell>
+                          <Badge
+                            variant={item.detail?.outcome === "error" || item.detail?.outcome === "reject" ? "danger" : "success"}
+                            className="rounded-md"
+                          >
+                            {getDetailText(item, "outcome")}
+                          </Badge>
+                        </TableCell>
+                      ) : null}
+                      {isLlmOps ? (
+                        <TableCell>
+                          {typeof item.detail?.latency_ms === "number" ? `${item.detail.latency_ms} ms` : "-"}
+                        </TableCell>
+                      ) : null}
+                      {isLlmOps ? <TableCell className="font-mono text-xs">{getDetailText(item, "account_hash")}</TableCell> : null}
                       <TableCell className="max-w-[420px] truncate text-stone-500">{item.summary || "-"}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1">

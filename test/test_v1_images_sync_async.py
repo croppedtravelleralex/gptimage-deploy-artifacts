@@ -17,6 +17,14 @@ AUTH_HEADERS = {"Authorization": "Bearer chatgpt2api"}
 class ImageGenerationsSyncAsyncTests(unittest.TestCase):
     def setUp(self):
         self.calls = []
+        self._original_image_generation_paused = ai_module.config.data.get("image_generation_paused")
+        self._original_image_task_queue = ai_module.config.data.get("image_task_queue")
+        ai_module.config.data["image_generation_paused"] = False
+        ai_module.config.data["image_task_queue"] = {
+            **(self._original_image_task_queue if isinstance(self._original_image_task_queue, dict) else {}),
+            "enabled": True,
+        }
+        self.addCleanup(self._restore_config)
 
         def fake_run_generation_sync(identity, **kwargs):
             self.calls.append(kwargs)
@@ -32,6 +40,16 @@ class ImageGenerationsSyncAsyncTests(unittest.TestCase):
         app = FastAPI()
         app.include_router(ai_module.create_router())
         self.client = TestClient(app)
+
+    def _restore_config(self):
+        if self._original_image_generation_paused is None:
+            ai_module.config.data.pop("image_generation_paused", None)
+        else:
+            ai_module.config.data["image_generation_paused"] = self._original_image_generation_paused
+        if self._original_image_task_queue is None:
+            ai_module.config.data.pop("image_task_queue", None)
+        else:
+            ai_module.config.data["image_task_queue"] = self._original_image_task_queue
 
     def test_non_stream_generation_uses_sync_over_async(self):
         response = self.client.post(
@@ -64,6 +82,54 @@ class ImageGenerationsSyncAsyncTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 0)
         handle.assert_called_once()
 
+    def test_generation_pause_rejects_without_calling_upstream(self):
+        ai_module.config.data["image_generation_paused"] = True
+        response = self.client.post(
+            "/v1/images/generations",
+            headers=AUTH_HEADERS,
+            json={
+                "model": "gpt-image-2",
+                "prompt": "暂停时不应触发官方生图",
+            },
+        )
+
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertEqual(response.json()["detail"]["code"], "image_generation_paused")
+        self.assertEqual(self.calls, [])
+
+    def test_chat_image_pause_rejects_without_calling_upstream(self):
+        ai_module.config.data["image_generation_paused"] = True
+        with mock.patch.object(ai_module.openai_v1_chat_complete, "handle", return_value={"choices": []}) as handle:
+            response = self.client.post(
+                "/v1/chat/completions",
+                headers=AUTH_HEADERS,
+                json={
+                    "model": "gpt-image-2",
+                    "messages": [{"role": "user", "content": "暂停时不应通过 chat 触发生图"}],
+                },
+            )
+
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertEqual(response.json()["detail"]["code"], "image_generation_paused")
+        handle.assert_not_called()
+
+    def test_response_image_tool_pause_rejects_without_calling_upstream(self):
+        ai_module.config.data["image_generation_paused"] = True
+        with mock.patch.object(ai_module.openai_v1_response, "handle", return_value={"output": []}) as handle:
+            response = self.client.post(
+                "/v1/responses",
+                headers=AUTH_HEADERS,
+                json={
+                    "model": "gpt-image-2",
+                    "input": "暂停时不应通过 responses 触发生图",
+                    "tools": [{"type": "image_generation"}],
+                },
+            )
+
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertEqual(response.json()["detail"]["code"], "image_generation_paused")
+        handle.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -71,6 +137,14 @@ if __name__ == "__main__":
 class ImageGenerationsAsyncTunnelTests(unittest.TestCase):
     def setUp(self):
         self.sync_calls = []
+        self._original_image_generation_paused = ai_module.config.data.get("image_generation_paused")
+        self._original_image_task_queue = ai_module.config.data.get("image_task_queue")
+        ai_module.config.data["image_generation_paused"] = False
+        ai_module.config.data["image_task_queue"] = {
+            **(self._original_image_task_queue if isinstance(self._original_image_task_queue, dict) else {}),
+            "enabled": True,
+        }
+        self.addCleanup(self._restore_config)
 
         def fake_run_generation_sync(identity, **kwargs):
             self.sync_calls.append(kwargs)
@@ -116,6 +190,23 @@ class ImageGenerationsAsyncTunnelTests(unittest.TestCase):
                     "missing_ids": [],
                 }
 
+            def queue_snapshot_for_task(self, identity, task_id):
+                return {
+                    "id": task_id,
+                    "task_id": task_id,
+                    "status": "queued",
+                    "mode": "generate",
+                    "progress": "queued",
+                    "queue_position": 1,
+                    "estimated_start_after_secs": 0,
+                    "running_limit": 2,
+                    "accepted_limit": 36,
+                    "created_at": "2026-01-01 00:00:00",
+                    "updated_at": "2026-01-01 00:00:00",
+                    "data": [],
+                    "error": "",
+                }
+
         self.fake_service = FakeTaskService()
         self.sync_patcher = mock.patch.object(ai_module, "run_generation_sync", fake_run_generation_sync)
         self.task_patcher = mock.patch.object(ai_module, "image_task_service", self.fake_service)
@@ -129,6 +220,16 @@ class ImageGenerationsAsyncTunnelTests(unittest.TestCase):
         app = FastAPI()
         app.include_router(ai_module.create_router())
         self.client = TestClient(app)
+
+    def _restore_config(self):
+        if self._original_image_generation_paused is None:
+            ai_module.config.data.pop("image_generation_paused", None)
+        else:
+            ai_module.config.data["image_generation_paused"] = self._original_image_generation_paused
+        if self._original_image_task_queue is None:
+            ai_module.config.data.pop("image_task_queue", None)
+        else:
+            ai_module.config.data["image_task_queue"] = self._original_image_task_queue
 
     def test_generation_panda_async_returns_task_without_waiting(self):
         response = self.client.post(
@@ -153,6 +254,7 @@ class ImageGenerationsAsyncTunnelTests(unittest.TestCase):
         self.assertEqual(self.fake_service.generation_calls[0]["response_format"], "b64_json")
 
     def test_generation_panda_task_id_returns_final_openai_response(self):
+        ai_module.config.data["image_generation_paused"] = True
         response = self.client.post(
             "/v1/images/generations",
             headers=AUTH_HEADERS,
@@ -242,8 +344,8 @@ class ImageGenerationsAsyncTunnelTests(unittest.TestCase):
         self.assertIn("panda_error", payload)
         self.assertNotIn("error", payload)
 
-    def test_generation_busy_sync_request_auto_returns_async_task(self):
-        with mock.patch.object(ai_module, "_try_enter_image_sync_admission", return_value=False):
+    def test_generation_busy_sync_request_returns_429(self):
+        with mock.patch.object(ai_module, "_try_enter_image_sync_admission", return_value=(False, 120)):
             response = self.client.post(
                 "/v1/images/generations",
                 headers=AUTH_HEADERS,
@@ -255,14 +357,12 @@ class ImageGenerationsAsyncTunnelTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.status_code, 429, response.text)
+        self.assertEqual(response.headers.get("Retry-After"), "120")
         payload = response.json()
-        self.assertEqual(payload["object"], "image.task")
-        self.assertEqual(payload["task_id"], "auto-async-gen-1")
-        self.assertEqual(payload["status"], "queued")
+        self.assertEqual(payload["error"]["code"], "image_service_busy")
         self.assertEqual(self.sync_calls, [])
-        self.assertEqual(len(self.fake_service.generation_calls), 1)
-        self.assertEqual(self.fake_service.generation_calls[0]["prompt"], "普通同步但服务已满")
+        self.assertEqual(self.fake_service.generation_calls, [])
 
     def test_edit_panda_async_returns_task_without_sync_wait(self):
         response = self.client.post(

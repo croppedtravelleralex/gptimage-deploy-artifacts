@@ -1,6 +1,8 @@
 # 账号池与生图性能升级落地文档
 
-最后更新：2026-07-04
+最后更新：2026-07-08
+
+> 状态说明：本文是账号池与生图性能升级的专题设计档，部分内容已经落地，部分已被后续生产事实修正。当前事实以 `docs/02-current-state.md`、`docs/04-improvement-backlog.md` 和代码为准；本文保留设计脉络，不再作为唯一执行清单。
 
 ## 1. 背景
 
@@ -28,15 +30,15 @@
 
 | 模块 | 当前事实 | 本次目标 |
 | --- | --- | --- |
-| 本地账号池 | 代码主要使用 `data/accounts.json`，用户口径含 `Accounts.js` | SQLite 主存储，文件仅低频快照 |
-| 本地探活 | 注册后快速同步会把短命号带给 Panda | `1h/3h/6h` 三次探测，high confidence 才上传 |
-| 本地同步 | `scripts/sync_accounts_delta_to_panda.ps1` 读 JSON 并上传 | 改为从 SQLite 选 `verified_ready`，按水位上传 |
-| Panda 同步入口 | `/api/accounts/import-batch` | 限频、签名、幂等、水位限流、低写放大 upsert |
-| Panda 账号存储 | JSON 或现有 DB backend 仍存在全量保存语义 | 增量 SQLite / batch transaction |
-| Panda maintenance | 负责大量清死号 | 改成抽检、错峰、批量提交 |
+| 本地账号池 | 当前默认 SQLite 主存储，账号运行时已行级 upsert/delete | 已完成主迁移；继续观察写放大 |
+| 本地探活 | staging / ready / 水位驱动补池代码已存在 | 继续按 clean ready 补 Panda |
+| 本地同步 | 当前安全默认是 `panda_sync.enabled=false`、`queue_on_failure=false` | 失败留本地主池，不再进入 pending |
+| Panda 同步入口 | `/api/accounts/import-batch` 已有限批和限频保护 | 后续再评估 HMAC/nonce 是否必要 |
+| Panda 账号存储 | 当前 Panda 使用 SQLite `data/accounts.db` | 继续优化 checkpoint / mmap / cache |
+| Panda maintenance | 当前默认关闭，删号必须显式确认 | 只在用户确认后低并发或定向执行 |
 | 生图 preflight | 易触发账号状态写 | 无变化不写，关键变化进入 dirty queue |
 | b64 回传 | 大响应可能拖尾 | 独立回传窗口，URL 优先，公共 API 快拒绝 |
-| 生图队列 | 现有 `ImageTaskService` 是提交即开线程，不是真队列 | 中央调度队列 + SQLite 任务状态 + timeout_pending 续轮询 |
+| 生图队列 | 已实现中央调度队列 + SQLite 任务状态 + `timeout_pending` | 当前低并发观察，不直接升档 |
 | CPU 预算 | Panda CPU 当前有空闲，但上游长尾才是主瓶颈 | 生图预算按 1.5 vCPU 设计，CPU>=90% 触发 deadlock_guard |
 
 ## 3. 本地账号池 SQLite 设计

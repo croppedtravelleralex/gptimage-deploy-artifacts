@@ -1,0 +1,101 @@
+{
+  "schema_version": "pure-http-image-serial5/v1",
+  "generated_at": "2026-07-22T15:40:09.892935+08:00",
+  "mode": "panda_webshare_serial",
+  "requested": 5,
+  "attempted": 2,
+  "ok_count": 1,
+  "failed_count": 1,
+  "no_image_gen": 1,
+  "stopped_early": true,
+  "stop_reason": "two_consecutive_rounds_with_cf_signal",
+  "stop_before_round": 3,
+  "timeouts": {
+    "per_request_secs": 300,
+    "whole_run_secs": 1800,
+    "image_gen_deadline_secs": 45
+  },
+  "limits": {
+    "cpu": 0.5,
+    "memory_mib": 512,
+    "pids": 128,
+    "concurrency": 1,
+    "round_gap_secs": 15
+  },
+  "identity": {
+    "account_hash": "3b18db641494",
+    "proxy_provider": "webshare",
+    "proxy_hash": "b2f3cb7639c2",
+    "egress_ip": "82.29.223.111",
+    "fixed": true
+  },
+  "whole_request_retried": false,
+  "account_switched": false,
+  "resource_observation": {
+    "pre_available_mib": 1466,
+    "min_available_mib": 1375,
+    "post_available_mib": 1483,
+    "max_normalized_load": 0.21,
+    "post_normalized_load": 0.33,
+    "root_disk_percent": 61,
+    "max_canary_memory_mib": 58.91,
+    "max_canary_cpu_percent": 51.99,
+    "health_all_samples": true
+  },
+  "deployment": {
+    "artifact_commit": "650e899084c319ede7436c7b9497b4af9b991eba",
+    "backup": "/root/gptimage/backups/pure-http-prod-20260722-144517"
+  },
+  "rows": [
+    {
+      "index": 1,
+      "ok": false,
+      "account_hash": "3b18db641494",
+      "proxy_hash": "b2f3cb7639c2",
+      "egress_ip": "82.29.223.111",
+      "conversation_id": "6a6071a3-4370-83ec-bde3-3e731a7f68ef",
+      "has_image_gen": false,
+      "download_ok": false,
+      "image_bytes": 0,
+      "image_width": null,
+      "image_height": null,
+      "image_sha256": "",
+      "total_ms": 50615,
+      "traffic_bytes": 93968,
+      "error": "no_image_gen_within_45s(chunks=6, protocol=spa_tool)",
+      "runner_cf_classification": "none",
+      "observed_cf": {
+        "home_403_count": 1,
+        "tasks_cf_count": 0,
+        "max_poll_cf_streak": 0,
+        "poll_abort_threshold": 2,
+        "recovered": false
+      }
+    },
+    {
+      "index": 2,
+      "ok": true,
+      "account_hash": "3b18db641494",
+      "proxy_hash": "b2f3cb7639c2",
+      "egress_ip": "82.29.223.111",
+      "conversation_id": "6a6072db-6fe8-83ec-9519-90d545255fe4",
+      "has_image_gen": true,
+      "download_ok": true,
+      "image_bytes": 2475088,
+      "image_width": 1254,
+      "image_height": 1254,
+      "image_sha256": "208d8d1bf0da35d9d0f17096fe126430eda79b087e25466951fb326e2ba742fe",
+      "total_ms": 43942,
+      "traffic_bytes": 2610124,
+      "error": "",
+      "runner_cf_classification": "none",
+      "observed_cf": {
+        "home_403_count": 1,
+        "tasks_cf_count": 1,
+        "max_poll_cf_streak": 1,
+        "poll_abort_threshold": 2,
+        "recovered": true
+      }
+    }
+  ]
+}

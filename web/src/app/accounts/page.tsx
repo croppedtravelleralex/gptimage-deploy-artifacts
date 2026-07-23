@@ -15,7 +15,10 @@ import {
   Link2,
   LoaderCircle,
   LogIn,
+  MessageSquare,
   Pencil,
+  Play,
+  Pause,
   RefreshCw,
   Search,
   Trash2,
@@ -23,6 +26,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { DateRangeControls, InteractiveLineChart } from "@/components/charts/InteractiveLineChart";
+import { BindingSgHeatmap, normalizeBindingWeights } from "@/components/accounts/BindingSgHeatmap";
+import { AccountUsageHeatstrip } from "@/components/accounts/AccountUsageHeatstrip";
+import { CfStatusLight, summarizeCfDay, type CfDayPoint } from "@/components/accounts/CfStatusLight";
+import { EgressDriftLights } from "@/components/accounts/EgressDriftLights";
+import { ScheduleCountdownIcons } from "@/components/accounts/ScheduleCountdownIcons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -62,23 +71,36 @@ import {
   startRefreshAllAccounts,
   stopRefreshAllAccounts,
   syncAccountsToPanda,
+  setAccountSoftBand,
+  fetchAccountsUsageRecent,
+  fetchIpNurtureBindings,
+  fetchIpNurturePresets,
+  processNurtureOne,
+  fetchNurtureStatus,
+  saveIpNurtureBinding,
   testProxy,
   updateAccountMaintenanceLoop,
   updateOutlookAutoRecovery,
   updatePandaSyncSettings,
   updateAccount,
+  setAccountScheduling,
+  setAccountsSchedulingBulk,
   type Account,
   type AccountActivityDailyResponse,
   type AccountMaintenanceLoopStatus,
   type AccountRefreshAllStatus,
   type AccountRefreshResponse,
   type AccountStatus,
+  type AccountUsageRecentResponse,
+  type IpNurtureBinding,
+  type IpNurturePreset,
   type Model,
   type OutlookAutoRecoveryStatus,
   type PandaAccountSyncResponse,
   type PandaSyncPublicSettings,
   type RefreshProgressResponse,
 } from "@/lib/api";
+import { humanizeUpstreamError } from "@/lib/chat-format";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import { cn } from "@/lib/utils";
 
@@ -101,6 +123,13 @@ const isOutlookRecoveryCandidate = (account: Account) => {
     account.panda_receive_state === "rejected"
     && ["@outlook.com", "@hotmail.com", "@live.com"].some((suffix) => email.endsWith(suffix))
   );
+};
+
+/** 人工调度开关：空 receive_state 视为可调度；verified* 正式入池。 */
+const isManualSchedulingEnabled = (account: Account) => {
+  const receive = String(account.panda_receive_state ?? "").trim().toLowerCase();
+  if (!receive) return true;
+  return receive === "verified_ready" || receive === "verified" || receive === "local_verified";
 };
 
 const accountStatusOptions: { label: string; value: AccountStatus | "all" }[] = [
@@ -127,6 +156,13 @@ const statusMeta: Record<
 const metricCards = [
   { key: "total", label: "账户总数", color: "text-stone-900", icon: UserRound },
   { key: "active", label: "正常账户", color: "text-emerald-600", icon: CheckCircle2 },
+  {
+    key: "schedulable",
+    label: "可调度",
+    color: "text-emerald-700",
+    icon: CheckCircle2,
+    title: "已打开「进调度」且状态为正常的账号数",
+  },
   { key: "limited", label: "限流账户", color: "text-orange-500", icon: CircleAlert },
   { key: "abnormal", label: "异常账户", color: "text-rose-500", icon: CircleOff },
   { key: "disabled", label: "禁用账户", color: "text-stone-500", icon: Ban },
@@ -210,20 +246,41 @@ function formatCompact(value: number) {
   return String(value);
 }
 
-function formatBytes(value?: number | null) {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return "等待采集";
+const EGRESS_STATUS_PRIORITY: Record<string, number> = {
+  error: 3,
+  warn: 2,
+  ok: 1,
+  none: 0,
+};
+
+const CF_STATUS_PRIORITY: Record<string, number> = {
+  error: 3,
+  warn: 2,
+  ok: 1,
+  none: 0,
+};
+
+function bindingKeyForAccount(account: Account): string {
+  const hash = String(account.proxy_binding_hash ?? "").trim();
+  if (hash) return hash;
+  const egress = String(account.proxy_egress_ip ?? "").trim();
+  if (egress) return `egress:${egress}`;
+  const raw = String(account.proxy ?? "").trim();
+  if (raw) {
+    try {
+      const parsed = new URL(raw.includes("://") ? raw : `http://${raw}`);
+      const host = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
+      return `proxy:${host}`;
+    } catch {
+      const stripped = raw.replace(/^[a-z]+:\/\//i, "").replace(/^[^@]+@/, "").split("/")[0];
+      return `proxy:${stripped || "unknown"}`;
+    }
   }
-  // 展示优先 MB / GB / TB，小于 1MB 仍用 KB
-  const units = ["KB", "MB", "GB", "TB"] as const;
-  let size = value / 1024;
-  let unitIndex = 0;
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex += 1;
-  }
-  const digits = size >= 100 ? 0 : size >= 10 ? 1 : 2;
-  return `${size.toFixed(digits)} ${units[unitIndex]}`;
+  return "default";
+}
+
+function bindingLabelForAccount(account: Account) {
+  return proxyDisplay(account).endpoint;
 }
 
 function proxyDisplay(account: Account) {
@@ -241,14 +298,114 @@ function proxyDisplay(account: Account) {
     }
   }
   const provider = String(account.proxy_provider ?? "").trim();
-  const scope = String(account.proxy_scope ?? "").trim();
-  const hash = String(account.proxy_egress_hash ?? "").trim();
   return {
     endpoint,
-    detail: [provider, scope].filter(Boolean).join(" · ") || (rawProxy ? "账号级代理" : "运行时默认"),
-    hash: hash ? hash.slice(0, 12) : "",
+    provider,
+    detail: provider || (rawProxy ? "账号级代理" : "运行时默认"),
   };
 }
+
+function egressDaysForAccount(account: Account) {
+  const today = new Date();
+  const dates: string[] = [];
+  for (let i = 6; i >= 0; i -= 1) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    dates.push(`${y}-${m}-${day}`);
+  }
+  const byDate = new Map<string, { date: string; status: string; ip?: string }>();
+  for (const row of account.egress_daily || []) {
+    if (!row || typeof row !== "object") continue;
+    const date = String(row.date || "").slice(0, 10);
+    if (!date) continue;
+    byDate.set(date, {
+      date,
+      status: String(row.status || "ok"),
+      ip: String(row.ip || "") || undefined,
+    });
+  }
+  return dates.map((date) => byDate.get(date) || { date, status: "none" });
+}
+
+function cfDaysForAccount(account: Account): CfDayPoint[] {
+  const today = new Date();
+  const dates: string[] = [];
+  for (let i = 6; i >= 0; i -= 1) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    dates.push(`${y}-${m}-${day}`);
+  }
+  const byDate = new Map<string, CfDayPoint>();
+  for (const row of account.cf_daily || []) {
+    if (!row || typeof row !== "object") continue;
+    const date = String(row.date || "").slice(0, 10);
+    if (!date) continue;
+    byDate.set(date, {
+      date,
+      ok: Math.max(0, Number(row.ok) || 0),
+      cf: Math.max(0, Number(row.cf) || 0),
+      image_fail: Math.max(0, Number(row.image_fail) || 0),
+    });
+  }
+  return dates.map((date) => byDate.get(date) || { date, ok: 0, cf: 0, image_fail: 0 });
+}
+
+function aggregateEgressDays(accounts: Account[]) {
+  if (!accounts.length) return [];
+  const base = egressDaysForAccount(accounts[0]);
+  return base.map((day, idx) => {
+    let worst = day;
+    let worstPri = EGRESS_STATUS_PRIORITY[String(day.status || "none").toLowerCase()] ?? 0;
+    for (let i = 1; i < accounts.length; i += 1) {
+      const other = egressDaysForAccount(accounts[i])[idx];
+      const pri = EGRESS_STATUS_PRIORITY[String(other.status || "none").toLowerCase()] ?? 0;
+      if (pri > worstPri) {
+        worst = other;
+        worstPri = pri;
+      }
+    }
+    return worst;
+  });
+}
+
+function aggregateCfDays(accounts: Account[]) {
+  if (!accounts.length) return [];
+  const base = cfDaysForAccount(accounts[0]);
+  return base.map((day, idx) => {
+    let worst = day;
+    let worstPri = CF_STATUS_PRIORITY[summarizeCfDay(day).status] ?? 0;
+    for (let i = 1; i < accounts.length; i += 1) {
+      const other = cfDaysForAccount(accounts[i])[idx];
+      const pri = CF_STATUS_PRIORITY[summarizeCfDay(other).status] ?? 0;
+      if (pri > worstPri) {
+        worst = other;
+        worstPri = pri;
+      }
+    }
+    return worst;
+  });
+}
+
+function weightsForBinding(
+  bindingKey: string,
+  presets: IpNurturePreset[],
+  bindings: Record<string, IpNurtureBinding>,
+) {
+  const binding = bindings[bindingKey];
+  if (binding?.custom_matrix?.length) {
+    return normalizeBindingWeights(binding.custom_matrix);
+  }
+  const preset = presets.find((item) => item.id === binding?.preset_id) || presets[0];
+  return normalizeBindingWeights(preset?.weights || []);
+}
+
+const TABLE_COLUMN_COUNT = 14;
 
 function formatQuota(account: Account) {
   if (isUnlimitedImageQuotaAccount(account)) {
@@ -415,33 +572,6 @@ function formatPandaSyncDetails(data: PandaAccountSyncResponse) {
   return parts.join(" · ");
 }
 
-function buildLinePath(values: number[], maxValue: number, width: number, height: number) {
-  if (values.length === 0) return "";
-  const denominator = Math.max(1, values.length - 1);
-  const max = Math.max(1, maxValue);
-  const points = values.map((value, index) => ({
-    x: (index / denominator) * width,
-    y: height - (Math.max(0, value) / max) * height,
-  }));
-  if (points.length === 1) {
-    return `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
-  }
-  // Catmull-Rom → cubic Bezier，平滑曲线
-  let path = `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
-  for (let i = 0; i < points.length - 1; i += 1) {
-    const p0 = points[Math.max(0, i - 1)];
-    const p1 = points[i];
-    const p2 = points[i + 1];
-    const p3 = points[Math.min(points.length - 1, i + 2)];
-    const cp1x = p1.x + (p2.x - p0.x) / 6;
-    const cp1y = p1.y + (p2.y - p0.y) / 6;
-    const cp2x = p2.x - (p3.x - p1.x) / 6;
-    const cp2y = p2.y - (p3.y - p1.y) / 6;
-    path += ` C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
-  }
-  return path;
-}
-
 function downloadTokens(accounts: Account[]) {
   const content = `${accounts.map((account) => account.access_token).join("\n")}\n`;
   const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
@@ -506,13 +636,25 @@ function formatPandaInlineError(value?: string | null) {
   if (!text) return "";
   const lower = text.toLowerCase();
   if (lower.startsWith("restored_after_accidental")) {
-    return "事故恢复隔离，需重登验证";
+    return "事故恢复后隔离观察（待验证），不是账号已废";
   }
   if (lower.includes("account_deactivated")) {
     return "OpenAI 账号已删除或停用";
   }
-  if (lower.includes("/backend-api/") && lower.includes("403")) {
-    return "Web 验证 403，需重登";
+  if (
+    lower.includes("chat_requirements_prepare") ||
+    lower.includes("chat_requirements_finalize")
+  ) {
+    return "对话鉴权被 CF/出口拦截（403），可重试或换节点；不等于账号作废";
+  }
+  // /backend-api/* 403 常见是 CF 边缘 HTML 拦截或出口抽风，不等于 token 失效、也不等于必须重登
+  if (
+    lower.includes("cf_edge_block")
+    || lower.includes("cloudflare_or_edge_html_block")
+    || (lower.includes("cloudflare") && (lower.includes("403") || lower.includes("block")))
+    || (lower.includes("/backend-api/") && lower.includes("403"))
+  ) {
+    return "Web 接口被 Cloudflare/出口拦截（常间歇），可重试或换节点；通常无需重登";
   }
   return text;
 }
@@ -554,6 +696,16 @@ function AccountsPageContent() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSyncingPanda, setIsSyncingPanda] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [schedulingBusyTokens, setSchedulingBusyTokens] = useState<Set<string>>(new Set());
+  const [isBulkScheduling, setIsBulkScheduling] = useState(false);
+  const [usageByEmail, setUsageByEmail] = useState<AccountUsageRecentResponse["by_email"]>({});
+  const [usageDates, setUsageDates] = useState<string[]>([]);
+  const [softBandDrafts, setSoftBandDrafts] = useState<Record<string, string>>({});
+  const [softBandBusy, setSoftBandBusy] = useState<Set<string>>(new Set());
+  const [accountViewMode, setAccountViewMode] = useState<"flat" | "grouped">("flat");
+  const [nurturePresets, setNurturePresets] = useState<IpNurturePreset[]>([]);
+  const [nurtureBindings, setNurtureBindings] = useState<Record<string, IpNurtureBinding>>({});
+  const [bindingSaveBusy, setBindingSaveBusy] = useState<Set<string>>(new Set());
   const [isRelogining, setIsRelogining] = useState(false);
   const [isStartingRefreshAll, setIsStartingRefreshAll] = useState(false);
   const [isStoppingRefreshAll, setIsStoppingRefreshAll] = useState(false);
@@ -569,6 +721,8 @@ function AccountsPageContent() {
   const [isTogglingPandaSync, setIsTogglingPandaSync] = useState(false);
   const [lastPandaSyncResult, setLastPandaSyncResult] = useState<PandaAccountSyncResponse | null>(null);
   const [accountActivity, setAccountActivity] = useState<AccountActivityDailyResponse | null>(null);
+  const [activityFrom, setActivityFrom] = useState("");
+  const [activityTo, setActivityTo] = useState("");
   const [isTogglingMaintenance, setIsTogglingMaintenance] = useState(false);
   const [isTogglingOutlookAutoRecovery, setIsTogglingOutlookAutoRecovery] = useState(false);
   const [progress, setProgress] = useState<{
@@ -591,6 +745,10 @@ function AccountsPageContent() {
   const outlookAutoRecoveryCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const refreshAllLastStateRef = useRef<string>("");
   const [refreshSummary, setRefreshSummary] = useState<Record<string, number | string> | null>(null);
+  /** Multi-key sort: [{key, dir}] — default created_at desc */
+  const [sortKeys, setSortKeys] = useState<Array<{ key: string; dir: "asc" | "desc" }>>([
+    { key: "created_at", dir: "desc" },
+  ]);
 
   const loadAccounts = async (silent = false) => {
     if (!silent) {
@@ -610,6 +768,13 @@ function AccountsPageContent() {
         setIsLoading(false);
       }
     }
+    // usage/recent 扫日志很慢，不阻塞首屏
+    void fetchAccountsUsageRecent(4)
+      .then((usage) => {
+        if (usage?.by_email) setUsageByEmail(usage.by_email);
+        if (usage?.dates?.length) setUsageDates(usage.dates);
+      })
+      .catch(() => null);
   };
 
   const refreshAccountPage = async () => {
@@ -630,22 +795,66 @@ function AccountsPageContent() {
     }
   };
 
+  const loadIpNurtureData = async () => {
+    try {
+      const [presetsRes, bindingsRes] = await Promise.all([
+        fetchIpNurturePresets(),
+        fetchIpNurtureBindings(),
+      ]);
+      setNurturePresets(Array.isArray(presetsRes.presets) ? presetsRes.presets : []);
+      const map: Record<string, IpNurtureBinding> = {};
+      for (const item of bindingsRes.bindings || []) {
+        if (item?.binding_key) {
+          map[item.binding_key] = item;
+        }
+      }
+      setNurtureBindings(map);
+    } catch {
+      // 后端未部署时静默降级
+    }
+  };
+
+  const saveBindingPreset = async (bindingKey: string, presetId: string, customMatrix?: number[][]) => {
+    setBindingSaveBusy((prev) => new Set(prev).add(bindingKey));
+    try {
+      const result = await saveIpNurtureBinding(bindingKey, presetId, customMatrix);
+      if (result.binding?.binding_key) {
+        setNurtureBindings((prev) => ({ ...prev, [result.binding.binding_key]: result.binding }));
+      }
+      toast.success("IP 养号日历已保存");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存绑定日历失败");
+    } finally {
+      setBindingSaveBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(bindingKey);
+        return next;
+      });
+    }
+  };
+
   useEffect(() => {
     if (didLoadRef.current) {
       return;
     }
     didLoadRef.current = true;
     void loadAccounts();
-    void loadModels();
-    void loadRefreshSettings();
-    void loadRefreshAllStatus();
-    void loadMaintenanceStatus();
-    void loadOutlookAutoRecoveryStatus();
-    void loadPandaSyncSettings();
-    void loadAccountActivity();
+    // 次要状态延后，避免首屏并行打满接口（模型列表仅编辑时需要，按需懒加载）
+    const timer = window.setTimeout(() => {
+      void loadRefreshSettings();
+      void loadRefreshAllStatus();
+      void loadOutlookAutoRecoveryStatus();
+      void loadPandaSyncSettings();
+    }, 50);
+    const activityTimer = window.setTimeout(() => {
+      void loadAccountActivity();
+      void loadIpNurtureData();
+    }, 400);
 
     // 清理进度条定时器
     return () => {
+      window.clearTimeout(timer);
+      window.clearTimeout(activityTimer);
       if (progressRef.current) clearInterval(progressRef.current);
       if (refreshAllPollRef.current) clearInterval(refreshAllPollRef.current);
       if (maintenancePollRef.current) clearInterval(maintenancePollRef.current);
@@ -722,8 +931,13 @@ function AccountsPageContent() {
 
   const loadAccountActivity = async () => {
     try {
-      const data = await fetchAccountActivityDaily(14);
+      const data = await fetchAccountActivityDaily(30);
       setAccountActivity(data);
+      const items = data.items || [];
+      if (items.length) {
+        setActivityFrom(items[Math.max(0, items.length - 14)].date);
+        setActivityTo(items[items.length - 1].date);
+      }
       return data;
     } catch {
       return null;
@@ -816,14 +1030,101 @@ function AccountsPageContent() {
 
   const filteredAccounts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return accounts.filter((account) => {
+    const filtered = accounts.filter((account) => {
       const searchMatched =
         normalizedQuery.length === 0 || (account.email ?? "").toLowerCase().includes(normalizedQuery);
       const typeMatched = typeFilter === "all" || displayAccountType(account) === typeFilter;
       const statusMatched = statusFilter === "all" || account.status === statusFilter;
       return searchMatched && typeMatched && statusMatched;
     });
-  }, [accounts, query, statusFilter, typeFilter]);
+
+    const cmp = (a: Account, b: Account, key: string, dir: "asc" | "desc") => {
+      const mul = dir === "asc" ? 1 : -1;
+      const proxyHost = (acc: Account) => {
+        const raw = String(acc.proxy || "").trim();
+        try {
+          const u = new URL(raw.includes("://") ? raw : `http://${raw}`);
+          return u.hostname || raw;
+        } catch {
+          return raw;
+        }
+      };
+      let av: string | number = "";
+      let bv: string | number = "";
+      switch (key) {
+        case "email":
+          av = String(a.email || "").toLowerCase();
+          bv = String(b.email || "").toLowerCase();
+          break;
+        case "type":
+          av = displayAccountType(a);
+          bv = displayAccountType(b);
+          break;
+        case "status":
+          av = a.status;
+          bv = b.status;
+          break;
+        case "schedule":
+          av = isManualSchedulingEnabled(a) ? 1 : 0;
+          bv = isManualSchedulingEnabled(b) ? 1 : 0;
+          break;
+        case "quota":
+          av = Number(a.quota || 0);
+          bv = Number(b.quota || 0);
+          break;
+        case "proxy":
+          av = proxyHost(a);
+          bv = proxyHost(b);
+          break;
+        case "created_at":
+        default:
+          av = String(a.created_at || "");
+          bv = String(b.created_at || "");
+          break;
+      }
+      if (av < bv) return -1 * mul;
+      if (av > bv) return 1 * mul;
+      return 0;
+    };
+
+    const keys = sortKeys.length ? sortKeys : [{ key: "created_at", dir: "desc" as const }];
+    return [...filtered].sort((a, b) => {
+      for (const { key, dir } of keys) {
+        const r = cmp(a, b, key, dir);
+        if (r !== 0) return r;
+      }
+      // proxy column: same host → created_at
+      if (keys.some((k) => k.key === "proxy")) {
+        return cmp(a, b, "created_at", "desc");
+      }
+      return 0;
+    });
+  }, [accounts, query, statusFilter, typeFilter, sortKeys]);
+
+  const toggleSort = (key: string, shiftKey: boolean) => {
+    setSortKeys((prev) => {
+      const existing = prev.find((k) => k.key === key);
+      if (shiftKey) {
+        if (existing) {
+          return prev.map((k) =>
+            k.key === key ? { ...k, dir: k.dir === "asc" ? "desc" : "asc" } : k,
+          );
+        }
+        return [...prev, { key, dir: "asc" }];
+      }
+      if (existing && prev.length === 1) {
+        return [{ key, dir: existing.dir === "asc" ? "desc" : "asc" }];
+      }
+      return [{ key, dir: "desc" }];
+    });
+  };
+
+  const sortIndicator = (key: string) => {
+    const idx = sortKeys.findIndex((k) => k.key === key);
+    if (idx < 0) return "";
+    const arrow = sortKeys[idx].dir === "asc" ? "↑" : "↓";
+    return sortKeys.length > 1 ? `${arrow}${idx + 1}` : arrow;
+  };
 
   const pageCount = Math.max(1, Math.ceil(filteredAccounts.length / Number(pageSize)));
   const safePage = Math.min(page, pageCount);
@@ -831,6 +1132,58 @@ function AccountsPageContent() {
   const currentRows = filteredAccounts.slice(startIndex, startIndex + Number(pageSize));
   const allCurrentSelected =
     currentRows.length > 0 && currentRows.every((row) => selectedIds.includes(row.access_token));
+
+  const accountGroups = useMemo(() => {
+    const map = new Map<string, { key: string; label: string; accounts: Account[] }>();
+    for (const account of filteredAccounts) {
+      const key = bindingKeyForAccount(account);
+      const existing = map.get(key);
+      if (existing) {
+        existing.accounts.push(account);
+      } else {
+        map.set(key, {
+          key,
+          label: bindingLabelForAccount(account),
+          accounts: [account],
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, "zh-CN"));
+  }, [filteredAccounts]);
+
+  const tableBlocks = useMemo(() => {
+    if (accountViewMode === "flat") {
+      return currentRows.map((account, rowIndex) => ({
+        kind: "account" as const,
+        account,
+        rowNo: startIndex + rowIndex + 1,
+      }));
+    }
+    const blocks: Array<
+      | { kind: "group"; key: string; label: string; accounts: Account[] }
+      | { kind: "account"; account: Account; rowNo: number }
+    > = [];
+    const seenGroups = new Set<string>();
+    let rowCounter = startIndex;
+    for (const account of currentRows) {
+      const key = bindingKeyForAccount(account);
+      if (!seenGroups.has(key)) {
+        seenGroups.add(key);
+        const group = accountGroups.find((item) => item.key === key);
+        if (group) {
+          blocks.push({
+            kind: "group",
+            key: group.key,
+            label: group.label,
+            accounts: group.accounts,
+          });
+        }
+      }
+      rowCounter += 1;
+      blocks.push({ kind: "account", account, rowNo: rowCounter });
+    }
+    return blocks;
+  }, [accountViewMode, accountGroups, currentRows, startIndex]);
 
   const summary = useMemo(() => {
     if (accountStats) {
@@ -842,6 +1195,7 @@ function AccountsPageContent() {
         limited: accountStats.limited,
         abnormal: accountStats.abnormal,
         disabled: accountStats.disabled,
+        schedulable: typeof accountStats.schedulable === "number" ? accountStats.schedulable : 0,
         quota: unlimitedQuotaCount > 0 ? "∞" : unknownQuotaCount > 0 ? "未知" : formatCompact(accountStats.total_quota),
       };
     }
@@ -850,96 +1204,46 @@ function AccountsPageContent() {
     const limited = accounts.filter((item) => item.status === "限流").length;
     const abnormal = accounts.filter((item) => item.status === "异常").length;
     const disabled = accounts.filter((item) => item.status === "禁用").length;
+    const schedulable = accounts.filter((a) => isManualSchedulingEnabled(a) && a.status === "正常").length;
     const quota = formatQuotaSummary(accounts);
 
-    return { total, active, limited, abnormal, disabled, quota };
+    return { total, active, limited, abnormal, disabled, schedulable, quota };
   }, [accountStats, accounts]);
 
-  const pandaUploadCards = useMemo(() => {
-    const receiverMode = accountActivity?.sync_label === "接收";
-    const countState = (field: keyof Account, value: string) =>
-      accounts.filter((account) => String(account[field] || "").trim().toLowerCase() === value).length;
-    const stat = (key: keyof AccountStats, fallback: number) => {
-      const value = accountStats?.[key];
-      return typeof value === "number" ? value : fallback;
-    };
-    const localReady = countState("panda_sync_state", "ready");
-    const localSynced = countState("panda_sync_state", "synced");
-    const localIncoming = countState("panda_receive_state", "incoming");
-    const localVerified = accounts.filter((account) => {
-      const state = String(account.panda_receive_state || "").trim().toLowerCase();
-      return state === "verified" || state === "verified_ready" || state === "local_verified";
-    }).length;
-    const localRejected = countState("panda_receive_state", "rejected");
-
-    return [
-      {
-        label: receiverMode ? "接收可用" : "可上传",
-        value: stat("panda_upload_eligible_count", localReady),
-        icon: CloudUpload,
-        color: "text-sky-600",
-      },
-      {
-        label: receiverMode ? "接收队列" : "上传队列",
-        value: stat("panda_upload_queue_count", localReady),
-        icon: RefreshCw,
-        color: "text-blue-600",
-      },
-      {
-        label: receiverMode ? "具备未接收" : "具备但未传",
-        value: stat("panda_upload_unsynced_eligible_count", localReady),
-        icon: CircleAlert,
-        color: "text-amber-600",
-      },
-      {
-        label: receiverMode ? "上传留存" : "已传本地留存",
-        value: stat("panda_upload_retained_count", localSynced),
-        icon: CheckCircle2,
-        color: "text-emerald-600",
-      },
-      {
-        label: "接收待验证",
-        value: stat("panda_upload_remote_pending_count", localIncoming),
-        icon: LoaderCircle,
-        color: "text-orange-600",
-      },
-      {
-        label: "接收已验证",
-        value: stat("panda_upload_remote_verified_count", localVerified),
-        icon: CheckCircle2,
-        color: "text-teal-600",
-      },
-      {
-        label: "接收拒绝",
-        value: stat("panda_upload_remote_rejected_count", localRejected),
-        icon: CircleOff,
-        color: "text-rose-600",
-      },
-      {
-        label: "ready 阻断",
-        value: stat("panda_upload_blocked_count", 0),
-        icon: Ban,
-        color: "text-stone-600",
-      },
-    ];
-  }, [accountActivity?.sync_label, accountStats, accounts]);
-
   const activityChart = useMemo(() => {
-    const items = accountActivity?.items ?? [];
-    const syncKey = accountActivity?.sync_label === "接收" ? "received" : "uploaded";
-    const registered = items.map((item) => item.registered);
-    const synced = items.map((item) => syncKey === "received" ? item.received : item.uploaded);
-    const deleted = items.map((item) => item.deleted);
-    const maxValue = Math.max(1, ...registered, ...synced, ...deleted);
+    const all = accountActivity?.items ?? [];
+    const from = activityFrom || (all[0]?.date ?? "");
+    const to = activityTo || (all[all.length - 1]?.date ?? "");
+    const items = all.filter((item) => (!from || item.date >= from) && (!to || item.date <= to));
     return {
       items,
+      from: all[0]?.date ?? "",
+      to: all[all.length - 1]?.date ?? "",
+      rangeFrom: from,
+      rangeTo: to,
       syncLabel: accountActivity?.sync_label ?? "上传",
-      maxValue,
-      registeredPath: buildLinePath(registered, maxValue, 640, 120),
-      syncedPath: buildLinePath(synced, maxValue, 640, 120),
-      deletedPath: buildLinePath(deleted, maxValue, 640, 120),
+      series: [
+        { key: "registered", label: "注册/入库", color: "#10b981", values: items.map((i) => i.registered) },
+        { key: "uploaded", label: "上传", color: "#3b82f6", values: items.map((i) => i.uploaded) },
+        { key: "received", label: "接收", color: "#0ea5e9", values: items.map((i) => i.received) },
+        { key: "deleted", label: "删除", color: "#f43f5e", values: items.map((i) => i.deleted) },
+        { key: "images_api", label: "api生图", color: "#a855f7", values: items.map((i) => Number(i.images_api || 0)) },
+        { key: "images_chat", label: "对话生图", color: "#c026d3", values: items.map((i) => Number(i.images_chat || 0)) },
+        {
+          key: "dialogues_nurture",
+          label: "拟人对话",
+          color: "#f59e0b",
+          values: items.map((i) => Number(i.dialogues_nurture || 0)),
+        },
+        {
+          key: "dialogues_real",
+          label: "真实对话",
+          color: "#0284c7",
+          values: items.map((i) => Number(i.dialogues_real || 0)),
+        },
+      ],
     };
-  }, [accountActivity]);
+  }, [accountActivity, activityFrom, activityTo]);
 
   const accountTypeOptions = useMemo(
     () => [
@@ -1131,9 +1435,9 @@ function AccountsPageContent() {
       } else {
         setOutlookAutoRecoveryCountdown(null);
       }
-      toast.success(status.enabled ? "Outlook 自动恢复已开启" : "Outlook 自动恢复已关闭");
+      toast.success(status.enabled ? "自动恢复已开启" : "自动恢复已关闭");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "更新 Outlook 自动恢复失败");
+      toast.error(error instanceof Error ? error.message : "更新自动恢复失败");
     } finally {
       setIsTogglingOutlookAutoRecovery(false);
     }
@@ -1164,7 +1468,22 @@ function AccountsPageContent() {
           : "Outlook 账号已恢复并重新入调度",
       );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Outlook 账号恢复失败");
+      const raw = error instanceof Error ? error.message : "Outlook 账号恢复失败";
+      const mapped =
+        raw.includes("need_openai_password")
+          ? "账号缺少 OpenAI 密码，无法密码重登"
+          : raw.includes("yumail_not_configured")
+            ? "未配置 YuMail API Key，无法收取验证码"
+            : raw.includes("yumail_unreachable")
+              ? "YuMail 环回不可达（请确认本机 8782 / 勿走公网域名）"
+              : raw.includes("yumail_otp_timeout")
+                ? "YuMail 等待验证码超时"
+                : raw.includes("yumail_outlook_token_not_found")
+                  ? "YuMail 邮件池中未找到该 Outlook 邮箱"
+                  : raw.includes("need_outlook_mailbox_credentials")
+                    ? "缺少邮箱凭据且 YuMail 不可用，无法收取验证码"
+                    : raw;
+      toast.error(mapped);
     } finally {
       setRefreshingTokens((prev) => {
         const next = new Set(prev);
@@ -1570,6 +1889,159 @@ function AccountsPageContent() {
     }
   };
 
+  const applySchedulingStats = (stats?: AccountStats | null) => {
+    if (!stats) return;
+    setAccountStats((prev) => ({
+      ...(prev ?? {
+        total: 0,
+        active: 0,
+        limited: 0,
+        abnormal: 0,
+        disabled: 0,
+        total_quota: 0,
+      }),
+      ...stats,
+    }));
+  };
+
+  const softBandDisplayValue = (account: Account) => {
+    const token = account.access_token;
+    if (softBandDrafts[token] !== undefined) return softBandDrafts[token];
+    const override = account.image_soft_band_override;
+    const band = typeof override === "number" ? override : account.image_soft_band;
+    return typeof band === "number" ? String(Math.round(Number(band) * 100)) : "";
+  };
+
+  const commitSoftBand = async (account: Account) => {
+    const token = account.access_token;
+    const raw = softBandDrafts[token];
+    if (raw === undefined) return;
+    const trimmed = raw.trim();
+    const current =
+      typeof account.image_soft_band_override === "number"
+        ? Math.round(Number(account.image_soft_band_override) * 100)
+        : typeof account.image_soft_band === "number"
+          ? Math.round(Number(account.image_soft_band) * 100)
+          : null;
+    if (trimmed === "" && current === null) {
+      setSoftBandDrafts((prev) => {
+        const next = { ...prev };
+        delete next[token];
+        return next;
+      });
+      return;
+    }
+    if (trimmed === "") {
+      setSoftBandBusy((prev) => new Set(prev).add(token));
+      try {
+        const data = await setAccountSoftBand(token, null);
+        if (data.item) {
+          setAccounts((prev) => prev.map((item) => (item.access_token === token ? { ...item, ...data.item } : item)));
+        }
+        applySchedulingStats(data.stats ?? null);
+        toast.success("已恢复自动软限流%");
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "清除软限流失败");
+      } finally {
+        setSoftBandBusy((prev) => {
+          const next = new Set(prev);
+          next.delete(token);
+          return next;
+        });
+        setSoftBandDrafts((prev) => {
+          const next = { ...prev };
+          delete next[token];
+          return next;
+        });
+      }
+      return;
+    }
+    const percent = Number(trimmed);
+    if (!Number.isFinite(percent) || percent < 5 || percent > 99) {
+      toast.error("软限流%需在 5–99");
+      return;
+    }
+    if (current !== null && Math.round(percent) === current) {
+      setSoftBandDrafts((prev) => {
+        const next = { ...prev };
+        delete next[token];
+        return next;
+      });
+      return;
+    }
+    setSoftBandBusy((prev) => new Set(prev).add(token));
+    try {
+      const data = await setAccountSoftBand(token, Math.round(percent));
+      if (data.item) {
+        setAccounts((prev) => prev.map((item) => (item.access_token === token ? { ...item, ...data.item } : item)));
+      }
+      applySchedulingStats(data.stats ?? null);
+      toast.success(`软限流已设为 ${Math.round(percent)}%`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "设置软限流失败");
+    } finally {
+      setSoftBandBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(token);
+        return next;
+      });
+      setSoftBandDrafts((prev) => {
+        const next = { ...prev };
+        delete next[token];
+        return next;
+      });
+    }
+  };
+
+  const handleToggleScheduling = async (account: Account) => {
+    const token = account.access_token;
+    const nextEnabled = !isManualSchedulingEnabled(account);
+    setSchedulingBusyTokens((prev) => new Set(prev).add(token));
+    try {
+      const data = await setAccountScheduling(token, nextEnabled);
+      if (data.item) {
+        setAccounts((prev) => prev.map((item) => (item.access_token === token ? { ...item, ...data.item } : item)));
+      }
+      applySchedulingStats(data.stats ?? null);
+      toast.success(nextEnabled ? "已进入调度" : "已退出调度（隔离观察）");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "切换调度失败");
+    } finally {
+      setSchedulingBusyTokens((prev) => {
+        const next = new Set(prev);
+        next.delete(token);
+        return next;
+      });
+    }
+  };
+
+  const handleBulkScheduling = async (enabled: boolean) => {
+    const tokens = filteredAccounts.map((item) => item.access_token).filter(Boolean);
+    if (tokens.length === 0) {
+      toast.error("当前筛选没有可操作的账号");
+      return;
+    }
+    if (tokens.length > 50) {
+      toast.error("单次最多操作 50 个账号，请先缩小筛选");
+      return;
+    }
+    setIsBulkScheduling(true);
+    try {
+      const data = await setAccountsSchedulingBulk(tokens, enabled);
+      applySchedulingStats(data.stats ?? null);
+      await refreshAccountPage();
+      const updated = data.updated ?? 0;
+      toast.success(enabled ? `已全部进调度（${updated}）` : `已全部出调度（${updated}）`);
+      if (data.errors?.length) {
+        toast.error(`${data.errors.length} 个账号操作失败`);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "批量切换调度失败");
+    } finally {
+      setIsBulkScheduling(false);
+    }
+  };
+
   const toggleSelectAll = (checked: boolean) => {
     if (checked) {
       setSelectedIds((prev) => Array.from(new Set([...prev, ...currentRows.map((item) => item.access_token)])));
@@ -1580,7 +2052,7 @@ function AccountsPageContent() {
 
   return (
     <>
-      <section className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <section className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="space-y-1">
           <div className="text-xs font-semibold tracking-[0.18em] text-stone-500 uppercase">
             Account Pool
@@ -1597,6 +2069,26 @@ function AccountsPageContent() {
           >
             <RefreshCw className={cn("size-4", isLoading ? "animate-spin" : "")} />
             刷新
+          </Button>
+          <Button
+            variant="outline"
+            className="h-10 rounded-xl border-emerald-200 bg-white/80 px-4 text-emerald-700 hover:bg-emerald-50"
+            onClick={() => void handleBulkScheduling(true)}
+            disabled={isLoading || isBulkScheduling || filteredAccounts.length === 0}
+            title="将当前筛选结果全部进入调度"
+          >
+            {isBulkScheduling ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}
+            全部进调度
+          </Button>
+          <Button
+            variant="outline"
+            className="h-10 rounded-xl border-amber-200 bg-white/80 px-4 text-amber-700 hover:bg-amber-50"
+            onClick={() => void handleBulkScheduling(false)}
+            disabled={isLoading || isBulkScheduling || filteredAccounts.length === 0}
+            title="将当前筛选结果全部退出调度（identity_isolated）"
+          >
+            {isBulkScheduling ? <LoaderCircle className="size-4 animate-spin" /> : <Pause className="size-4" />}
+            全部出调度
           </Button>
           <Button
             variant="outline"
@@ -1633,15 +2125,6 @@ function AccountsPageContent() {
               title="账号间隔秒"
             />
           </div>
-          <Button
-            variant="outline"
-            className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"
-            onClick={() => void handleToggleMaintenance()}
-            disabled={isTogglingMaintenance}
-          >
-            {isTogglingMaintenance ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-            {maintenanceStatus?.enabled ? "关闭保活" : "开启保活"}
-          </Button>
           {refreshAllActive ? (
             <Button
               variant="outline"
@@ -1653,37 +2136,32 @@ function AccountsPageContent() {
               {isStoppingRefreshAll || refreshAllStatus?.state === "stopping" ? "停止中" : "停止慢刷"}
             </Button>
           ) : null}
-          <Button
-            variant="outline"
-            className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"
-            onClick={() => {
-              if (activityChart.syncLabel === "接收") {
-                void refreshAccountPage();
-                void loadAccountActivity();
-                return;
-              }
-              void handleSyncPanda();
-            }}
-            disabled={isLoading || isRefreshing || isDeleting || isSyncingPanda}
-          >
-            {isSyncingPanda ? <LoaderCircle className="size-4 animate-spin" /> : <CloudUpload className="size-4" />}
-            {activityChart.syncLabel === "接收" ? "刷新接收状态" : "上传到 Panda"}
-          </Button>
           {activityChart.syncLabel !== "接收" ? (
-            <Button
-              variant={pandaSyncSettings?.enabled ? "outline" : "default"}
-              className={cn(
-                "h-10 rounded-xl px-4",
-                pandaSyncSettings?.enabled
-                  ? "border-stone-200 bg-white/80 text-stone-700 hover:bg-white"
-                  : "bg-stone-900 text-white hover:bg-stone-800",
-              )}
-              onClick={() => void handleTogglePandaSync()}
-              disabled={isTogglingPandaSync}
-            >
-              {isTogglingPandaSync ? <LoaderCircle className="size-4 animate-spin" /> : <CloudUpload className="size-4" />}
-              {pandaSyncSettings?.enabled ? "暂停自动上传" : "开启自动上传"}
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"
+                onClick={() => void handleSyncPanda()}
+                disabled={isLoading || isRefreshing || isDeleting || isSyncingPanda}
+              >
+                {isSyncingPanda ? <LoaderCircle className="size-4 animate-spin" /> : <CloudUpload className="size-4" />}
+                上传到 Panda
+              </Button>
+              <Button
+                variant={pandaSyncSettings?.enabled ? "outline" : "default"}
+                className={cn(
+                  "h-10 rounded-xl px-4",
+                  pandaSyncSettings?.enabled
+                    ? "border-stone-200 bg-white/80 text-stone-700 hover:bg-white"
+                    : "bg-stone-900 text-white hover:bg-stone-800",
+                )}
+                onClick={() => void handleTogglePandaSync()}
+                disabled={isTogglingPandaSync}
+              >
+                {isTogglingPandaSync ? <LoaderCircle className="size-4 animate-spin" /> : <CloudUpload className="size-4" />}
+                {pandaSyncSettings?.enabled ? "暂停自动上传" : "开启自动上传"}
+              </Button>
+            </>
           ) : null}
           <AccountImportDialog
             disabled={isLoading || isRefreshing || isDeleting || isSyncingPanda}
@@ -1707,6 +2185,40 @@ function AccountsPageContent() {
           </Button>
         </div>
       </section>
+
+      {outlookAutoRecoveryStatus ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-amber-200/70 bg-amber-50/50 px-3 py-1.5 text-xs text-stone-600">
+          <span className="font-medium text-stone-800">自动恢复</span>
+          <Badge
+            variant={
+              outlookAutoRecoveryStatus.enabled
+                ? outlookAutoRecoveryStatus.state === "paused"
+                  ? "warning"
+                  : "success"
+                : "secondary"
+            }
+            className="h-5 rounded px-1.5 text-[10px]"
+          >
+            {formatOutlookAutoRecoveryState(outlookAutoRecoveryStatus.state)}
+          </Badge>
+          <span>
+            下次{" "}
+            {outlookAutoRecoveryStatus.enabled ? formatCountdown(outlookAutoRecoveryCountdown) : "—"}
+          </span>
+          <span>候选 {outlookAutoRecoveryStatus.candidate_count ?? 0}</span>
+          <Button
+            variant="ghost"
+            className="ml-auto h-6 rounded-md px-2 text-[11px] text-amber-800 hover:bg-amber-100"
+            onClick={() => void handleToggleOutlookAutoRecovery()}
+            disabled={isTogglingOutlookAutoRecovery}
+          >
+            {isTogglingOutlookAutoRecovery ? (
+              <LoaderCircle className="size-3 animate-spin" />
+            ) : null}
+            {outlookAutoRecoveryStatus.enabled ? "关闭" : "开启"}
+          </Button>
+        </div>
+      ) : null}
 
       <div className="text-xs text-stone-500">
         慢刷参数上限：并发 {refreshAllMaxConcurrency}，批量 200；当前任务启动后参数锁定，修改只对下次启动生效；异常/限流账号只记录失败证据，不自动删除。
@@ -1788,169 +2300,6 @@ function AccountsPageContent() {
         </div>
       ) : null}
 
-      {maintenanceStatus ? (
-        <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white/90 shadow-sm">
-          <div className="px-4 py-3">
-            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-              <div className="flex min-w-0 items-center gap-2 text-stone-700">
-                {maintenanceStatus.state === "running_batch" ? (
-                  <LoaderCircle className="size-4 animate-spin text-amber-500" />
-                ) : (
-                  <RefreshCw className="size-4 text-stone-500" />
-                )}
-                <span className="font-medium">panda 轻量保活</span>
-                <Badge
-                  variant={
-                    maintenanceStatus.enabled
-                      ? maintenanceStatus.state === "resource_paused" || maintenanceStatus.state === "traffic_paused"
-                        ? "warning"
-                        : "success"
-                      : "secondary"
-                  }
-                >
-                  {formatMaintenanceState(maintenanceStatus.state)}
-                </Badge>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="text-stone-500">下次 {formatMaintenanceTime(maintenanceStatus.next_run_at)}</div>
-                <Button
-                  variant={maintenanceStatus.enabled ? "outline" : "default"}
-                  className={cn(
-                    "h-8 rounded-xl px-3 text-xs",
-                    maintenanceStatus.enabled
-                      ? "border-stone-200 bg-white/80 text-stone-700 hover:bg-white"
-                      : "bg-stone-900 text-white hover:bg-stone-800",
-                  )}
-                  onClick={() => void handleToggleMaintenance()}
-                  disabled={isTogglingMaintenance}
-                >
-                  {isTogglingMaintenance ? <LoaderCircle className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-                  {maintenanceStatus.enabled ? "关闭保活" : "开启保活"}
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-8 rounded-xl border-emerald-200 bg-emerald-50 px-3 text-xs text-emerald-700 hover:bg-emerald-100"
-                  onClick={() => void handleApplyMaintenanceSafeSettings()}
-                  disabled={isTogglingMaintenance}
-                >
-                  应用新版参数
-                </Button>
-              </div>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
-              <span>每批 {maintenanceStatus.settings?.batch_limit ?? 10}</span>
-              <span>并发 {maintenanceStatus.settings?.concurrency ?? 1}</span>
-              <span>批量 {maintenanceStatus.settings?.batch_size ?? 10}</span>
-              <span>冷却 {maintenanceStatus.settings?.cooldown_sec ?? 30}s</span>
-              <span>硬暂停 {maintenanceStatus.settings?.resource_pause_enabled ? "开启" : "关闭"}</span>
-              <span>暂停阈值 {maintenanceStatus.settings?.pause_when_image_inflight ?? 0}</span>
-              <span>慢速阈值 {maintenanceStatus.settings?.slow_when_image_inflight ?? 0}</span>
-              <span>累计批次 {maintenanceStatus.totals?.batches ?? 0}</span>
-              <span>处理 {maintenanceStatus.totals?.processed ?? 0}</span>
-              <span>删除 {maintenanceStatus.totals?.removed ?? 0}</span>
-              {maintenanceStatus.current_batch?.status ? (
-                <span>
-                  当前 {maintenanceStatus.current_batch.status.processed}/{maintenanceStatus.current_batch.status.total}
-                </span>
-              ) : null}
-              {formatMaintenanceResource(maintenanceStatus) ? <span>{formatMaintenanceResource(maintenanceStatus)}</span> : null}
-            </div>
-            {maintenanceStatus.pause_reason ? (
-              <div className="mt-2 text-xs text-amber-700">{maintenanceStatus.pause_reason}</div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
-      {outlookAutoRecoveryStatus ? (
-        <div className="overflow-hidden rounded-2xl border border-amber-200/80 bg-amber-50/40 shadow-sm">
-          <div className="px-4 py-3">
-            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-              <div className="flex min-w-0 items-center gap-2 text-stone-700">
-                {outlookAutoRecoveryStatus.state === "recovering" || outlookAutoRecoveryStatus.state === "scanning" ? (
-                  <LoaderCircle className="size-4 animate-spin text-amber-600" />
-                ) : (
-                  <RefreshCw className="size-4 text-amber-600" />
-                )}
-                <span className="font-medium">Outlook 自动恢复</span>
-                <Badge
-                  variant={
-                    outlookAutoRecoveryStatus.enabled
-                      ? outlookAutoRecoveryStatus.state === "paused"
-                        ? "warning"
-                        : "success"
-                      : "secondary"
-                  }
-                >
-                  {formatOutlookAutoRecoveryState(outlookAutoRecoveryStatus.state)}
-                </Badge>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="text-stone-600">
-                  下次检测{" "}
-                  <span className="font-medium tabular-nums text-stone-800">
-                    {outlookAutoRecoveryStatus.enabled
-                      ? formatCountdown(outlookAutoRecoveryCountdown)
-                      : "—"}
-                  </span>
-                </div>
-                <Button
-                  variant={outlookAutoRecoveryStatus.enabled ? "outline" : "default"}
-                  className={cn(
-                    "h-8 rounded-xl px-3 text-xs",
-                    outlookAutoRecoveryStatus.enabled
-                      ? "border-amber-200 bg-white/80 text-amber-800 hover:bg-amber-50"
-                      : "bg-amber-700 text-white hover:bg-amber-800",
-                  )}
-                  onClick={() => void handleToggleOutlookAutoRecovery()}
-                  disabled={isTogglingOutlookAutoRecovery}
-                >
-                  {isTogglingOutlookAutoRecovery ? (
-                    <LoaderCircle className="size-3.5 animate-spin" />
-                  ) : (
-                    <RefreshCw className="size-3.5" />
-                  )}
-                  {outlookAutoRecoveryStatus.enabled ? "关闭自动恢复" : "开启自动恢复"}
-                </Button>
-              </div>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
-              <span>间隔 {Math.round(Number(outlookAutoRecoveryStatus.settings?.interval_sec ?? 1800) / 60)} 分钟</span>
-              <span>每轮最多 {outlookAutoRecoveryStatus.settings?.max_per_cycle ?? 1} 个</span>
-              <span>候选 {outlookAutoRecoveryStatus.candidate_count ?? 0}</span>
-              <span>终态隔离 {outlookAutoRecoveryStatus.terminal_count ?? 0}</span>
-              <span>累计成功 {outlookAutoRecoveryStatus.totals?.succeeded ?? 0}</span>
-              <span>失败 {outlookAutoRecoveryStatus.totals?.failed ?? 0}</span>
-              <span>跳过忙 {outlookAutoRecoveryStatus.totals?.skipped_busy ?? 0}</span>
-              {outlookAutoRecoveryStatus.current?.email ? (
-                <span>
-                  当前 {String(outlookAutoRecoveryStatus.current.email)} ·{" "}
-                  {String(outlookAutoRecoveryStatus.current.stage || outlookAutoRecoveryStatus.current.message || "")}
-                </span>
-              ) : null}
-              {outlookAutoRecoveryStatus.last_result?.email ? (
-                <span>
-                  最近 {String(outlookAutoRecoveryStatus.last_result.email)}{" "}
-                  {outlookAutoRecoveryStatus.last_result.ok
-                    ? `成功${typeof outlookAutoRecoveryStatus.last_result.quota === "number" ? ` · 额度 ${outlookAutoRecoveryStatus.last_result.quota}` : ""}`
-                    : outlookAutoRecoveryStatus.last_result.skipped
-                      ? "已跳过"
-                      : "失败"}
-                </span>
-              ) : null}
-            </div>
-            {outlookAutoRecoveryStatus.pause_reason ? (
-              <div className="mt-2 text-xs text-amber-700">{outlookAutoRecoveryStatus.pause_reason}</div>
-            ) : null}
-            {outlookAutoRecoveryStatus.last_result?.error ? (
-              <div className="mt-2 max-w-full truncate text-xs text-rose-600">
-                {String(outlookAutoRecoveryStatus.last_result.error)}
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
       <Dialog open={Boolean(editingAccount)} onOpenChange={(open) => (!open ? setEditingAccount(null) : null)}>
         <DialogContent showCloseButton={false} className="rounded-2xl p-6">
           <DialogHeader className="gap-2">
@@ -2025,7 +2374,11 @@ function AccountsPageContent() {
             const Icon = item.icon;
             const value = (refreshSummary ?? summary)[item.key];
             return (
-              <Card key={item.key} className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
+              <Card
+                key={item.key}
+                className="rounded-2xl border-white/80 bg-white/90 shadow-sm"
+                title={"title" in item ? item.title : undefined}
+              >
                 <CardContent className="p-4">
                   <div className="mb-4 flex items-start justify-between">
                     <span className="text-xs font-medium text-stone-400">{item.label}</span>
@@ -2041,91 +2394,67 @@ function AccountsPageContent() {
             );
           })}
         </div>
-        <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
-          <CardContent className="p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="text-sm font-medium text-stone-700">
-                Panda {activityChart.syncLabel === "接收" ? "接收状态" : "上传状态"}
+        <div className="grid gap-3 lg:grid-cols-2">
+          <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
+            <CardContent className="p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div className="text-sm font-medium text-stone-700">账号流水 · 注册/入库/接收/删除</div>
+                <DateRangeControls
+                  from={activityChart.rangeFrom}
+                  to={activityChart.rangeTo}
+                  min={activityChart.from}
+                  max={activityChart.to}
+                  onChange={(from, to) => {
+                    setActivityFrom(from);
+                    setActivityTo(to);
+                  }}
+                />
               </div>
-              <Badge variant="outline" className="rounded-md border-stone-200 text-stone-500">
-                {activityChart.syncLabel === "接收" ? "接收节点" : pandaSyncSettings?.enabled ? "自动上传开启" : "自动上传暂停"}
-              </Badge>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
-              {pandaUploadCards.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <div key={item.label} className="rounded-xl border border-stone-100 bg-stone-50/70 px-3 py-2">
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-medium text-stone-400">{item.label}</span>
-                      <Icon className="size-3.5 text-stone-400" />
-                    </div>
-                    <div className={cn("text-xl font-semibold tracking-tight", item.color)}>
-                      {formatCompact(item.value)}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            {lastPandaSyncResult ? (
-              <div className="mt-3 rounded-xl border border-stone-100 bg-white px-3 py-2 text-xs text-stone-500">
-                最近上传：{formatPandaSyncDetails(lastPandaSyncResult)}
+              <InteractiveLineChart
+                dates={activityChart.items.map((i) => i.date)}
+                series={activityChart.series.filter((s) =>
+                  ["registered", "uploaded", "received", "deleted"].includes(s.key),
+                )}
+                yLabel="数量"
+                xLabel="日期"
+                sharedScale
+              />
+              <div className="mt-2 text-xs text-stone-500">
+                注册/入库 · 上传 · 接收 · 删除（窗口 {activityChart.items.length} 天
+                {activityChart.syncLabel ? ` · 本机角色偏「${activityChart.syncLabel}」` : ""}）
               </div>
-            ) : null}
-          </CardContent>
-        </Card>
-        <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
-          <CardContent className="p-4">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <div className="text-sm font-medium text-stone-700">账号流水</div>
-              <div className="flex flex-wrap items-center gap-3 text-xs text-stone-500">
-                <span className="inline-flex items-center gap-1"><span className="size-2 rounded-full bg-emerald-500" />注册/入库</span>
-                <span className="inline-flex items-center gap-1"><span className="size-2 rounded-full bg-blue-500" />{activityChart.syncLabel}</span>
-                <span className="inline-flex items-center gap-1"><span className="size-2 rounded-full bg-rose-500" />删除</span>
+            </CardContent>
+          </Card>
+          <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
+            <CardContent className="p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div className="text-sm font-medium text-stone-700">账号流水 · 生图对话</div>
+                <DateRangeControls
+                  from={activityChart.rangeFrom}
+                  to={activityChart.rangeTo}
+                  min={activityChart.from}
+                  max={activityChart.to}
+                  onChange={(from, to) => {
+                    setActivityFrom(from);
+                    setActivityTo(to);
+                  }}
+                />
               </div>
-            </div>
-            <div className="overflow-x-auto">
-              <svg viewBox="0 0 700 180" className="h-[200px] min-w-[700px] w-full">
-                {/* Y axis */}
-                <line x1="48" y1="12" x2="48" y2="140" stroke="#a8a29e" strokeWidth="1" />
-                {/* X axis */}
-                <line x1="48" y1="140" x2="688" y2="140" stroke="#a8a29e" strokeWidth="1" />
-                {[0, 1, 2, 3, 4].map((line) => {
-                  const y = 12 + line * 32;
-                  const value = Math.round(activityChart.maxValue * (1 - line / 4));
-                  return (
-                    <g key={line}>
-                      <line x1="48" x2="688" y1={y} y2={y} stroke="#e7e5e4" strokeWidth="1" />
-                      <text x="42" y={y + 3} textAnchor="end" className="fill-stone-400 text-[10px]">
-                        {value}
-                      </text>
-                    </g>
-                  );
-                })}
-                <g transform="translate(48 12)">
-                  <path d={activityChart.registeredPath} fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d={activityChart.syncedPath} fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d={activityChart.deletedPath} fill="none" stroke="#f43f5e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-                </g>
-                {activityChart.items.map((item, index) => {
-                  const chartWidth = 640;
-                  const x = 48 + (activityChart.items.length <= 1 ? 0 : (index / (activityChart.items.length - 1)) * chartWidth);
-                  return (
-                    <text key={item.date} x={x} y="158" textAnchor={index === 0 ? "start" : index === activityChart.items.length - 1 ? "end" : "middle"} className="fill-stone-500 text-[10px]">
-                      {item.date.slice(5)}
-                    </text>
-                  );
-                })}
-                <text x="368" y="176" textAnchor="middle" className="fill-stone-400 text-[10px]">日期</text>
-                <text x="14" y="76" textAnchor="middle" className="fill-stone-400 text-[10px]" transform="rotate(-90 14 76)">数量</text>
-              </svg>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
-              <span>峰值 {activityChart.maxValue}</span>
-              <span>窗口 {accountActivity?.days ?? 14} 天</span>
-            </div>
-          </CardContent>
-        </Card>
+              <InteractiveLineChart
+                dates={activityChart.items.map((i) => i.date)}
+                series={activityChart.series.filter((s) =>
+                  ["images_api", "images_chat", "dialogues_nurture", "dialogues_real"].includes(s.key),
+                )}
+                yLabel="数量"
+                xLabel="日期"
+                sharedScale
+              />
+              <div className="mt-2 text-xs text-stone-500">
+                api生图 · 对话生图 · 拟人对话 · 真实对话（窗口 {activityChart.items.length} 天）
+              </div>
+            </CardContent>
+          </Card>
+        </div>
         <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
           <CardContent className="p-4">
             <div className="mb-3 text-sm font-medium text-stone-700">
@@ -2222,6 +2551,32 @@ function AccountsPageContent() {
                 ))}
               </SelectContent>
             </Select>
+            <div className="inline-flex rounded-xl border border-stone-200 bg-white/85 p-0.5">
+              <button
+                type="button"
+                className={cn(
+                  "rounded-lg px-3 py-1.5 text-xs font-medium transition",
+                  accountViewMode === "flat"
+                    ? "bg-stone-900 text-white"
+                    : "text-stone-600 hover:bg-stone-100",
+                )}
+                onClick={() => setAccountViewMode("flat")}
+              >
+                平铺
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  "rounded-lg px-3 py-1.5 text-xs font-medium transition",
+                  accountViewMode === "grouped"
+                    ? "bg-stone-900 text-white"
+                    : "text-stone-600 hover:bg-stone-100",
+                )}
+                onClick={() => setAccountViewMode("grouped")}
+              >
+                按IP分组
+              </button>
+            </div>
           </div>
         </div>
 
@@ -2294,29 +2649,119 @@ function AccountsPageContent() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1100px] text-left">
+              <table className="w-full min-w-[1400px] text-left">
                 <thead className="border-b border-stone-100 text-[11px] text-stone-400 uppercase tracking-[0.18em]">
                   <tr>
-                    <th className="w-12 px-4 py-3">
+                    <th className="w-10 px-2 py-2">#</th>
+                    <th className="w-10 px-2 py-2">
                       <Checkbox
                         checked={allCurrentSelected}
                         onCheckedChange={(checked) => toggleSelectAll(Boolean(checked))}
                       />
                     </th>
-                    <th className="w-56 px-4 py-3">Token / 邮箱</th>
-                    <th className="w-28 px-4 py-3">类型 / 来源</th>
-                    <th className="w-24 px-4 py-3">状态</th>
-                    <th className="w-48 px-4 py-3">代理 / 出口</th>
-                    <th className="w-32 px-4 py-3">累计流量</th>
-                    <th className="w-32 px-4 py-3">创建时间</th>
-                    <th className="w-24 px-4 py-3">额度</th>
-                    <th className="w-40 px-4 py-3">恢复时间</th>
-                    <th className="w-18 px-4 py-3">在途</th>
-                    <th className="w-24 px-4 py-3">操作</th>
+                    <th className="w-56 px-2 py-2">
+                      <button type="button" className="hover:text-stone-700" onClick={(e) => toggleSort("email", e.shiftKey)}>
+                        Token / 邮箱 {sortIndicator("email")}
+                      </button>
+                    </th>
+                    <th className="w-24 px-2 py-2">
+                      <button type="button" className="hover:text-stone-700" onClick={(e) => toggleSort("type", e.shiftKey)}>
+                        类型 {sortIndicator("type")}
+                      </button>
+                    </th>
+                    <th className="w-20 px-2 py-2">
+                      <button type="button" className="hover:text-stone-700" onClick={(e) => toggleSort("status", e.shiftKey)}>
+                        状态 {sortIndicator("status")}
+                      </button>
+                    </th>
+                    <th className="w-20 px-2 py-2">
+                      <button type="button" className="hover:text-stone-700" onClick={(e) => toggleSort("schedule", e.shiftKey)}>
+                        调度 {sortIndicator("schedule")}
+                      </button>
+                    </th>
+                    <th className="w-20 px-2 py-2">软限流%</th>
+                    <th className="w-28 px-2 py-2">记录</th>
+                    <th className="w-40 px-2 py-2">
+                      <button type="button" className="hover:text-stone-700" onClick={(e) => toggleSort("proxy", e.shiftKey)}>
+                        代理 / 出口 {sortIndicator("proxy")}
+                      </button>
+                    </th>
+                    <th className="w-28 px-2 py-2">
+                      <button type="button" className="hover:text-stone-700" onClick={(e) => toggleSort("created_at", e.shiftKey)}>
+                        创建时间 {sortIndicator("created_at")}
+                      </button>
+                    </th>
+                    <th className="w-20 px-2 py-2">
+                      <button type="button" className="hover:text-stone-700" onClick={(e) => toggleSort("quota", e.shiftKey)}>
+                        额度 {sortIndicator("quota")}
+                      </button>
+                    </th>
+                    <th className="w-36 px-2 py-2">恢复时间</th>
+                    <th className="w-14 px-2 py-2">在途</th>
+                    <th className="w-20 px-2 py-2">操作</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {currentRows.map((account) => {
+                  {tableBlocks.map((block) => {
+                    if (block.kind === "group") {
+                      const binding = nurtureBindings[block.key];
+                      const presetId = binding?.preset_id || nurturePresets[0]?.id || "";
+                      const weights = weightsForBinding(block.key, nurturePresets, nurtureBindings);
+                      const saving = bindingSaveBusy.has(block.key);
+                      return (
+                        <tr
+                          key={`group-${block.key}`}
+                          className="border-b border-stone-200 bg-stone-50/90 text-sm text-stone-600"
+                        >
+                          <td colSpan={TABLE_COLUMN_COUNT} className="px-3 py-2">
+                            <div className="flex flex-wrap items-center gap-3">
+                              <div className="min-w-28">
+                                <div className="text-xs font-semibold text-stone-800">{block.label}</div>
+                                <div className="text-[10px] text-stone-500">
+                                  {block.accounts.length} 账号 · {block.key.slice(0, 12)}
+                                  {block.key.length > 12 ? "…" : ""}
+                                </div>
+                              </div>
+                              <EgressDriftLights days={aggregateEgressDays(block.accounts)} />
+                              <CfStatusLight days={aggregateCfDays(block.accounts)} />
+                              <div className="flex items-end gap-2">
+                                <div className="space-y-1">
+                                  <div className="text-[10px] text-stone-500">养号日历</div>
+                                  <Select
+                                    value={presetId}
+                                    disabled={saving || nurturePresets.length === 0}
+                                    onValueChange={(value) => {
+                                      void saveBindingPreset(block.key, value);
+                                    }}
+                                  >
+                                    <SelectTrigger className="h-7 w-[132px] rounded-lg border-stone-200 bg-white text-xs">
+                                      <SelectValue placeholder="选择预设" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {nurturePresets.map((preset) => (
+                                        <SelectItem key={preset.id} value={preset.id}>
+                                          {preset.label}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <BindingSgHeatmap
+                                  weights={weights}
+                                  editable={!saving && nurturePresets.length > 0}
+                                  onChange={(next) => {
+                                    void saveBindingPreset(block.key, presetId || nurturePresets[0]?.id || "default", next);
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    const account = block.account;
+                    const rowNo = block.rowNo;
                     const status = statusMeta[account.status];
                     const StatusIcon = status.icon;
                     const terminalOutlook = isOutlookRecoveryTerminal(account);
@@ -2328,7 +2773,8 @@ function AccountsPageContent() {
                         key={account.access_token}
                         className="border-b border-stone-100/80 text-sm text-stone-600 transition-colors hover:bg-stone-50/70"
                       >
-                        <td className="px-4 py-3">
+                        <td className="px-2 py-2 text-xs tabular-nums text-stone-400">{rowNo}</td>
+                        <td className="px-2 py-2">
                           <Checkbox
                             checked={selectedIds.includes(account.access_token)}
                             onCheckedChange={(checked) => {
@@ -2340,7 +2786,7 @@ function AccountsPageContent() {
                             }}
                           />
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="px-2 py-2">
                           <div className="space-y-1">
                             <div className="flex items-center gap-2">
                               <span className="font-medium tracking-tight text-stone-700">
@@ -2381,46 +2827,116 @@ function AccountsPageContent() {
                         </td>
                         <td className="px-4 py-3">
                           {(() => {
+                            const inSchedule = isManualSchedulingEnabled(account);
+                            const busy = schedulingBusyTokens.has(account.access_token);
+                            return (
+                              <button
+                                type="button"
+                                className={cn(
+                                  "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition",
+                                  inSchedule
+                                    ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                                    : "bg-amber-50 text-amber-700 hover:bg-amber-100",
+                                )}
+                                onClick={() => void handleToggleScheduling(account)}
+                                disabled={busy || isBulkScheduling}
+                                title={
+                                  inSchedule
+                                    ? "当前在调度池；点击退出调度（隔离观察）"
+                                    : "当前隔离观察；点击进入调度"
+                                }
+                              >
+                                {busy ? (
+                                  <LoaderCircle className="size-3.5 animate-spin" />
+                                ) : inSchedule ? (
+                                  <Play className="size-3.5" />
+                                ) : (
+                                  <Pause className="size-3.5" />
+                                )}
+                                {inSchedule ? "调度中" : "已隔离"}
+                              </button>
+                            );
+                          })()}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1">
+                            <Input
+                              type="number"
+                              min={5}
+                              max={99}
+                              step={1}
+                              value={softBandDisplayValue(account)}
+                              disabled={softBandBusy.has(account.access_token)}
+                              onChange={(event) => {
+                                const token = account.access_token;
+                                const value = event.target.value;
+                                setSoftBandDrafts((prev) => ({ ...prev, [token]: value }));
+                              }}
+                              onBlur={() => void commitSoftBand(account)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.currentTarget.blur();
+                                }
+                              }}
+                              className={cn(
+                                "h-8 w-14 rounded-lg border-stone-200 px-1.5 text-center text-xs",
+                                account.image_soft_capped ? "border-amber-400 bg-amber-50" : "",
+                              )}
+                              title={
+                                account.image_soft_capped
+                                  ? "当前已软熔断；可调阈值，清空后回车恢复自动"
+                                  : typeof account.image_soft_band_override === "number"
+                                    ? "手动覆盖中；清空后回车可恢复自动"
+                                    : "可手动输入 5–99；回车/失焦保存"
+                              }
+                            />
+                            <span className="text-[11px] text-stone-400">%</span>
+                            {typeof account.image_soft_band_override === "number" ? (
+                              <span className="text-[10px] text-amber-600">手</span>
+                            ) : null}
+                            {account.image_soft_capped ? (
+                              <span className="text-[10px] text-amber-700">熔</span>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <AccountUsageHeatstrip
+                            days={
+                              usageByEmail[String(account.email || "").trim().toLowerCase()] ||
+                              usageDates.map((date) => ({ date, images: 0, dialogues: 0 }))
+                            }
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          {(() => {
                             const proxy = proxyDisplay(account);
                             const pandaError = formatPandaInlineError(
-                              account.panda_probe_last_error || account.panda_verify_last_error,
+                              account.panda_probe_last_error
+                                || account.panda_verify_last_error
+                                || account.last_quota_refresh_error
+                                || account.last_refresh_error,
                             );
                             return (
                               <div
                                 className="max-w-48 space-y-0.5 text-xs leading-5"
-                                title={[
-                                  proxy.endpoint,
-                                  proxy.detail,
-                                  proxy.hash ? `出口哈希 ${proxy.hash}` : "",
-                                  pandaError ? `Panda: ${pandaError}` : "",
-                                ]
+                                title={[proxy.endpoint, proxy.detail, pandaError ? `Panda: ${pandaError}` : ""]
                                   .filter(Boolean)
                                   .join("\n")}
                               >
-                                <div className="truncate font-medium text-stone-700">{proxy.endpoint}</div>
-                                <div className="truncate text-stone-400">{proxy.detail}</div>
-                                {proxy.hash ? <div className="font-mono text-[10px] text-stone-400">#{proxy.hash}</div> : null}
+                                <div className="flex min-w-0 items-baseline gap-1.5">
+                                  <span className="truncate font-medium text-stone-700">{proxy.endpoint}</span>
+                                  {proxy.provider ? (
+                                    <span className="shrink-0 text-stone-400">{proxy.provider}</span>
+                                  ) : null}
+                                </div>
+                                <EgressDriftLights days={egressDaysForAccount(account)} />
+                                <CfStatusLight days={cfDaysForAccount(account)} />
                                 {pandaError ? (
                                   <div className="truncate text-[11px] text-rose-500">{pandaError}</div>
                                 ) : null}
                               </div>
                             );
                           })()}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div
-                            className="space-y-0.5 text-xs leading-5"
-                            title={
-                              typeof account.traffic_total_bytes === "number"
-                                ? `上传 ${formatBytes(account.traffic_uploaded_bytes)}\n下载 ${formatBytes(account.traffic_downloaded_bytes)}\n更新时间 ${account.traffic_updated_at || "—"}`
-                                : "历史账号尚未启用应用层流量统计"
-                            }
-                          >
-                            <div className="font-medium text-stone-700">{formatBytes(account.traffic_total_bytes)}</div>
-                            <div className="text-[10px] text-stone-400">
-                              {typeof account.traffic_total_bytes === "number" ? "应用层已跟踪" : "等待采集"}
-                            </div>
-                          </div>
                         </td>
                         <td className="px-4 py-3 text-xs leading-5 text-stone-500">
                           {(() => {
@@ -2442,8 +2958,16 @@ function AccountsPageContent() {
                           {(() => {
                             const restore = formatRestoreAt(account.restore_at);
                             return (
-                              <div className="space-y-0.5">
-                                {restore.relative ? <div className="font-medium text-stone-700">{restore.relative}</div> : null}
+                              <div
+                                className="space-y-0.5"
+                                title="上游额度恢复时刻；懒刷新会在恢复后按账号错峰再拉 limits，避免齐刷"
+                              >
+                                <div className="flex items-center gap-1">
+                                  {restore.relative ? (
+                                    <div className="font-medium text-stone-700">{restore.relative}</div>
+                                  ) : null}
+                                  <ScheduleCountdownIcons account={account} showText={false} />
+                                </div>
                                 <div>{restore.absolute}</div>
                               </div>
                             );
@@ -2472,6 +2996,53 @@ function AccountsPageContent() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1 text-stone-400">
+                            <ScheduleCountdownIcons account={account} showLazy={false} />
+                            <button
+                              type="button"
+                              className="rounded-lg p-2 transition hover:bg-sky-50 hover:text-sky-700"
+                              title="立即对该账号发起一条真实文本对话（同步执行，非仅入队）"
+                              onClick={() => {
+                                const email = String(account.email || "").trim();
+                                if (!email) {
+                                  toast.error("该账号无邮箱，无法定向对话");
+                                  return;
+                                }
+                                const toastId = toast.loading(`正在对话：${email}…`);
+                                void (async () => {
+                                  try {
+                                    const status = await fetchNurtureStatus().catch(() => null);
+                                    const result = await processNurtureOne({
+                                      email,
+                                      source: "accounts_ui",
+                                    });
+                                    const ms = Number(result.latency_ms || 0);
+                                    const queueDepth = Number(
+                                      (status as { queue?: { depth?: number } } | null)?.queue?.depth ?? 0,
+                                    );
+                                    toast.success(
+                                      `真实对话完成 ${email} · ${(ms / 1000).toFixed(1)}s · 输出 ${result.chars_out ?? 0} 字` +
+                                        (queueDepth > 0 ? ` · 队列仍积压 ${queueDepth}` : ""),
+                                      { id: toastId, duration: 6000 },
+                                    );
+                                    const usage = await fetchAccountsUsageRecent(6).catch(() => null);
+                                    if (usage?.by_email) {
+                                      setUsageByEmail(usage.by_email);
+                                      if (usage.dates?.length) setUsageDates(usage.dates);
+                                    }
+                                  } catch (err) {
+                                    const msg = humanizeUpstreamError(
+                                      err instanceof Error ? err.message : String(err),
+                                    );
+                                    toast.error(
+                                      `${msg} 队列：运维 →「养号」。`,
+                                      { id: toastId, duration: 8000 },
+                                    );
+                                  }
+                                })();
+                              }}
+                            >
+                              <MessageSquare className="size-4" />
+                            </button>
                             <button
                               type="button"
                               className="rounded-lg p-2 transition hover:bg-stone-100 hover:text-stone-700"

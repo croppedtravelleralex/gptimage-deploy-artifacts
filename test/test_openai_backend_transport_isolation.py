@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import unittest
+from datetime import datetime
 from io import BytesIO
 from unittest import mock
 
@@ -51,6 +52,11 @@ class FakeResponse:
 class RecordingSession:
     def __init__(self, **kwargs) -> None:
         self.kwargs = kwargs
+        self.verify = kwargs.get("verify", True)
+        self.impersonate = kwargs.get("impersonate", "")
+        proxy = kwargs.get("proxy")
+        self.proxies = dict(kwargs.get("proxies") or ({"all": proxy} if proxy else {}))
+        self.timeout = kwargs.get("timeout", 30)
         self.headers: dict[str, str] = {}
         self.get_calls: list[tuple[str, dict]] = []
         self.post_calls: list[tuple[str, dict]] = []
@@ -93,7 +99,11 @@ class FakeProxySettings:
 
     def build_session_kwargs(self, **kwargs) -> dict:
         self.session_calls.append(dict(kwargs))
-        return {"proxy": "http://proxy.example:8080", "impersonate": kwargs["impersonate"]}
+        return {
+            "proxy": "http://proxy.example:8080",
+            "impersonate": kwargs["impersonate"],
+            "verify": kwargs.get("verify", True),
+        }
 
     def build_headers(self, headers=None, target_url="", account=None, upstream=True, **kwargs) -> dict:
         self.header_calls.append({
@@ -194,7 +204,7 @@ class OpenAIBackendTransportIsolationTests(unittest.TestCase):
         self.assertEqual(api.session.close_calls, 1)
         self.assertEqual(resource.close_calls, 1)
 
-    def test_upload_put_and_resource_download_do_not_use_api_session(self) -> None:
+    def test_upload_put_uses_resource_session_without_api_auth(self) -> None:
         api, factory, _proxy, _accounts = self._make_api()
         main = factory.sessions[0]
         main.post_responses.extend([
@@ -207,24 +217,32 @@ class OpenAIBackendTransportIsolationTests(unittest.TestCase):
         image.save(buffer, format="PNG")
         encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
 
-        # PUT 时才惰性创建 resource session。
         with mock.patch.object(OpenAIBackendAPI, "_get_resource_session", wraps=api._get_resource_session) as get_resource:
             resource = api._get_resource_session()
             resource.put_responses.append(FakeResponse({}))
-            resource.get_responses.append(FakeResponse(content=b"image-bytes"))
             api._upload_image(encoded)
-            images = api.download_image_bytes(["https://cdn.example/image.png"])
 
-        self.assertGreaterEqual(get_resource.call_count, 3)
+        self.assertGreaterEqual(get_resource.call_count, 2)
         self.assertEqual(main.put_calls, [])
-        self.assertEqual(main.get_calls, [])
         self.assertEqual(resource.put_calls[0][0], "https://blob.example/upload")
-        self.assertEqual(resource.get_calls[0][0], "https://cdn.example/image.png")
-        for call in (resource.put_calls[0][1], resource.get_calls[0][1]):
-            headers = call.get("headers") or {}
-            self.assertNotIn("Authorization", headers)
-            self.assertNotIn("OAI-Device-Id", headers)
-            self.assertNotIn("OAI-Session-Id", headers)
+        headers = resource.put_calls[0][1].get("headers") or {}
+        self.assertNotIn("Authorization", headers)
+        self.assertNotIn("OAI-Device-Id", headers)
+        self.assertNotIn("OAI-Session-Id", headers)
+
+    def test_image_result_download_uses_authenticated_api_session(self) -> None:
+        """estuary/chatgpt.com 生图结果下载必须走主会话（带 Bearer）；resource 无鉴权会 403。"""
+        api, factory, _proxy, _accounts = self._make_api()
+        main = factory.sessions[0]
+        main.get_responses.append(FakeResponse(content=b"image-bytes"))
+        resource = api._get_resource_session()
+
+        images = api.download_image_bytes(["https://chatgpt.com/backend-api/estuary/content?id=file-1"])
+
+        self.assertEqual(main.get_calls[0][0], "https://chatgpt.com/backend-api/estuary/content?id=file-1")
+        download_headers = main.get_calls[0][1].get("headers") or {}
+        self.assertTrue(str(download_headers.get("Authorization") or "").startswith("Bearer "))
+        self.assertEqual(resource.get_calls, [])
         self.assertEqual(images, [b"image-bytes"])
 
     def test_image_headers_include_all_requirement_tokens(self) -> None:
@@ -241,6 +259,85 @@ class OpenAIBackendTransportIsolationTests(unittest.TestCase):
         self.assertEqual(headers["OpenAI-Sentinel-Proof-Token"], "proof")
         self.assertEqual(headers["OpenAI-Sentinel-Turnstile-Token"], "turnstile")
         self.assertEqual(headers["OpenAI-Sentinel-SO-Token"], "so-token")
+
+    def test_spa_image_headers_use_proven_legacy_client_and_minimal_shape(self) -> None:
+        api, _factory, _proxy, _accounts = self._make_api()
+        requirements = ChatRequirements(token="requirements", proof_token="proof")
+
+        headers = api._image_headers(
+            "/backend-api/f/conversation",
+            requirements,
+            accept="text/event-stream",
+            spa_tool_path=True,
+        )
+
+        self.assertEqual(
+            headers["OAI-Client-Version"],
+            "prod-a194cd50d4416d3c0b47c740f206b12ce60f5887",
+        )
+        self.assertEqual(headers["OAI-Client-Build-Number"], "6708908")
+        self.assertEqual(headers["OAI-Language"], "en-US")
+        self.assertNotIn("X-Conduit-Token", headers)
+        self.assertNotIn("X-Oai-Turn-Trace-Id", headers)
+        self.assertNotIn("Sec-Ch-Ua", headers)
+        self.assertNotIn("X-OpenAI-Target-Path", headers)
+
+    def test_image_transport_retry_classifier_excludes_cf_blocks(self) -> None:
+        self.assertTrue(
+            OpenAIBackendAPI._is_transient_transport_error(
+                RuntimeError("curl: (35) TLS connect error")
+            )
+        )
+        self.assertTrue(
+            OpenAIBackendAPI._is_transient_transport_error(
+                RuntimeError("curl: (56) Recv failure: Connection was reset")
+            )
+        )
+        self.assertFalse(
+            OpenAIBackendAPI._is_transient_transport_error(
+                RuntimeError("cf_edge_block: /backend-api/f/conversation HTTP 403")
+            )
+        )
+
+    def test_transport_rebuild_preserves_proxy_tls_and_impersonation(self) -> None:
+        api, factory, _proxy, _accounts = self._make_api()
+        old_session = api.session
+        old_session.verify = False
+        old_session.proxies = {"all": "http://127.0.0.1:7897"}
+        old_session.impersonate = "chrome131"
+        old_session.timeout = 90
+
+        api._rebuild_api_session_after_transport_error()
+
+        self.assertEqual(len(factory.sessions), 2)
+        rebuilt = api.session
+        self.assertIsNot(rebuilt, old_session)
+        self.assertFalse(rebuilt.kwargs["verify"])
+        self.assertEqual(rebuilt.kwargs["proxies"], {"all": "http://127.0.0.1:7897"})
+        self.assertNotIn("proxy", rebuilt.kwargs)
+        self.assertEqual(rebuilt.kwargs["impersonate"], "chrome131")
+        self.assertEqual(rebuilt.kwargs["timeout"], 90)
+        self.assertEqual(old_session.close_calls, 1)
+
+    def test_image_requirements_cf_path_is_single_shot(self) -> None:
+        api, _factory, _proxy, _accounts = self._make_api()
+        requirements = ChatRequirements(token="requirements")
+        response = FakeResponse({})
+
+        with (
+            mock.patch.object(api, "_report_progress"),
+            mock.patch.object(api, "_ensure_bootstrap"),
+            mock.patch.object(api, "_get_chat_requirements_once", return_value=requirements) as get_once,
+            mock.patch.object(api, "_get_chat_requirements") as get_with_cf_retry,
+            mock.patch.object(api, "_prepare_image_conversation", return_value="") as prepare,
+            mock.patch.object(api, "_start_image_generation", return_value=response),
+        ):
+            actual = api._open_image_sse_with_cf_retry("cat", "gpt-image-2", [])
+
+        self.assertIs(actual, response)
+        get_once.assert_called_once_with()
+        get_with_cf_retry.assert_not_called()
+        prepare.assert_called_once_with("cat", requirements, "gpt-image-2")
 
     def test_get_user_info_stops_after_me_authentication_failure(self) -> None:
         api = object.__new__(OpenAIBackendAPI)
@@ -261,10 +358,37 @@ class OpenAIBackendTransportIsolationTests(unittest.TestCase):
         api.base_url = "https://chatgpt.com"
         api.session = RecordingSession()
         api.session.post_responses.append(FakeResponse({}))
-        api._image_headers = lambda _path, _requirements: {}
+        api._image_headers = lambda _path, _requirements, **_kwargs: {}
 
-        with self.assertRaisesRegex(RuntimeError, "image_prepare.*missing conduit_token"):
-            api._prepare_image_conversation("cat", ChatRequirements(token="req"), "gpt-image-2")
+        with mock.patch(
+            "services.protocol.chatgpt_web_request.image_spa_tool_path_enabled",
+            return_value=False,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "missing conduit_token"):
+                api._prepare_image_conversation("cat", ChatRequirements(token="req"), "gpt-image-2")
+
+    def test_find_conversation_by_prompt_accepts_iso_updated_at(self) -> None:
+        api = object.__new__(OpenAIBackendAPI)
+        updated_at = "2026-07-22T02:03:24.804876Z"
+        api._list_recent_conversations = lambda **_kwargs: [
+            {
+                "id": "conversation-1",
+                "title": "A simple flat blue circle icon",
+                "updated_at": updated_at,
+            }
+        ]
+
+        started_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00")).timestamp() - 5
+
+        self.assertEqual(
+            api.find_conversation_by_prompt("a simple flat blue circle icon, no text", started_at),
+            "conversation-1",
+        )
+
+    def test_web_image_model_uses_spa_auto_slug(self) -> None:
+        api = object.__new__(OpenAIBackendAPI)
+
+        self.assertEqual(api._image_model_slug("gpt-image-2"), "auto")
 
     def test_complete_ensured_fingerprint_is_persisted_when_any_field_differs(self) -> None:
         incomplete = complete_fp()

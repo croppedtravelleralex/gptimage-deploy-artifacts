@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { ImageComposer } from "@/app/image/components/image-composer";
 import { ImageResults, type ImageLightboxItem } from "@/app/image/components/image-results";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
+import { ImageTaskPanel, type ImageTaskPanelItem } from "@/app/image/components/image-task-panel";
 import { ImageLightbox } from "@/components/image-lightbox";
 import {
   Dialog,
@@ -20,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import {
   createImageEditTask,
   createImageGenerationTask,
+  cancelImageTask,
   fetchAccounts,
   fetchModels,
   fetchImageTasks,
@@ -221,7 +223,8 @@ function taskDataToStoredImage(image: StoredImage, task: ImageTask): StoredImage
       status: "success",
       taskStatus: undefined,
       progress: undefined,
-      b64_json: first.b64_json,
+      // 优先保留 url，去掉巨型 b64，避免会话列表写盘卡顿
+      b64_json: first.url ? undefined : first.b64_json,
       url: first.url,
       revised_prompt: first.revised_prompt,
       error: undefined,
@@ -242,12 +245,11 @@ function taskDataToStoredImage(image: StoredImage, task: ImageTask): StoredImage
   }
 
   const newTaskStatus = task.status === "queued" ? "queued" : task.status === "running" ? "running" : image.taskStatus;
-  const shouldSetStartTime = newTaskStatus === "running" && !image.startTime;
-  const startTime = shouldSetStartTime ? Date.now() : image.startTime;
-  // elapsedSecs 仅使用后端返回的值，确保计时从 image_stream_resolve_start 开始
+  // 用时统一从本地 startTime 起算（提交时刻），避免与后端 resolve 阶段 elapsed 双口径
+  const startTime = image.startTime || (newTaskStatus === "running" || newTaskStatus === "queued" ? Date.now() : undefined);
   const elapsedSecs =
-    newTaskStatus === "running" && typeof task.elapsed_secs === "number"
-      ? task.elapsed_secs
+    startTime != null && (newTaskStatus === "running" || newTaskStatus === "queued")
+      ? Math.max(0, (Date.now() - startTime) / 1000)
       : undefined;
 
   return {
@@ -298,6 +300,23 @@ function deriveTurnStatus(turn: ImageTurn): Pick<ImageTurn, "status" | "error"> 
   }
   // 所有图片都被忽略（images 为空），视为完成
   return { status: "success", error: undefined };
+}
+
+function finalizeIdleQueuedTurn(turn: ImageTurn): ImageTurn {
+  if (
+    (turn.status !== "queued" && turn.status !== "generating") ||
+    turn.images.some((image) => image.status === "loading")
+  ) {
+    return turn;
+  }
+  const derived = deriveTurnStatus(turn);
+  if (derived.status === turn.status && derived.error === turn.error) {
+    return turn;
+  }
+  return {
+    ...turn,
+    ...derived,
+  };
 }
 
 async function syncConversationImageTasks(items: ImageConversation[]) {
@@ -395,15 +414,16 @@ async function recoverConversationHistory(items: ImageConversation[]) {
           error: "页面刷新或任务中断，未找到可恢复的任务 ID",
         };
       });
-      const derived = deriveTurnStatus({ ...turn, images });
-      if (!turnChanged && derived.status === turn.status && derived.error === turn.error) {
+      const candidateTurn = turnChanged ? { ...turn, images } : turn;
+      const nextTurn = finalizeIdleQueuedTurn(candidateTurn);
+      const derived = turnChanged ? deriveTurnStatus(nextTurn) : { status: nextTurn.status, error: nextTurn.error };
+      if (!turnChanged && nextTurn === turn && derived.status === turn.status && derived.error === turn.error) {
         return turn;
       }
       changed = true;
       return {
-        ...turn,
+        ...nextTurn,
         ...derived,
-        images,
       };
     });
 
@@ -454,6 +474,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const [imageModel, setImageModel] = useState<ImageModel>("gpt-image-2");
   const [imageModels, setImageModels] = useState<ImageModel[]>(["gpt-image-2"]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isTaskPanelOpen, setIsTaskPanelOpen] = useState(false);
+  const [cancellingTaskIds, setCancellingTaskIds] = useState<Set<string>>(() => new Set());
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
   const [conversations, setConversations] = useState<ImageConversation[]>([]);
@@ -939,16 +961,24 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         if (turn.id !== turnId) {
           return turn;
         }
+        const images =
+          part === "results"
+            ? turn.images.map((image) => ({ id: image.id, status: "error" as const, error: "生成结果已删除" }))
+            : turn.images;
+        const derived =
+          part === "results"
+            ? deriveTurnStatus({
+                ...turn,
+                images,
+              })
+            : { status: turn.status, error: turn.error };
         const nextTurn = {
           ...turn,
           prompt: part === "prompt" ? "" : turn.prompt,
           promptDeleted: part === "prompt" ? true : turn.promptDeleted,
           resultsDeleted: part === "results" ? true : turn.resultsDeleted,
-          status: part === "results" && turn.status === "generating" ? "error" as const : turn.status,
-          images:
-            part === "results"
-              ? turn.images.map((image) => ({ id: image.id, status: "error" as const, error: "生成结果已删除" }))
-              : turn.images,
+          ...derived,
+          images,
         };
         return nextTurn.promptDeleted && nextTurn.resultsDeleted ? null : nextTurn;
       })
@@ -1151,6 +1181,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         id: imageId,
         taskId: imageId,
         status: "loading" as const,
+        taskStatus: "queued" as const,
+        startTime: Date.now(),
       };
     });
 
@@ -1172,32 +1204,37 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       }
 
       activeConversationQueueIds.add(conversationId);
-      const applyTasks = async (tasks: ImageTask[]) => {
+      const applyTasks = async (tasks: ImageTask[], options: { persist?: boolean } = {}) => {
         const taskMap = new Map(tasks.map((task) => [task.id, task]));
-        await updateConversation(conversationId, (current) => {
-          const conversation = current ?? snapshot;
-          const turns = conversation.turns.map((turn) => {
-            if (turn.id !== activeTurn.id) {
-              return turn;
-            }
-            const images = turn.images.map((image) => {
-              const taskId = image.taskId || image.id;
-              const task = taskMap.get(taskId);
-              return task ? taskDataToStoredImage({ ...image, taskId }, task) : image;
+        const anyTerminal = tasks.some((task) => task.status === "success" || task.status === "error");
+        await updateConversation(
+          conversationId,
+          (current) => {
+            const conversation = current ?? snapshot;
+            const turns = conversation.turns.map((turn) => {
+              if (turn.id !== activeTurn.id) {
+                return turn;
+              }
+              const images = turn.images.map((image) => {
+                const taskId = image.taskId || image.id;
+                const task = taskMap.get(taskId);
+                return task ? taskDataToStoredImage({ ...image, taskId }, task) : image;
+              });
+              const derived = deriveTurnStatus({ ...turn, images });
+              return {
+                ...turn,
+                ...derived,
+                images,
+              };
             });
-            const derived = deriveTurnStatus({ ...turn, images });
             return {
-              ...turn,
-              ...derived,
-              images,
+              ...conversation,
+              updatedAt: new Date().toISOString(),
+              turns,
             };
-          });
-          return {
-            ...conversation,
-            updatedAt: new Date().toISOString(),
-            turns,
-          };
-        });
+          },
+          { persist: options.persist ?? anyTerminal },
+        );
       };
 
       try {
@@ -1210,7 +1247,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         }
 
         const pendingImages = activeTurn.images.filter((image) => image.status === "loading");
-        const submitted = await Promise.all(
+        const submitResults = await Promise.allSettled(
           pendingImages.map((image) => {
             const taskId = image.taskId || image.id;
             return activeTurn.mode === "edit"
@@ -1218,7 +1255,51 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               : createImageGenerationTask(taskId, activeTurn.prompt, activeTurn.model, activeTurn.size, activeTurn.quality);
           }),
         );
-        await applyTasks(submitted);
+        const submittedOk: ImageTask[] = [];
+        const submitFailures: Array<{ imageId: string; taskId: string; message: string }> = [];
+        submitResults.forEach((result, index) => {
+          const image = pendingImages[index];
+          const taskId = image.taskId || image.id;
+          if (result.status === "fulfilled") {
+            submittedOk.push(result.value);
+          } else {
+            submitFailures.push({
+              imageId: image.id,
+              taskId,
+              message: result.reason instanceof Error ? result.reason.message : String(result.reason || "提交失败"),
+            });
+          }
+        });
+        if (submittedOk.length > 0) {
+          await applyTasks(submittedOk);
+        }
+        if (submitFailures.length > 0) {
+          const failMap = new Map(submitFailures.map((item) => [item.imageId, item.message]));
+          await updateConversation(conversationId, (current) => {
+            const conversation = current ?? snapshot;
+            return {
+              ...conversation,
+              updatedAt: new Date().toISOString(),
+              turns: conversation.turns.map((turn) => {
+                if (turn.id !== activeTurn.id) return turn;
+                const images = turn.images.map((image) => {
+                  const message = failMap.get(image.id);
+                  if (!message) return image;
+                  return { ...image, status: "error" as const, error: message, taskStatus: undefined };
+                });
+                return { ...turn, ...deriveTurnStatus({ ...turn, images }), images };
+              }),
+            };
+          });
+          if (submittedOk.length === 0) {
+            toast.error(submitFailures[0]?.message || "生成图片失败");
+          } else {
+            toast.error(`${submitFailures.length} 张提交失败，其余继续生成`);
+          }
+        }
+        if (submittedOk.length === 0) {
+          return;
+        }
 
         let consecutiveErrors = 0;
         const retryingTaskIdsRef = new Set<string>();
@@ -1263,13 +1344,16 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               const missingImages = latestTurn.images.filter(
                 (image) => image.status === "loading" && image.taskId && taskList.missing_ids.includes(image.taskId),
               );
-              const resubmitted = await Promise.all(
+              const resubmitResults = await Promise.allSettled(
                 missingImages.map((image) =>
                   activeTurn.mode === "edit"
                     ? createImageEditTask(image.taskId || image.id, referenceFiles, activeTurn.prompt, activeTurn.model, activeTurn.size, activeTurn.quality)
                     : createImageGenerationTask(image.taskId || image.id, activeTurn.prompt, activeTurn.model, activeTurn.size, activeTurn.quality),
                 ),
               );
+              const resubmitted = resubmitResults
+                .filter((result): result is PromiseFulfilledResult<ImageTask> => result.status === "fulfilled")
+                .map((result) => result.value);
               if (resubmitted.length > 0) {
                 await applyTasks(resubmitted);
               }
@@ -1285,23 +1369,19 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         await loadQuota();
       } catch (error) {
         const message = error instanceof Error ? error.message : "生成图片失败";
+        // 仅把仍在 loading 的槽标错，避免误伤已成功入队/完成的图片
         await updateConversation(conversationId, (current) => {
           const conversation = current ?? snapshot;
           return {
             ...conversation,
             updatedAt: new Date().toISOString(),
-            turns: conversation.turns.map((turn) =>
-              turn.id === activeTurn.id
-                ? {
-                    ...turn,
-                    status: "error",
-                    error: message,
-                    images: turn.images.map((image) =>
-                      image.status === "loading" ? { ...image, status: "error", error: message } : image,
-                    ),
-                  }
-                : turn,
-            ),
+            turns: conversation.turns.map((turn) => {
+              if (turn.id !== activeTurn.id) return turn;
+              const images = turn.images.map((image) =>
+                image.status === "loading" ? { ...image, status: "error" as const, error: message } : image,
+              );
+              return { ...turn, ...deriveTurnStatus({ ...turn, images }), images };
+            }),
           };
         });
         toast.error(message);
@@ -1461,13 +1541,14 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         turns: conversation.turns.map((turn) => {
           const hasLoading = turn.images.some((image) => image.status === "loading" && image.taskId === taskId);
           if (!hasLoading) return turn;
+          const images = turn.images.map((image) =>
+            image.taskId === taskId ? { ...image, status: "error" as const, error: taskError } : image,
+          );
+          const derived = deriveTurnStatus({ ...turn, images });
           return {
             ...turn,
-            status: "error" as const,
-            error: taskError,
-            images: turn.images.map((image) =>
-              image.taskId === taskId ? { ...image, status: "error" as const, error: taskError } : image,
-            ),
+            ...derived,
+            images,
           };
         }),
       };
@@ -1582,10 +1663,83 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     }
   };
 
+  const hidePanelItemLocal = async (item: ImageTaskPanelItem) => {
+    await updateConversation(item.conversationId, (conversation) => ({
+      ...conversation,
+      updatedAt: new Date().toISOString(),
+      turns: conversation.turns.map((turn) => {
+        if (turn.id !== item.turnId) return turn;
+        return {
+          ...turn,
+          images: turn.images.map((image) =>
+            image.id === item.imageId || (image.taskId || image.id) === item.taskId
+              ? { ...image, hiddenFromTaskPanel: true }
+              : image,
+          ),
+        };
+      }),
+    }));
+  };
+
+  const handleCancelImageTask = async (taskId: string, opts?: { hideFromPanel?: boolean; imageId?: string; conversationId?: string; turnId?: string }) => {
+    setCancellingTaskIds((prev) => new Set(prev).add(taskId));
+    try {
+      const task = await cancelImageTask(taskId);
+      for (const conversation of conversationsRef.current) {
+        let conversationTouched = false;
+        const nextTurns = conversation.turns.map((turn) => {
+          let turnTouched = false;
+          const images = turn.images.map((image) => {
+            if ((image.taskId || image.id) !== taskId) return image;
+            turnTouched = true;
+            conversationTouched = true;
+            const next = taskDataToStoredImage({ ...image, taskId }, task);
+            return opts?.hideFromPanel ? { ...next, hiddenFromTaskPanel: true } : next;
+          });
+          if (!turnTouched) return turn;
+          const derived = deriveTurnStatus({ ...turn, images });
+          return { ...turn, ...derived, images };
+        });
+        if (!conversationTouched) continue;
+        await updateConversation(conversation.id, () => ({
+          ...conversation,
+          updatedAt: new Date().toISOString(),
+          turns: nextTurns,
+        }));
+      }
+      toast.success("已取消任务");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "取消失败");
+    } finally {
+      setCancellingTaskIds((prev) => {
+        const next = new Set(prev);
+        next.delete(taskId);
+        return next;
+      });
+    }
+  };
+
+  const handleRemovePanelItem = async (item: ImageTaskPanelItem) => {
+    if (item.status === "queued" || item.status === "running") {
+      await handleCancelImageTask(item.taskId, { hideFromPanel: true });
+      return;
+    }
+    setCancellingTaskIds((prev) => new Set(prev).add(item.taskId));
+    try {
+      await hidePanelItemLocal(item);
+    } finally {
+      setCancellingTaskIds((prev) => {
+        const next = new Set(prev);
+        next.delete(item.taskId);
+        return next;
+      });
+    }
+  };
+
   return (
     <>
-      <section className="mx-auto grid h-[calc(100dvh-6.5rem)] min-h-0 w-full max-w-[1380px] grid-cols-1 gap-2 overflow-hidden px-0 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:h-[calc(100dvh-5.25rem)] sm:gap-3 sm:px-3 sm:pb-6 lg:grid-cols-[240px_minmax(0,1fr)]">
-        <div className="hidden h-full min-h-0 border-r border-stone-200/70 pr-3 lg:block">
+      <section className="mx-auto grid h-[calc(100dvh-6.5rem)] min-h-0 w-full max-w-[1580px] grid-cols-1 gap-2 overflow-hidden px-0 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:h-[calc(100dvh-5.25rem)] sm:gap-3 sm:px-3 sm:pb-6 lg:grid-cols-[200px_minmax(0,1fr)_200px]">
+        <div className="hidden h-full min-h-0 border-r border-stone-200/70 pr-2 lg:block">
           <ImageSidebar
             conversations={conversations}
             isLoadingHistory={isLoadingHistory}
@@ -1646,6 +1800,13 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             >
               <Plus className="size-4" />
               新建
+            </Button>
+            <Button
+              variant="outline"
+              className="h-10 rounded-2xl border-stone-200 bg-white/85 px-3 text-stone-600 shadow-sm"
+              onClick={() => setIsTaskPanelOpen(true)}
+            >
+              任务
             </Button>
             <Button
               variant="outline"
@@ -1721,7 +1882,37 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             onRemoveReferenceImage={handleRemoveReferenceImage}
           />
         </div>
+
+        <div className="hidden h-full min-h-0 border-l border-stone-200/70 pl-2 lg:block">
+          <ImageTaskPanel
+            conversations={conversations}
+            concurrencyLimit={4}
+            onSelectConversation={setSelectedConversationId}
+            onRemoveItem={(item) => void handleRemovePanelItem(item)}
+            removingIds={cancellingTaskIds}
+            className="h-full"
+          />
+        </div>
       </section>
+
+      <Dialog open={isTaskPanelOpen} onOpenChange={setIsTaskPanelOpen}>
+        <DialogContent className="flex h-[min(78dvh,640px)] w-[92vw] max-w-[420px] flex-col overflow-hidden rounded-[28px] p-0 lg:hidden">
+          <DialogHeader className="sr-only">
+            <DialogTitle>生图任务</DialogTitle>
+          </DialogHeader>
+          <ImageTaskPanel
+            conversations={conversations}
+            concurrencyLimit={4}
+            onSelectConversation={(id) => {
+              setSelectedConversationId(id);
+              setIsTaskPanelOpen(false);
+            }}
+            onRemoveItem={(item) => void handleRemovePanelItem(item)}
+            removingIds={cancellingTaskIds}
+            className="h-full border-0 shadow-none"
+          />
+        </DialogContent>
+      </Dialog>
 
       <ImageLightbox
         images={lightboxImages}

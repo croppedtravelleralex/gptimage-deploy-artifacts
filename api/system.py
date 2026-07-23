@@ -57,7 +57,7 @@ from services.image_service import (
 from services.image_storage_service import ImageStorageError, image_storage_service
 from services.image_tags_service import delete_tag, get_all_tags, set_tags
 from services.log_service import log_service
-from services.proxy_service import proxy_settings, test_clearance, test_proxy
+from services.proxy_service import proxy_settings, test_proxy
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -66,10 +66,6 @@ class SettingsUpdateRequest(BaseModel):
 
 class ProxyTestRequest(BaseModel):
     url: str = ""
-
-
-class ClearanceTestRequest(BaseModel):
-    target_url: str = "https://chatgpt.com"
 
 
 class ImageDeleteRequest(BaseModel):
@@ -173,9 +169,33 @@ def create_router(app_version: str) -> APIRouter:
         return get_image_download_response(image_path)
 
     @router.get("/api/logs")
-    async def get_logs(type: str = "", start_date: str = "", end_date: str = "", authorization: str | None = Header(default=None)):
+    async def get_logs(
+        type: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        source: str = "",
+        outcome: str = "",
+        kind: str = "",
+        authorization: str | None = Header(default=None),
+    ):
         require_admin(authorization)
-        return {"items": log_service.list(type=type.strip(), start_date=start_date.strip(), end_date=end_date.strip())}
+        items = log_service.list(type=type.strip(), start_date=start_date.strip(), end_date=end_date.strip())
+        source_f = source.strip()
+        outcome_f = outcome.strip()
+        kind_f = kind.strip()
+        if source_f or outcome_f or kind_f:
+            filtered = []
+            for item in items:
+                detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+                if source_f and str(detail.get("source") or "") != source_f:
+                    continue
+                if outcome_f and str(detail.get("outcome") or "") != outcome_f:
+                    continue
+                if kind_f and str(detail.get("kind") or "") != kind_f:
+                    continue
+                filtered.append(item)
+            items = filtered
+        return {"items": items}
 
     @router.post("/api/logs/delete")
     async def delete_logs(body: LogDeleteRequest, authorization: str | None = Header(default=None)):
@@ -206,11 +226,6 @@ def create_router(app_version: str) -> APIRouter:
             "runtime": config.get_public_proxy_runtime_settings(),
             "status": proxy_settings.get_runtime_status(),
         }
-
-    @router.post("/api/proxy/clearance/test")
-    async def test_proxy_clearance_endpoint(body: ClearanceTestRequest, authorization: str | None = Header(default=None)):
-        require_admin(authorization)
-        return {"result": await run_in_threadpool(test_clearance, body.target_url)}
 
     @router.get("/api/storage/info")
     async def get_storage_info(authorization: str | None = Header(default=None)):
@@ -411,7 +426,7 @@ td{{padding:8px 12px;border-top:1px solid #2a2d3a;font-size:14px}}tr:hover td{{b
 <div class="card"><div class="label">静态可调度</div><div class="value">{stats.get('schedulable', 0)}</div></div>
 <div class="card"><div class="label">预检退避</div><div class="value yellow">{stats.get('preflight_backoff_count', 0)}</div></div>
 <div class="card"><div class="label">退避后候选</div><div class="value blue">{stats.get('ready_candidate_count', 0)}</div></div>
-<div class="card"><div class="label">当前可派发</div><div class="value green">{stats.get('dispatchable_candidate_count', stats.get('available_candidate_count', 0))}</div></div>
+<div class="card"><div class="label">当前可调度</div><div class="value green">{stats.get('schedulable', stats.get('scheduling_enabled', 0))}</div></div>
 <div class="card"><div class="label">生图占用/全局上限</div><div class="value">{stats.get('image_inflight_count', 0)}<span style="font-size:18px;color:#94a3b8">/</span>{stats.get('image_global_concurrency_limit', 0)}</div></div>
 <div class="card"><div class="label">限流</div><div class="value yellow">{stats['limited']}</div></div>
 <div class="card"><div class="label">异常</div><div class="value red">{stats['abnormal']}</div></div>

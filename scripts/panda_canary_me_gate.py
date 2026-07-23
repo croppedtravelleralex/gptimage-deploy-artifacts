@@ -22,7 +22,7 @@ def _token_hash(token: object) -> str:
 
 def main() -> int:
     from services.account_service import account_service
-    from services.register.proxy_health import measure_proxy_egress_ip
+    from services.proxy_health import measure_proxy_egress_ip
 
     token_hash = str(os.environ.get("CANARY_TOKEN_HASH") or (sys.argv[1] if len(sys.argv) > 1 else DEFAULT_HASH)).strip()
     out_dir = ROOT / "data" / "runlogs" / f"account-identity-remediation-canary-{token_hash}"

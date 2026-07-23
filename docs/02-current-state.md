@@ -1,25 +1,140 @@
 # 当前状态
 
-最后更新：2026-07-16 22:20（Asia/Shanghai）
+最后更新：2026-07-23（Asia/Shanghai）
 
-## 摘要
+## 摘要（当前权威）
 
-项目当前处于「本地修复与只读审计进行中；Panda 生图调度面耗尽；根分区已回落到门禁内，生产码仍落后本地」状态。
+**新号稳定产出**为固定 Camoufox 链路（见 `16-camoufox-stable-pipeline.md`）：取号 → 未占用 Webshare → 探活+邮箱预检 → 本机 Camoufox 注册 → blob 上传 Panda → 默认 `identity_isolated` 观察 → 成熟后开调度。正式入口 `scripts/outlook_camoufox_stable_register.py`；默认 `register`，已注册 Outlook 的人工恢复用同脚本 `--mode relogin`。正式入口已移除两个 `_tmp_` 脚本依赖，并支持将账号 sticky Webshare 与 Camoufox 实际 browser proxy 分开传入。注册机 UI/协议批量已停用。
 
-### 2026-07-16 22:09 Panda SSH 只读深检
+- **CF 403**：边缘 HTML challenge（出口 IP + 行为），**不能协议根除**；裁决与缓解见 **`17-cf403-and-egress.md`**。Panda 直连 backend 必炸；生产须 sticky Webshare。2026-07-21 已上 IMAGE 换号 failover、同 binding 生图≤1、错峰 1.5s。
+- 2026-07-22 Outlook invalid 单号恢复：本机直连 Webshare 的 ChatGPT session/callback 会 `connection reset`，同一批 5 个未占用节点改走“本机 → Panda → Webshare”后均为 session/CSRF 200。`iv***3` 使用正确 NextAuth state Cookie + 本机 Camoufox OTP 重登成功；新 token hash `b5ff0dd61227` 在 Panda `/backend-api/me` 验证为 quota 25 后替换旧 token `d57c8af1da7d`，生产终态 `verified_ready`。该实测路径已固化进正式脚本 `--mode relogin --browser-proxy-file ...`：新 token 仍只在本地隔离落盘，不自动修改 Panda。备份：`/root/gptimage/data/backups/outlook-node-swap-iv-20260722-102756/`。
+- 2026-07-23 Outlook `token invalidated` 双号恢复：`charlietim7490` / `barnettregina91891` 按同日 iv***3 链路本机 Camoufox `--mode relogin` + Panda 18443 链串行成功；`_tmp_panda_commit_import_blob.py` 写库后**必须** `POST /api/accounts/reload-from-storage`（否则 8012 内存仍显示旧 `token invalidated`）。终态两号 `verified_ready`，quota 5/25。
+- 2026-07-23 Outlook 新号观察批次：`0716-4000_015.txt` index **3/4**（`felicitypamela2673` / `andersmia76491`）+ 未占用 Webshare `45.39.75.27` / `92.113.231.203` 本机 Camoufox 注册成功；Panda 观察态导入 `_tmp_panda_import_observe_blob.py`（`/me` 探活，避免 `conversation/init` CF 误杀）→ `identity_isolated`。证据：`data/runlogs/outlook-camoufox-stable-20260723/`。
+- Panda IP canary（2026-07-20）：2 个 Proton（`xwy83…` / `yi59…`）经 `socks5://127.0.0.1:18443`→Panda `43.156.233.219` **注册成功**；空代理刷 `/backend-api` → **CF 403**；已隔离，`proxy_runtime` 恢复 `single_proxy`。
+- 裁决：Panda 宿主机 IP 可过注册页，**不可**作生产 backend 出口；调度仍须账号级 sticky Webshare。
+- 调度 UI/API：进=`verified_ready`，出=`identity_isolated`。
+- 逆向：estuary 下载须主 session Bearer；文本已对齐 SPA `/f/conversation`+prepare。**严格纯 HTTP 生图已正式部署 Panda 并完成生产单单元 canary**。旧 IP 串行 5 曾因 CF 信号停在 `2/5`；A/B 后已将同一账号保持原 fp/session 换绑到新 IP `45.39.75.27`。新 IP 串行 5 实际执行 `4/5`：前 3 次出图下载成功，第 4 次在 45 秒内未识别到明确 `image_gen`，按门禁停止且未执行第 5 次；无换号、无整单重试。纠正后的 CF 口径为：首页 `home_soft_fail status=403` 为 `4/4`，requirements/prepare/start 未传播 CF，前三轮 `/tasks` 无 CF，第四轮未进入 poll。未通过 `5/5`，不能把旧 IP 定性为唯一主因，并发 4 未执行。证据见 `captures/spa/{J,K,L,M}-*.json`。
+- 拟人 Phase A+B 已落地；**降封效果尚未证明**（`12`）。
+- 发布：本地 build → artifacts → Panda overlay；禁 Panda build / 禁 scp 业务码。
+- 详案：`16`（产出）、`11`/`12`/`19`/`20`（LLM/协议/纯 HTTP 生图）、`17`（CF）、`04`（待办）、`09`/`10`（长寿/拟人）。
+- Rust 重写：**Phase A 已接线** + **鉴权/UI/简易后端** + **Phase B 契约层**——独立仓 `gptimage-gateway-rs`（`:8013` + helper `:19001`；生产 `:8012` 未切流）。生图运行时默认关（`IMAGE_ENABLED=0`）；路线见该仓 `plan.md` / 指针 `14`。MVP 生图矩阵签字待后端接入 + CF 可测窗。
 
-- 首次在本会话对 `ssh panda` 做实时深检（非仅读本地旧报告）。脱敏报告：`data/runlogs/panda-deep-audit-readonly-20260716-220921.md`；复现脚本：`scripts/panda_readonly_deep_audit.py`。
-- 根分区 **49%**（Avail 29G），不再处于 ≥85% 硬门禁；20:34 报告中的 86.1% 已过时。
-- Health：`total=18` / 正常5 / 限流1 / 异常7 / 禁用5 / `schedulable=0` / `dispatchable=0` / `verified_total_quota=0` / `image_inflight_count=0`。
-- 账面 quota 合计 271 全部在异常/禁用号；5 个「正常」均为 `q=0`，不能当可调度额度。
-- 代理：12/18 有账号级 proxy 且 **同一 host 签名**；egress hash / 完整 fp / node_lease / cohort / maturity 均为 0/18。
-- 任务库：success15 / error401 / timeout_pending21 / running1；`image_tasks.db` ≈ 1.6G。
-- 近 24h 日志关键词：`429×2024`、`quota×664`、`timeout×661`、`account_deactivated×16`。
-- 代码漂移：Panda 缺 `account_fingerprint.py` / `account_workload_policy.py`；`openai_backend_api.py` 远端仍为 07-10 版本（`1fa10b…`），本地 `5f4c52…`。部署 ACC-010 必须成对带上 fingerprint 模块。
-- 发布约定（2026-07-16）：**只在本地 build/验收**，通过后经 **GitHub → Panda `git pull`**；禁止 Panda 上 build，禁止脚本 scp 直推业务码。误触的 ACC-010 scp 热更已回滚，生产哈希恢复为 `openai=1fa10b…`，fingerprint 已删除，`healthy=true`。
+> 以下各节为历史流水，**不得覆盖上方摘要**。
+
+### 2026-07-23 Outlook 死号恢复与 UI 内存陈旧
+
+- 目标：`charlietim7490@outlook.com`（index 0 / `92.113.246.215`）、`barnettregina91891@outlook.com`（index 7 / `104.252.149.121`）；Panda HTTP `recover_panda_outlook_accounts.py` 在 NextAuth CSRF 403，改本机 `outlook_camoufox_stable_register.py --mode relogin` + `browser-proxy http://127.0.0.1:18443`（SSH 隧道 → Panda 转发器 → 各号 sticky Webshare）。
+- 提交：`_tmp_panda_commit_import_blob.py` 备份后替换旧 token → `verified_ready`；**提交后须** `scripts/_tmp_reload_panda_accounts.py`（或 `POST /api/accounts/reload-from-storage`），否则账号页仍读内存里的 `token invalidated`。
+- 证据：`data/runlogs/outlook-recovery-20260723/`。
+
+### 2026-07-23 Outlook 新号观察批次（Camoufox 固定链路）
+
+| 项 | felicity | anders |
+| --- | --- | --- |
+| 凭据行 | `0716-4000_015.txt` index **3** | index **4** |
+| 新 Webshare | `45.39.75.27:5941` | `92.113.231.203:7288`（首节点 `92.113.236.206` token 交换 reset，换下一节点） |
+| 注册 | 本机直连 Webshare Camoufox ~82s / ~58s | |
+| Panda | `identity_isolated`；导入脚本 `_tmp_panda_import_observe_blob.py`（仅 `/backend-api/me` 验 token，观察态不强制 `conversation/init`） | |
+| 证据 | `data/runlogs/outlook-camoufox-stable-20260723/` | |
+
+### 2026-07-22 严格纯 HTTP 生图待办文档化
+
+- 全量已做/未做：`docs/20-pure-http-image-sentinel-todo.md`；工程项 `04` **PROTO-PURE-HTTP**。
+- 当时下一步为 Turnstile VM 复活；该阻塞已在当天解除，最新状态以上一节“突破与正式链路收口”为准。
+
+### 2026-07-22 严格纯 HTTP 生图突破与正式链路收口
+
+- Turnstile VM 已被真实上游 finalize 接受；成功 token 长度约 2.6k，禁用浏览器/外部 solver。
+- 已有一次端到端真出图：conversation `6a602f69-54a0-83ec-8312-945864ce7e52`，PNG `841,139` bytes。
+- 正式链路已补：旧版 auto-tool contextual、旧 client version/build、prepare 无 Sentinel、start 带 Sentinel/Turnstile 且无 conduit、CF403 单次失败、TLS 重建保持 proxy/verify/impersonate。
+- 本轮正式 canary `6a6032b1…` / `6a60348d…` 都只到 code，无 tool；随后只读查询出现一次 CF403，已停止上游请求并等待冷却。
+- 本地回归：相关生图/轮询/代理/Turnstile/`v1/images` 共 `85 passed`。
+
+### 2026-07-22 Panda Webshare staging canary
+
+- 只读容量基线满足门禁：2 CPU、可用内存约 `1276 MiB`、归一化负载 `0.08`、根盘 `61%`；健康页 `healthy=true`，隔离 canary 容器已退出。
+- 账号与代理仅记录哈希：account `f289854023ad`、Webshare `49675fdabb54`，观测出口 `92.113.246.176`。单次纯 HTTP staging 请求触发 `image_gen=true`，conversation `6a604b04-d4f8-83ec-9ada-df3d82276d85`，SSE 返回一个 sediment ID。
+- 失败阶段为 `poll_download`：`/tasks` 与 conversation 轮询连续两次 CF403，未产生下载 URL/PNG；原子脱敏证据为 `I-panda-webshare-pure-http-canary-20260722.json`。
+- canary 后本地修复了 poll resolver 的 CF abort 吞错路径并新增回归；定向 `34 passed`，扩展受影响回归 `92 passed`。这是正式发布前的 staging 记录；随后生产发布与成功单单元 canary 见下一节。
+
+### 2026-07-22 Panda 正式发布与纯 HTTP 单单元 canary
+
+- 通过 Git/artifacts 最小 overlay 正式发布 4 个运行时文件；artifact commit `650e899084c319ede7436c7b9497b4af9b991eba`，生产备份 `/root/gptimage/backups/pure-http-prod-20260722-144517`。Panda 未 build，未 scp 业务代码。
+- 发布后健康页 `healthy=true`，`image_schedulable=10`、`dispatchable=10`、`inflight=0`、`startup_errors=0`。
+- 单账号、单 Webshare、单请求 canary 成功：conversation `6a606849-e1b8-83ec-96e4-e7cfbbbf305b`，`has_image_gen=true`，sediment `file_0000000086d081fbb4856bd42f0b94c3`；下载 PNG `1254×1254`、`2,568,782` bytes，SHA256 `1f886e15532bfc9973897a9d285f311ecadeedaa0346dc0101df25629e5fa5bd`。
+- `/tasks` 发生 1 次 CF403，随后 conversation poll 成功；未达到连续 2 次 abort 阈值，未重试整单、未换号。因事前门禁规定任一 CF403 即停止扩测，串行 5 / 并发 4 未执行。
+- canary 后资源与服务正常：可用内存约 `1427 MiB`、归一化负载 `0.03`、根盘 `61%`、`healthy=true`、调度面 `10/10`、`inflight=0`，canary 容器已退出。证据：`captures/spa/J-panda-production-pure-http-canary-20260722.json`。
+
+### 2026-07-22 Panda 固定账号/Webshare 串行 5 门禁
+
+- 约束：固定 account hash `3b18db641494`、Webshare hash `b2f3cb7639c2`、出口 `82.29.223.111`；并发 1；单请求硬超时 `300s`、整轮 `1800s`、`image_gen` deadline `45s`、轮间冷却 `15s`；禁止换号与整单重试。
+- 实际执行 `2/5` 后止损：第 1 轮 50.615s，未触发 `image_gen`；第 2 轮 43.942s，出图并下载 PNG `1254×1254`、`2,475,088` bytes。两轮首页暖机均出现一次 CF403，第 2 轮 `/tasks` 另有一次 CF403（streak=1）后由 conversation poll 恢复。
+- 连续两轮均有 CF 信号，按事前门禁在启动第 3 轮前停止；成功率 `1/2`，`no_image_gen=1`，未达到 5 次完整验收，未执行并发 4。
+- 资源安全：canary 峰值约 `51.99%` 单核配额 / `58.91 MiB`，主机最低可用内存 `1375 MiB`、最高归一化负载 `0.21`；结束后可用内存 `1483 MiB`、`healthy=true`、调度 `10/10`、`inflight=0`、隔离容器 0。证据：`captures/spa/K-panda-production-pure-http-serial5-20260722.json`。
+
+### 2026-07-22 Webshare 新旧 IP 同条件 A/B
+
+- 固定 account hash `3b18db641494`、fp hash `e595e15a2a6e2fb0`、prompt 与 prepare/start shape；仅代理变化，禁止整单重试。新代理来自未占用池，双测 sticky 通过；未写回生产账号绑定。
+- 新 IP `45.39.75.27`：首测与复测均 `image_gen=true` 且下载成功，分别 `42.301s` / `37.714s`；首页和 `/tasks` 均无 CF403。
+- 旧 IP `82.29.223.111`：只测 1 次，`image_gen=true`、首页与 `/tasks` 均无 CF403，但 estuary 下载返回 `503 ServerBusy`，未整单重试。
+- 裁决：旧 IP 本次未持续出现 CF403，故不满足“新 IP 无 CF、旧 IP 持续 CF”的归因门槛；CF 更可能是间歇性 edge/endpoint/timing，旧 IP 可能提高概率但不是唯一已证变量。证据：`captures/spa/L-panda-webshare-ip-ab-20260722.json`。
+
+### 2026-07-22 新 IP 生产换绑与串行 5 续验
+
+- account hash `3b18db641494` 保持 fp hash `e595e15a2a6e2fb0`、session、prompt 与 request shape 不变；生产代理从 hash `b2f3cb7639c2` / `82.29.223.111` 换绑到 hash `561dcfff2fc1` / `45.39.75.27`。换绑前已保存可回滚账号快照，热加载后 `image_schedulable=10`、`inflight=0`。
+- 事前目标为串行 5；并发 1、`300s/request`、`45s image_gen deadline`、轮间 `20–25s`、`0.5 CPU / 512 MiB / 128 PIDs`，禁止换号和整单重试。
+- 实际执行 `4/5`：前 3 轮均 `image_gen=true` 并下载 PNG，耗时 `46.026s / 43.119s / 47.784s`；第 4 轮创建 conversation 后 `no_image_gen_within_45s`，按门禁立即停止，第 5 轮未运行。
+- **CF 口径纠正**：4 轮容器日志均记录 `home_soft_fail status=403`，但 requirements/prepare/start 均未传播 CF；前三轮 `/tasks` 为 0，第四轮未进入 poll。证据中的 `cf403=0` 只代表业务链/异常分类未抛出 CF，不能解释成“没有任何 403”。A/B 时同一新 IP 首页正常，续验时又变为首页 `4/4` 403，说明 edge 状态可随时间或行为变化，不能把 IP 简分为永久好/坏。
+- **第 4 轮诊断**：出口、账号、fp/session 与 request shape 均未漂移；requirements/finalize/prepare/conversation 成功，SSE 收到 13 chunks、约 8 KiB，并出现类似生图参数的 JSON 文本，但 45 秒内没有明确 `image_gen`。当前 bench 在解析 SSE 行前先检查 deadline（`scripts/_tmp_spa_image_bench3.py` 当前约第 675 行），临界到达的工具事件可能被丢弃，存在边界假阴性；生产代码也已记录 JSON tool-call 可能停在 STREAMING、不产图的相似模式（`services/protocol/chatgpt_web_request.py` 当前约第 100–105 行）。
+- **下一步**：先修观测而不是补请求——SSE 每行先解析再判 deadline；脱敏记录事件时间线；拆分工具/静默流与各阶段 CF 分类；45 秒仍作为验收线，诊断模式只读监听同一流至 60 秒。完成前不补第 5 轮、不启动并发 4。
+- 资源与终态正常：最低可用内存 `1403 MiB`、最高归一化负载 `0.675`、canary 峰值 `50.27%` 单核配额 / `65.01 MiB`；结束后 `healthy=true`、调度 `10/10`、`inflight=0`、队列 0、隔离容器 0。新绑定保留，并发 4 未启动。证据：`captures/spa/M-panda-new-ip-serial5-20260722.json`。
+
+### 2026-07-21 SPA 协议挖全（Now+Next）与改造待办
+
+- 目录：`19`；证据：`captures/spa/`（A–F 专页 + HAR gitignore）。
+- 结论摘要：Create Image UI 仍发 `picture_v2`；上传 SPA 为 `process_upload_stream`+`sediment://`；search HTTP `["search"]` OK；Clash 暖机/cookie 剥离 OK；差 IP Webshare 本机暖机易 NET_RESET。
+- **工程下一步**：生图 Sentinel 见 **`20` / PROTO-PURE-HTTP**；上传链见 **PROTO-REFACTOR**（不改 CF 裁决）。
+
+### 2026-07-21 SPA HAR → HTTP 复现（固定 Clash/号）
+
+- 观察号 `qaflow0ytb7bbp0z@proton.me`；出口 Clash `7897`；Camoufox OAuthCallback 失败后改 HTTP OTP 注 cookie。
+- HAR：`docs/captures/spa/spa-camoufox-20260721T044906Z.har` 等；diff：`field-diff-20260721.md`。
+- 代码：文本路径改 `/f/conversation`+prepare；Client Version/Build 跟 HAR；Prepare-Token。
+- HTTP 文本复现 OK（curl_cffi，Clash TLS 偶发需重试）；HTTP 生图按 SPA 同形（`system_hints=[]`、无 conduit 头）经 Camoufox APIRequest 复现 OK（`has_image_gen`）；反代 `/v1/images` 仍保留 `picture_v2`；**不**改 `17` 裁决。
+- **三轮生图+下载对照（全文）**：[`docs/captures/spa/bench3-20260721.md`](captures/spa/bench3-20260721.md) — 本地 Clash OK（78.4s / 图 2.51MB / 流量 3.13MB）；panda 直连 CF403 FAIL；panda Webshare OK（56.9s / 图 2.32MB / 流量 2.44MB）。索引：[`docs/captures/spa/README.md`](captures/spa/README.md)。
+
+### 2026-07-21 CF 403 与生图调度
+
+- 根因写入 `17`：非 TLS 断连；协议绕过不可行。
+- 缓解已部署（artifacts `72ca9d5`）：`image_stream_cf_failover`、bootstrap `soft_fail=False`、`image_binding_inflight_max=1`、`submit_start_min_interval_ms=1500`。
+- UI：生图任务右侧三段队列；左右用时统一墙钟。
+
+### 2026-07-20 Proton×Panda IP canary
+
+- 邮箱源：`proton/registered_accounts.txt`；选用 `qaflowxwy83tivv5` / `qaflowyi59i282fx`。
+- 注册：Camoufox + SSH SOCKS 链 Panda 直连 IP；`source_detail=proton_camoufox_panda_ip_direct_20260720`。
+- 上传 Panda：`proxy=""`、`lifecycle_ip_mode=panda_host_direct`；临时 `egress_mode=direct` 验号失败（`cf_edge_block` 403）。
+- 终态：两号曾 `identity_isolated`；运行时出口已恢复 sticky `single_proxy`。
+- **同节点挂载（活性观察）**：两号已绑同一 Webshare `82.21.231.148:7462`（`proxy_hash=271481765bd7`，同 `proxy_binding_hash`），`cohort_id=proton_panda_ip_shared_webshare_20260720`；T0 刷额度均 `正常/quota=25/verified_ready`。故意共享 binding 做多日活性对照（非正式生产一对一策略）。
+
+### 2026-07-19 Proton 观察号与调度开关
+
+- 自 `proton/registered_accounts.txt` 取 2 号，Camoufox + Panda Webshare 链注册；先 `identity_isolated` 观察，后升调度并刷额度。
+- 部署调度开关后 UI 可见「调度中 / 已隔离」；health `schedulable=4`。
+
+### 2026-07-17～18 协议回滚与拟人化
+
+- 2026-07-17：去掉错误 `post_ready=15s`；estuary 显式 Bearer；`skipped_mainline` 不再误判换号。观察号生图 `b64≈725KB`。
+- 2026-07-18：humanlike Phase A+B；softband 不写死 `status=限流`。
+- 2026-07-19：humanlike 部署曾回退坏协议 → 再恢复 estuary 鉴权（备份 `estuary-auth-restore-20260719-120031`）。
+
+### 2026-07-16 22:09 Panda SSH 只读深检（历史快照）
+
+- 脱敏报告：`data/runlogs/panda-deep-audit-readonly-20260716-220921.md`；脚本：`scripts/panda_readonly_deep_audit.py`。
+- 当时：根分区 49%；`total=18` / `schedulable=0`；12/18 同代理签名；审计口径下 fp/egress 记为 0/18（字段名口径与现网 `oai-device-id` 不一致，且当时模块未齐）。
+- ~~代码漂移：Panda 缺 fingerprint~~ → **已失效**：2026-07-17 确认模块在位。
+- 发布约定仍有效：本地验收 → GitHub artifacts → Panda pull/overlay。
 - 本地验收入口：`scripts/panda_acc010_local_build.ps1`。
-- `plan.md` 本地进度（2026-07-16 夜）：P0/P2/P3/P4 本地完成；P1 源码+manifest 完成、公网验收待 Git 部署；P5–P8 未开始（须 GitHub→Panda）。证据：`data/runlogs/account-identity-remediation-panda18/`（18 闭合，E12/B6，H1 真共享）。
-- 容器 RSS ≈ 445MiB / 1.5GiB；`image_generation_paused=false`；删号开关仍关闭。
 
 ### 2026-07-16 Panda 槽位泄漏修复与终态 Outlook 清理
 
@@ -188,7 +303,7 @@
 - NewAPI/OpenAI 兼容同步入口已经支持 sync-over-async 路径，但外层 NewAPI/Cloudflare 长连接仍是容量瓶颈。
 - `timeout_pending` 续轮询存在，拿到 `conversation_id` 后不再换号重开图；hard timeout 前已捕获会话时会保存恢复 token、设置取消信号并转 `timeout_pending`，不再直接生成终态 502。
 - pre-conversation 使用 queue `get(timeout=remaining)` 等待 `conversation_id` 元数据，而不是等待任意非空 payload；当前 `timeout=45s`、`pre_conversation_max_attempts=2`，失败账号进入 transient backoff 后最多有限换号一次。
-- 捕获 `conversation_id` 后，SSE 采用 15 秒 post-ready deadline；即使上游持续发送 control heartbeat，也会按墙钟切到现有 `/backend-api/tasks` 轮询。
+- ~~捕获 `conversation_id` 后，SSE 采用 15 秒 post-ready deadline~~：**已废止**（勿回归）。现网 ready 谓词为 SSE payload 含 `conversation_id`；拿到 cid 后转 `/backend-api/tasks` 轮询。Rust 重写同样禁止 `post_ready=15s`（见独立仓 `gptimage-gateway-rs`）。
 - `cancel_event` 已贯穿 task service、generation/edit handler、`ConversationRequest`、`OpenAIBackendAPI`、SSE 与 image poll sleep；hard timeout 另有 1 秒取消宽限并记录 `runner_alive_after_cancel`。
 - backend/session 会显式关闭，curl_cffi stream executor 使用 `shutdown(wait=False, cancel_futures=True)`；重启已清除历史僵尸线程。
 - `image_task_queue` 支持 per-user queue、running 限制、burst 骨架和回传窗口。
@@ -338,7 +453,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\recover_panda_outlook_account
 - 当前 429 发生时实际 `image_inflight_count=0`、可调度账号 23；任务库中的约 20 个 `timeout_pending/resume_polling` 恢复任务被错误计入同步 admission ETA，估算达到 181～187 秒并越过 180 秒门槛，形成假拥堵。
 - `estimate_sync_eta_secs()` 和当前用户队列门禁现在只计算真正占用提交容量的 `queued/running`；恢复任务仍计入全局队列总量保护，但不再阻塞新同步请求。
 - 每次单图上游会话最多下载、保存和回传 1 张图片；恢复轮询同样只接收第一张，防止 `n=1` 被放大成双图大响应。
-- 上游 `{"skipped_mainline":true}` 改为可重试的“主链路未启动”结果，最多串行换号 3 次，不增加单请求并发。
+- 上游 `{"skipped_mainline":true}`：**2026-07-15 IMG-019 曾当作可换号的「主链路未启动」**；2026-07-17 深查确认其为 picture_v2→image_gen 工具调用载荷，**已回滚该误判**（单号隔离下会直接失败；协议层改为继续 poll + 鉴权下载）。
 - Panda 直连 canary：HTTP 200，59.3 秒，`data_count=1`；NewAPI 全链路 canary：HTTP 200，37.0 秒，`data_count=1`。
 - 生产回滚点：`/root/gptimage/backups/hotfix-image-return-20260715-172125/`（完整回滚本轮两文件）和 `/root/gptimage/backups/hotfix-skipped-mainline-20260715-173655/`（仅回滚第二阶段）。
 

@@ -165,6 +165,9 @@ def check_request(text: str) -> None:
         raise HTTPException(status_code=400, detail={"error": "ai review config is incomplete"})
 
     fail_open = _resolve_fail_open(review)
+    import time as _time
+
+    started_at = _time.monotonic()
 
     review_text, sanitize_stats = _sanitize_for_review(text)
     if sanitize_stats["base64_blocks_stripped"] or sanitize_stats["truncated_chars"]:
@@ -177,12 +180,33 @@ def check_request(text: str) -> None:
     prompt = str(review.get("prompt") or DEFAULT_REVIEW_PROMPT).strip()
     content = f"{prompt}\n\n用户请求:\n{review_text}\n\n只回答 ALLOW 或 REJECT。"
 
+    def _log_review(outcome: str, outcome_code: str = "") -> None:
+        try:
+            from services.log_service import log_llm_ops
+
+            log_llm_ops(
+                source="ai_review",
+                kind="review",
+                latency_ms=int((_time.monotonic() - started_at) * 1000),
+                outcome=outcome,
+                outcome_code=outcome_code,
+                prompt_shape={
+                    "chars": len(review_text),
+                    "original_chars": len(text),
+                    "model": model,
+                    "has_images": bool(sanitize_stats.get("base64_blocks_stripped")),
+                },
+            )
+        except Exception:
+            pass
+
     # fail_open=True (default): on upstream failure or ambiguous reply, let the
     # request through. The review is a soft safety net; one missed review is
     # preferable to a 5xx storm when the review service is flaky. Set
     # config.ai_review.fail_open=false for strict-compliance deployments.
     def _on_failure(event_payload: dict) -> None:
         logger.warning(event_payload)
+        _log_review("error", str(event_payload.get("event") or "review_failed"))
         if not fail_open:
             raise HTTPException(
                 status_code=503,
@@ -230,8 +254,10 @@ def check_request(text: str) -> None:
         return
 
     if _is_allow_decision(decision):
+        _log_review("ok", "allow")
         return
     if _is_reject_decision(decision):
+        _log_review("reject", "reject")
         raise HTTPException(status_code=400, detail={"error": "AI 审核未通过，拒绝本次任务"})
     # Ambiguous decisions (e.g. "MAYBE", empty content) fall back to fail-open policy.
     _on_failure({

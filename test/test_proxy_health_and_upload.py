@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from services.account_refresh_all_service import AccountRefreshAllService
-from services.register import proxy_health
+from services import proxy_health
 
 
 class ProxyHealthTests(unittest.TestCase):

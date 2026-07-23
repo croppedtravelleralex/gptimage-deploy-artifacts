@@ -11,7 +11,10 @@ from services.protocol.conversation import (
     ConversationRequest,
     ImageGenerationError,
     ImageOutput,
+    build_image_prompt,
+    download_and_format_image_urls,
     extract_conversation_ids,
+    is_model_text_reply_instead_of_image,
     is_tls_connection_error,
     prefer_stream_for_multi_image,
     stream_image_outputs,
@@ -19,6 +22,19 @@ from services.protocol.conversation import (
 )
 from services.protocol.openai_v1_response import stream_image_response
 from utils.helper import UpstreamHTTPError
+
+
+class ImagePromptTests(unittest.TestCase):
+    def test_auto_quality_does_not_add_semantic_suffix(self) -> None:
+        prompt = build_image_prompt("draw a cat", "1024x1024", "auto")
+
+        self.assertIn("输出图片尺寸为 1024x1024。", prompt)
+        self.assertNotIn("输出图片质量为 auto。", prompt)
+
+    def test_explicit_quality_still_adds_semantic_suffix(self) -> None:
+        prompt = build_image_prompt("draw a cat", None, "high")
+
+        self.assertIn("输出图片质量为 high。", prompt)
 
 
 def _conversation(file_ids: list[str], sediment_ids: list[str] | None = None) -> dict:
@@ -61,6 +77,76 @@ class FakeBackend(OpenAIBackendAPI):
 
 
 class MultiImageResultTests(unittest.TestCase):
+    def test_skipped_mainline_is_not_model_text_reply(self) -> None:
+        # picture_v2 tool invoke payload — must not trigger "text instead of image" / account swap
+        self.assertFalse(is_model_text_reply_instead_of_image('{"skipped_mainline":true}'))
+        self.assertFalse(is_model_text_reply_instead_of_image('{"skipped_mainline":false}'))
+
+    def test_skipped_mainline_message_does_not_swap_account(self) -> None:
+        tokens = iter(["token-1", "token-2"])
+        attempts: list[str] = []
+
+        def fake_stream(backend, _request, index, total):
+            attempts.append(backend.access_token)
+            yield ImageOutput(
+                kind="message",
+                model="gpt-image-2",
+                index=index,
+                total=total,
+                text='{"skipped_mainline":true}',
+            )
+
+        class FakeBackend:
+            def __init__(self, access_token: str = "") -> None:
+                self.access_token = access_token
+
+            def close(self) -> None:
+                return None
+
+        with (
+            mock.patch("services.protocol.conversation.OpenAIBackendAPI", FakeBackend),
+            mock.patch("services.protocol.conversation.stream_image_outputs", side_effect=fake_stream),
+            mock.patch(
+                "services.protocol.conversation.account_service.get_available_access_token",
+                side_effect=lambda **_kwargs: next(tokens),
+            ),
+            mock.patch("services.protocol.conversation.account_service.get_account", return_value={}),
+            mock.patch("services.protocol.conversation.account_service.mark_image_result"),
+        ):
+            with self.assertRaises(ImageGenerationError) as ctx:
+                list(stream_image_outputs_with_pool(ConversationRequest(
+                    prompt="draw",
+                    model="gpt-image-2",
+                    message_as_error=True,
+                )))
+
+        self.assertEqual(attempts, ["token-1"])
+        self.assertIn("skipped_mainline", str(ctx.exception))
+
+    def test_single_generation_downloads_only_first_upstream_image(self) -> None:
+        class DownloadBackend:
+            def __init__(self) -> None:
+                self.downloaded_urls: list[str] = []
+
+            def download_image_bytes(self, image_urls: list[str]) -> list[bytes]:
+                self.downloaded_urls = list(image_urls)
+                return [url.encode("utf-8") for url in image_urls]
+
+        backend = DownloadBackend()
+
+        def fake_format(items, *_args, **_kwargs):
+            return {"data": [{"b64_json": item["b64_json"]} for item in items]}
+
+        with mock.patch("services.protocol.conversation.format_image_result", side_effect=fake_format):
+            data = download_and_format_image_urls(
+                backend,  # type: ignore[arg-type]
+                ["https://files.test/first.png", "https://files.test/unexpected-second.png"],
+                ConversationRequest(prompt="draw", model="gpt-image-2", n=1),
+            )
+
+        self.assertEqual(backend.downloaded_urls, ["https://files.test/first.png"])
+        self.assertEqual(len(data), 1)
+
     def test_stream_id_extractor_keeps_full_file_ids(self) -> None:
         payload = (
             '{"conversation_id":"conv-1"} '
@@ -193,6 +279,16 @@ class MultiImageResultTests(unittest.TestCase):
             "reset reason: connection termination"
         ))
 
+    def test_cf_edge_html_block_not_masked_as_tls_connection(self) -> None:
+        from services.protocol.conversation import image_stream_error_message
+
+        msg = (
+            "conversation failed: status=403 cloudflare_or_edge_html_block "
+            "via proxy egress webshare node"
+        )
+        self.assertFalse(is_tls_connection_error(msg))
+        self.assertIn("CF edge", image_stream_error_message(msg))
+
     def test_resolver_keeps_stream_ids_when_poll_extension_fails(self) -> None:
         backend = FakeBackend()
         backend.file_urls = {"file-one": "https://files.test/one.png"}
@@ -206,17 +302,19 @@ class MultiImageResultTests(unittest.TestCase):
     def test_responses_stream_emits_all_image_output_items(self) -> None:
         first = base64.b64encode(b"first").decode("ascii")
         second = base64.b64encode(b"second").decode("ascii")
-        events = list(stream_image_response(
-            [ImageOutput(
-                kind="result",
-                model="gpt-image-2",
-                index=1,
-                total=1,
-                data=[{"b64_json": first}, {"b64_json": second}],
-            )],
-            "draw two options",
-            "gpt-image-2",
-        ))
+        # 本用例只验证多图事件展开，不应因 tiktoken 首次下载词表而访问网络。
+        with mock.patch("services.protocol.openai_v1_response.count_text_tokens", return_value=3):
+            events = list(stream_image_response(
+                [ImageOutput(
+                    kind="result",
+                    model="gpt-image-2",
+                    index=1,
+                    total=1,
+                    data=[{"b64_json": first}, {"b64_json": second}],
+                )],
+                "draw two options",
+                "gpt-image-2",
+            ))
 
         done_events = [event for event in events if event.get("type") == "response.output_item.done"]
         completed = next(event["response"] for event in events if event.get("type") == "response.completed")

@@ -26,6 +26,8 @@ export type StoredImage = {
   elapsedSecs?: number;
   elapsedUpdatedAt?: number;
   durationMs?: number;
+  /** 仅从右侧任务列表隐藏，不影响会话卡片/源任务 */
+  hiddenFromTaskPanel?: boolean;
 };
 
 export type ImageTurnStatus = "queued" | "generating" | "success" | "error";
@@ -71,11 +73,14 @@ const IMAGE_CONVERSATIONS_KEY = "items";
 let imageConversationWriteQueue: Promise<void> = Promise.resolve();
 
 function normalizeStoredImage(image: StoredImage): StoredImage {
+  const hasUrl = typeof image.url === "string" && image.url.length > 0;
   const normalized = {
     ...image,
     taskId: typeof image.taskId === "string" && image.taskId ? image.taskId : undefined,
     taskStatus: image.taskStatus === "queued" || image.taskStatus === "running" ? image.taskStatus : undefined,
-    url: typeof image.url === "string" && image.url ? image.url : undefined,
+    url: hasUrl ? image.url : undefined,
+    // 有 url 时不落盘/不保留巨型 base64，减轻会话增删卡顿
+    b64_json: hasUrl ? undefined : typeof image.b64_json === "string" && image.b64_json ? image.b64_json : undefined,
     revised_prompt: typeof image.revised_prompt === "string" ? image.revised_prompt : undefined,
     startTime: typeof image.startTime === "number" ? image.startTime : undefined,
     elapsedSecs: typeof image.elapsedSecs === "number" ? image.elapsedSecs : undefined,
@@ -87,7 +92,31 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
   }
   return {
     ...normalized,
-    status: image.b64_json || image.url ? "success" : "loading",
+    status: normalized.b64_json || normalized.url ? "success" : "loading",
+  };
+}
+
+function slimImageForPersist(image: StoredImage): StoredImage {
+  const hasUrl = typeof image.url === "string" && image.url.length > 0;
+  return {
+    ...image,
+    b64_json: hasUrl ? undefined : image.b64_json,
+  };
+}
+
+function slimConversationForPersist(conversation: ImageConversation): ImageConversation {
+  return {
+    ...conversation,
+    turns: conversation.turns.map((turn) => ({
+      ...turn,
+      images: turn.images.map(slimImageForPersist),
+      // 参考图 dataUrl 体积大；保留最新一轮即可，旧轮只留元数据
+      referenceImages: turn.referenceImages.slice(0, 4).map((img) => ({
+        name: img.name,
+        type: img.type,
+        dataUrl: img.dataUrl.length > 400_000 ? "" : img.dataUrl,
+      })).filter((img) => img.dataUrl),
+    })),
   };
 }
 
@@ -243,7 +272,8 @@ export async function saveImageConversations(conversations: ImageConversation[])
     const conversationMap = new Map(items.map((item) => [item.id, item]));
     for (const conversation of conversations.map(normalizeConversation)) {
       const current = conversationMap.get(conversation.id);
-      conversationMap.set(conversation.id, current ? pickLatestConversation(current, conversation) : conversation);
+      const slim = slimConversationForPersist(conversation);
+      conversationMap.set(conversation.id, current ? pickLatestConversation(current, slim) : slim);
     }
     await imageConversationStorage.setItem(
       IMAGE_CONVERSATIONS_KEY,
@@ -255,7 +285,7 @@ export async function saveImageConversations(conversations: ImageConversation[])
 export async function saveImageConversation(conversation: ImageConversation): Promise<void> {
   await queueImageConversationWrite(async () => {
     const items = await readStoredImageConversations();
-    const nextConversation = normalizeConversation(conversation);
+    const nextConversation = slimConversationForPersist(normalizeConversation(conversation));
     const current = items.find((item) => item.id === nextConversation.id);
     const persistedConversation = current ? pickLatestConversation(current, nextConversation) : nextConversation;
     const nextItems = sortImageConversations([
@@ -306,10 +336,13 @@ export function getImageConversationStats(conversation: ImageConversation | null
       if (turn.resultsDeleted) {
         return acc;
       }
-      if (turn.status === "queued") {
-        acc.queued += 1;
-      } else if (turn.status === "generating") {
-        acc.running += 1;
+      for (const image of turn.images) {
+        if (image.status !== "loading") continue;
+        if (image.taskStatus === "queued") {
+          acc.queued += 1;
+        } else {
+          acc.running += 1;
+        }
       }
       return acc;
     },

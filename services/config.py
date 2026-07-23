@@ -64,15 +64,16 @@ DEFAULT_IMAGE_TASK_QUEUE = {
     "burst_min_dispatchable_candidates": 120,
     "burst_max_preflight_backoff": 0,
     "per_user_queue_max": 36,
-    "submit_start_min_interval_ms": 5000,
-    "timeout_pending_poll_secs": 300,
+    # 错峰启动，降低同 egress 突发 CF
+    "submit_start_min_interval_ms": 1500,
+    "timeout_pending_poll_secs": 180,
     "timeout_pending_max_attempts": 4,
-    "generation_poll_timeout_secs": 180,
+    "generation_poll_timeout_secs": 120,
     "edit_poll_timeout_secs": 300,
     "multi_reference_poll_timeout_secs": 360,
-    "pre_conversation_timeout_secs": 240,
-    "pre_conversation_max_attempts": 2,
-    "pre_conversation_retry_backoff_secs": 5,
+    "pre_conversation_timeout_secs": 45,
+    "pre_conversation_max_attempts": 4,
+    "pre_conversation_retry_backoff_secs": 1,
 }
 
 DEFAULT_IMAGE_REFERENCE_ASSETS = {
@@ -726,6 +727,30 @@ DEFAULT_SCHEDULER_SETTINGS: dict[str, object] = {
     "resume_backoff_cap_sec": 60,
     "resume_wall_sec": 240,
     "prompt_dedup_window_sec": 120,
+    "prompt_dedup_max_parallel": 4,
+}
+
+DEFAULT_TEXT_NURTURE: dict[str, object] = {
+    "enabled": False,
+    "worker_enabled": True,
+    "poll_interval_sec": 3.0,
+    "max_per_hour": 70,
+    "max_per_account_per_day": 8,
+    "daily_reset_tz": "Asia/Singapore",
+    "turns_per_session": 3,
+    "turn_gap_sec": 8.0,
+    "require_persist_history": True,
+    "auto_enqueue": True,
+    "auto_enqueue_every_sec": 120.0,
+    "auto_enqueue_rotate_accounts": True,
+    "count_manual_toward_daily_limit": True,
+    "prompts": [],
+    "session_follow_up_prompts": [
+        "Can you add one more practical detail?",
+        "Give a shorter summary in one sentence.",
+        "What would you do differently next time?",
+    ],
+    "model": "auto",
 }
 
 DEFAULT_PROACTIVE_REFRESH_SETTINGS: dict[str, object] = {
@@ -744,6 +769,61 @@ DEFAULT_PROACTIVE_REFRESH_SETTINGS: dict[str, object] = {
     "tick_sec": 60,
     "startup_delay_sec": 30,
 }
+
+
+def _normalize_str_list(value: object, *, default: list[str]) -> list[str]:
+    if not isinstance(value, list):
+        return list(default)
+    out = [str(item).strip() for item in value if str(item or "").strip()]
+    return out or list(default)
+
+
+def _normalize_text_nurture_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    prompts = _normalize_str_list(source.get("prompts"), default=[])
+    follow_ups = _normalize_str_list(
+        source.get("session_follow_up_prompts"),
+        default=list(DEFAULT_TEXT_NURTURE["session_follow_up_prompts"]),  # type: ignore[arg-type]
+    )
+    return {
+        "enabled": _normalize_bool(source.get("enabled"), bool(DEFAULT_TEXT_NURTURE["enabled"])),
+        "worker_enabled": _normalize_bool(source.get("worker_enabled"), bool(DEFAULT_TEXT_NURTURE["worker_enabled"])),
+        "poll_interval_sec": max(2.0, float(source.get("poll_interval_sec", DEFAULT_TEXT_NURTURE["poll_interval_sec"]) or 2.0)),
+        "max_per_hour": _normalize_positive_int(source.get("max_per_hour"), int(DEFAULT_TEXT_NURTURE["max_per_hour"]), 0),
+        "max_per_account_per_day": _normalize_positive_int(
+            source.get("max_per_account_per_day"),
+            int(DEFAULT_TEXT_NURTURE["max_per_account_per_day"]),
+            1,
+        ),
+        "daily_reset_tz": str(source.get("daily_reset_tz") or DEFAULT_TEXT_NURTURE["daily_reset_tz"]).strip()
+        or str(DEFAULT_TEXT_NURTURE["daily_reset_tz"]),
+        "turns_per_session": _normalize_positive_int(
+            source.get("turns_per_session"),
+            int(DEFAULT_TEXT_NURTURE["turns_per_session"]),
+            1,
+        ),
+        "turn_gap_sec": max(0.0, float(source.get("turn_gap_sec", DEFAULT_TEXT_NURTURE["turn_gap_sec"]) or 0.0)),
+        "require_persist_history": _normalize_bool(
+            source.get("require_persist_history"),
+            bool(DEFAULT_TEXT_NURTURE["require_persist_history"]),
+        ),
+        "auto_enqueue": _normalize_bool(source.get("auto_enqueue"), bool(DEFAULT_TEXT_NURTURE["auto_enqueue"])),
+        "auto_enqueue_every_sec": max(
+            60.0,
+            float(source.get("auto_enqueue_every_sec", DEFAULT_TEXT_NURTURE["auto_enqueue_every_sec"]) or 60.0),
+        ),
+        "auto_enqueue_rotate_accounts": _normalize_bool(
+            source.get("auto_enqueue_rotate_accounts"),
+            bool(DEFAULT_TEXT_NURTURE["auto_enqueue_rotate_accounts"]),
+        ),
+        "count_manual_toward_daily_limit": _normalize_bool(
+            source.get("count_manual_toward_daily_limit"),
+            bool(DEFAULT_TEXT_NURTURE["count_manual_toward_daily_limit"]),
+        ),
+        "prompts": prompts,
+        "session_follow_up_prompts": follow_ups,
+        "model": str(source.get("model") or DEFAULT_TEXT_NURTURE["model"]).strip() or "auto",
+    }
 
 
 def _normalize_scheduler_settings(value: object) -> dict[str, object]:
@@ -842,6 +922,11 @@ def _normalize_scheduler_settings(value: object) -> dict[str, object]:
         "prompt_dedup_window_sec": max(
             0.0,
             float(source.get("prompt_dedup_window_sec", DEFAULT_SCHEDULER_SETTINGS["prompt_dedup_window_sec"]) or 0.0),
+        ),
+        "prompt_dedup_max_parallel": _normalize_positive_int(
+            source.get("prompt_dedup_max_parallel"),
+            int(DEFAULT_SCHEDULER_SETTINGS["prompt_dedup_max_parallel"]),
+            1,
         ),
     }
 
@@ -1106,6 +1191,24 @@ class ConfigStore:
             return 240
 
     @property
+    def image_sse_post_ready_timeout_secs(self) -> float | None:
+        """Wall clock after conversation_id before abandoning SSE and falling through to poll.
+
+        ``None``/false disables the valve (legacy hang-until-upstream-closes).
+        Default 75s: normal e2e finishes earlier; hanging SSE must not block forever.
+        Never use ~15s — that kills free-tier tool latency.
+        """
+        if "image_sse_post_ready_timeout_secs" not in self.data:
+            return 75.0
+        raw = self.data.get("image_sse_post_ready_timeout_secs")
+        if raw is None or raw is False or raw == "":
+            return None
+        try:
+            return max(5.0, float(raw))
+        except (TypeError, ValueError):
+            return 75.0
+
+    @property
     def image_pre_conversation_max_attempts(self) -> int:
         try:
             settings = self.get_image_task_queue_settings()
@@ -1131,12 +1234,33 @@ class ConfigStore:
     @property
     def image_poll_initial_wait_secs(self) -> float:
         """Image generation upstream takes ~30s; polling immediately wastes requests
-        and trips a transient 429. Default 10s gives the conversation document time
+        and trips a transient 429. Default 20s gives the conversation document time
         to commit before the first poll."""
         try:
-            return max(0.0, float(self.data.get("image_poll_initial_wait_secs", 10.0)))
+            return max(0.0, float(self.data.get("image_poll_initial_wait_secs", 20.0)))
         except (TypeError, ValueError):
-            return 10.0
+            return 20.0
+
+    @property
+    def image_poll_early_sse_ms(self) -> float:
+        try:
+            return max(0.0, float(self.data.get("image_poll_early_sse_ms", 5000.0)))
+        except (TypeError, ValueError):
+            return 5000.0
+
+    @property
+    def image_poll_early_sse_initial_wait_secs(self) -> float:
+        try:
+            return max(0.0, float(self.data.get("image_poll_early_sse_initial_wait_secs", 25.0)))
+        except (TypeError, ValueError):
+            return 25.0
+
+    @property
+    def image_poll_429_abort_streak(self) -> int:
+        try:
+            return max(1, int(self.data.get("image_poll_429_abort_streak", 3)))
+        except (TypeError, ValueError):
+            return 3
 
     @property
     def image_poll_max_upstream_gets(self) -> int:
@@ -1163,6 +1287,14 @@ class ConfigStore:
             return 4
 
     @property
+    def image_poll_cf_abort_streak(self) -> int:
+        """连续 CF 边缘拦截多少次后中止生图轮询（默认 2，避免空挂到 poll_timeout）。"""
+        try:
+            return max(1, int(self.data.get("image_poll_cf_abort_streak", 2)))
+        except (TypeError, ValueError):
+            return 2
+
+    @property
     def proxy_url(self) -> str:
         """兼容旧调用点的运行时代理地址。
 
@@ -1178,9 +1310,28 @@ class ConfigStore:
     @property
     def image_account_concurrency(self) -> int:
         try:
-            return max(1, int(self.data.get("image_account_concurrency", 3)))
+            return max(1, int(self.data.get("image_account_concurrency", 4)))
         except (TypeError, ValueError):
-            return 3
+            return 4
+
+    @property
+    def proxy_binding_max_accounts(self) -> int:
+        """同一 Webshare proxy_binding 最多承载多少活跃账号（注册/生图调度）。
+
+        默认 5：同 IP 可挂最多 5 个号；超过才视为过密并隔离/挡调度。
+        """
+        try:
+            return max(1, int(self.data.get("proxy_binding_max_accounts", 5)))
+        except (TypeError, ValueError):
+            return 5
+
+    @property
+    def image_binding_inflight_max(self) -> int:
+        """同一 proxy_binding 同时允许的生图路数；默认 1，避免共享出口并发撞 CF。"""
+        try:
+            return max(1, int(self.data.get("image_binding_inflight_max", 1)))
+        except (TypeError, ValueError):
+            return 1
 
     @property
     def image_global_concurrency(self) -> int:
@@ -1304,6 +1455,14 @@ class ConfigStore:
         return bool(value)
 
     @property
+    def image_spa_tool_path(self) -> bool:
+        """纯 HTTP auto-tool 生图路径；默认开，false 回退 picture_v2 canary。"""
+        value = self.data.get("image_spa_tool_path", True)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @property
     def image_check_before_hit_enabled(self) -> bool:
         """先check再hit：通过轮询确认 file_ids 存在后再返回，而非仅依赖 SSE 事件。"""
         value = self.data.get("image_check_before_hit_enabled", True)
@@ -1336,6 +1495,20 @@ class ConfigStore:
     @property
     def auto_relogin_after_refresh(self) -> bool:
         value = self.data.get("auto_relogin_after_refresh", False)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @property
+    def text_chat_persist_history(self) -> bool:
+        value = self.data.get("text_chat_persist_history", False)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @property
+    def text_chat_reuse_conversation(self) -> bool:
+        value = self.data.get("text_chat_reuse_conversation", False)
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(value)
@@ -1417,13 +1590,20 @@ class ConfigStore:
         data["image_pre_conversation_retry_backoff_secs"] = self.image_pre_conversation_retry_backoff_secs
         data["image_poll_interval_secs"] = self.image_poll_interval_secs
         data["image_poll_initial_wait_secs"] = self.image_poll_initial_wait_secs
+        data["image_poll_early_sse_ms"] = self.image_poll_early_sse_ms
+        data["image_poll_early_sse_initial_wait_secs"] = self.image_poll_early_sse_initial_wait_secs
+        data["image_poll_429_abort_streak"] = self.image_poll_429_abort_streak
         data["image_poll_max_upstream_gets"] = self.image_poll_max_upstream_gets
         data["image_poll_max_tasks_gets"] = self.image_poll_max_tasks_gets
         data["image_poll_tasks_every_n_attempts"] = self.image_poll_tasks_every_n_attempts
+        data["image_poll_cf_abort_streak"] = self.image_poll_cf_abort_streak
         data["image_account_concurrency"] = self.image_account_concurrency
+        data["proxy_binding_max_accounts"] = self.proxy_binding_max_accounts
+        data["image_binding_inflight_max"] = self.image_binding_inflight_max
         data["image_global_concurrency"] = self.image_global_concurrency
         data["image_global_queue_timeout_secs"] = self.image_global_queue_timeout_secs
         data["image_parallel_generation"] = self.image_parallel_generation
+        data["image_spa_tool_path"] = self.image_spa_tool_path
         data["image_require_recent_quota_refresh"] = self.image_require_recent_quota_refresh
         data["image_quota_freshness_hours"] = self.image_quota_freshness_hours
         data["image_token_max_attempts"] = self.image_token_max_attempts
@@ -1438,6 +1618,7 @@ class ConfigStore:
         data["sensitive_words"] = self.sensitive_words
         data["ai_review"] = self.ai_review
         data["global_system_prompt"] = self.global_system_prompt
+        data["text_nurture"] = self.get_text_nurture_settings()
         data["backup"] = self.get_backup_settings()
         data["image_storage"] = self.get_image_storage_settings()
         data["chat_completion_cache"] = self.get_chat_completion_cache_settings()
@@ -1493,6 +1674,9 @@ class ConfigStore:
 
     def get_workload_settings(self) -> dict[str, object]:
         return _normalize_workload_settings(self.data.get("workload"))
+
+    def get_text_nurture_settings(self) -> dict[str, object]:
+        return _normalize_text_nurture_settings(self.data.get("text_nurture"))
 
     @property
     def workload_mode(self) -> str:
@@ -1554,6 +1738,8 @@ class ConfigStore:
             next_data["proactive_refresh"] = _normalize_proactive_refresh_settings(next_data.get("proactive_refresh"))
         if "workload" in next_data:
             next_data["workload"] = _normalize_workload_settings(next_data.get("workload"))
+        if "text_nurture" in next_data:
+            next_data["text_nurture"] = _normalize_text_nurture_settings(next_data.get("text_nurture"))
         if "panda_sync" in next_data:
             next_data["panda_sync"] = _normalize_panda_sync_settings(next_data.get("panda_sync"))
         if "proxy_runtime" in next_data:

@@ -10,8 +10,12 @@ if (-not (Test-Path -LiteralPath $MonitorScript)) {
 
 $existing = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
     Where-Object {
+        $commandLine = [string]$_.CommandLine
         $_.ProcessId -ne $PID -and
-        ($_.CommandLine -like "*warp_health_monitor.ps1*" -or $_.CommandLine -like "*warp_health_monitor.cmd*")
+        (
+            $commandLine -match '(?i)\s-File\s+"?[^"]*warp_health_monitor\.ps1"?' -or
+            $commandLine -match '(?i)warp_health_monitor\.cmd(?:\s|$)'
+        )
     } |
     Select-Object -First 1
 

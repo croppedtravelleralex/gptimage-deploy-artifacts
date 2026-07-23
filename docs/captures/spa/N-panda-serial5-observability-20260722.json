@@ -1,0 +1,136 @@
+{
+  "schema_version": "pure-http-image-serial5/v2",
+  "generated_at": "2026-07-22T13:23:45.819480+00:00",
+  "gate_policy": "strict",
+  "constraints": {
+    "planned_requests": 5,
+    "image_gen_deadline_secs": 45.0,
+    "sse_diagnostic_read_secs": 90.0,
+    "round_gap_secs": 20.0,
+    "concurrency": 1
+  },
+  "identity": {
+    "account_hash": "3b18db641494",
+    "proxy_hash": "561dcfff2fc1"
+  },
+  "summary": {
+    "planned": 5,
+    "attempted": 2,
+    "ok": 1,
+    "failed": 1,
+    "not_run": 3,
+    "no_image_gen": 1,
+    "cf403_propagated": 0,
+    "stopped_early": true,
+    "stop_reason": "round2_no_image_gen",
+    "serial5_passed": false,
+    "failure_classes": {
+      "tool_args_as_text": 0,
+      "late_image_gen_after_gate": 1,
+      "no_image_gen_quiet_stream": 0,
+      "no_image_gen_within_gate": 0
+    }
+  },
+  "cf_layers_aggregate": {
+    "home_403_soft_fail": 0,
+    "requirements_cf403": 0,
+    "start_cf403": 0,
+    "tasks_cf403": 0,
+    "propagated_cf": 0
+  },
+  "rows": [
+    {
+      "round": 1,
+      "ok": true,
+      "error": "",
+      "failure_class": null,
+      "cf_classification": "none",
+      "cf_layers": {
+        "home_403_soft_fail": false,
+        "home_status": 200,
+        "requirements_cf403": 0,
+        "start_cf403": 0,
+        "tasks_cf403": 0,
+        "propagated_cf": 0
+      },
+      "account_hash": "3b18db641494",
+      "proxy_hash": "561dcfff2fc1",
+      "conversation_id": "6a60c3cb-3edc-83ec-92e0-f1a0d3d6b6dc",
+      "has_image_gen": true,
+      "download_ok": true,
+      "total_ms": 60332,
+      "timings_ms": {
+        "egress_ms": 1031,
+        "requirements_ms": 1558,
+        "prepare_ms": 380,
+        "conversation_start_ms": 0,
+        "sse_gate_ms": 45000,
+        "sse_diagnostic_ms": 0,
+        "sse_total_ms": 42307,
+        "sse_ms": 42307,
+        "sse_image_gen_ms": 35031,
+        "sse_first_event_ms": 0,
+        "poll_resolve_ms": 7198,
+        "download_ms": 5910,
+        "total_ms": 60332
+      },
+      "sse_chunks": 18,
+      "sse_diagnostic": {
+        "enabled": true,
+        "gate_secs": 45.0,
+        "total_read_secs": 90.0,
+        "late_image_gen_seen": false,
+        "extra_chunks_after_gate": 0,
+        "diagnostic_stopped_reason": "done"
+      }
+    },
+    {
+      "round": 2,
+      "ok": false,
+      "error": "no_image_gen_within_45s(chunks=19, protocol=spa_tool, failure_class=late_image_gen_after_gate)",
+      "failure_class": "late_image_gen_after_gate",
+      "cf_classification": "none",
+      "cf_layers": {
+        "home_403_soft_fail": false,
+        "home_status": 200,
+        "requirements_cf403": 0,
+        "start_cf403": 0,
+        "tasks_cf403": 0,
+        "propagated_cf": 0
+      },
+      "account_hash": "3b18db641494",
+      "proxy_hash": "561dcfff2fc1",
+      "conversation_id": "6a60c41b-0624-83ec-89ec-2f2f22bb7855",
+      "has_image_gen": false,
+      "download_ok": null,
+      "total_ms": 73472,
+      "timings_ms": {
+        "egress_ms": 257,
+        "requirements_ms": 1773,
+        "prepare_ms": 378,
+        "conversation_start_ms": 0,
+        "sse_gate_ms": 64471,
+        "sse_diagnostic_ms": 3446,
+        "sse_total_ms": 67917,
+        "sse_ms": 67917,
+        "sse_image_gen_ms": 64474,
+        "sse_first_event_ms": 0,
+        "total_ms": 73472
+      },
+      "sse_chunks": 19,
+      "sse_diagnostic": {
+        "enabled": true,
+        "gate_secs": 45.0,
+        "total_read_secs": 90.0,
+        "late_image_gen_seen": true,
+        "extra_chunks_after_gate": 6,
+        "diagnostic_stopped_reason": "done"
+      }
+    }
+  ],
+  "operations": {
+    "whole_request_retried": false,
+    "account_switched": false,
+    "concurrent_test_started": false
+  }
+}

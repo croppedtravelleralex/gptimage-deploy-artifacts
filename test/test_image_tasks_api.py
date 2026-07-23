@@ -81,6 +81,14 @@ class FakeImageTaskService:
 
 class ImageTasksApiTests(unittest.TestCase):
     def setUp(self):
+        self._original_image_generation_paused = image_tasks_module.config.data.get("image_generation_paused")
+        self._original_image_task_queue = image_tasks_module.config.data.get("image_task_queue")
+        image_tasks_module.config.data["image_generation_paused"] = False
+        image_tasks_module.config.data["image_task_queue"] = {
+            **(self._original_image_task_queue if isinstance(self._original_image_task_queue, dict) else {}),
+            "enabled": True,
+        }
+        self.addCleanup(self._restore_config)
         self.fake_service = FakeImageTaskService()
         self.service_patcher = mock.patch.object(image_tasks_module, "image_task_service", self.fake_service)
         self.service_patcher.start()
@@ -96,6 +104,16 @@ class ImageTasksApiTests(unittest.TestCase):
         app.include_router(image_tasks_module.create_router())
         self.client = TestClient(app)
 
+    def _restore_config(self):
+        if self._original_image_generation_paused is None:
+            image_tasks_module.config.data.pop("image_generation_paused", None)
+        else:
+            image_tasks_module.config.data["image_generation_paused"] = self._original_image_generation_paused
+        if self._original_image_task_queue is None:
+            image_tasks_module.config.data.pop("image_task_queue", None)
+        else:
+            image_tasks_module.config.data["image_task_queue"] = self._original_image_task_queue
+
     def test_create_generation_task(self):
         response = self.client.post(
             "/api/image-tasks/generations",
@@ -108,6 +126,19 @@ class ImageTasksApiTests(unittest.TestCase):
         self.assertEqual(payload["id"], "task-1")
         self.assertEqual(payload["status"], "success")
         self.assertEqual(len(self.fake_service.generation_calls), 1)
+
+    def test_create_generation_task_paused_rejects_before_service_call(self):
+        image_tasks_module.config.data["image_generation_paused"] = True
+
+        response = self.client.post(
+            "/api/image-tasks/generations",
+            headers=AUTH_HEADERS,
+            json={"client_task_id": "task-paused", "prompt": "cat", "model": "gpt-image-2"},
+        )
+
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertEqual(response.json()["detail"]["code"], "image_generation_paused")
+        self.assertEqual(self.fake_service.generation_calls, [])
 
     def test_create_generation_task_queue_full_returns_429(self):
         def raise_queue_full(_identity, **_kwargs):
@@ -159,6 +190,20 @@ class ImageTasksApiTests(unittest.TestCase):
         self.assertEqual(len(self.fake_service.edit_calls), 1)
         images = self.fake_service.edit_calls[0][1]["images"]
         self.assertEqual(images, [(PNG_BYTES, "image_1.png", "image/png")])
+
+    def test_create_edit_task_paused_rejects_before_service_call(self):
+        image_tasks_module.config.data["image_generation_paused"] = True
+
+        response = self.client.post(
+            "/api/image-tasks/edits",
+            headers=AUTH_HEADERS,
+            data={"client_task_id": "edit-paused", "prompt": "edit", "model": "gpt-image-2"},
+            files=[("image", ("one.png", b"one", "image/png"))],
+        )
+
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertEqual(response.json()["detail"]["code"], "image_generation_paused")
+        self.assertEqual(self.fake_service.edit_calls, [])
 
     def test_create_edit_task_accepts_asset_ids_without_inline_image(self):
         response = self.client.post(

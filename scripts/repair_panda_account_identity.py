@@ -284,7 +284,7 @@ def run_canary(
     result = {"applied": False, "plan": plan}
     if apply:
         from services.account_service import account_service
-        from services.register.proxy_health import measure_proxy_egress_ip
+        from services.proxy_health import measure_proxy_egress_ip
 
         token = str(target.get("access_token") or "")
         updates = {

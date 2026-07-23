@@ -20,7 +20,53 @@ from utils.helper import anthropic_sse_stream, sse_json_stream
 
 LOG_TYPE_CALL = "call"
 LOG_TYPE_ACCOUNT = "account"
+LOG_TYPE_LLM_OPS = "llm_ops"
 INTERNAL_RESPONSE_KEYS = {"_account_email", "_conversation_id"}
+
+
+def _account_hash(access_token: object) -> str:
+    raw = str(access_token or "").strip()
+    if not raw:
+        return ""
+    return hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()[:12]
+
+
+def log_llm_ops(
+    *,
+    source: str,
+    kind: str,
+    access_token: str = "",
+    account_email: str = "",
+    latency_ms: int = 0,
+    outcome: str = "ok",
+    outcome_code: str = "",
+    prompt_shape: dict[str, Any] | None = None,
+    summary: str = "",
+) -> None:
+    """Append a structured llm_ops event (no raw token / full prompt)."""
+    detail: dict[str, Any] = {
+        "source": str(source or "").strip() or "L0",
+        "kind": str(kind or "").strip() or "chat",
+        "account_hash": _account_hash(access_token),
+        "latency_ms": max(0, int(latency_ms or 0)),
+        "outcome": str(outcome or "ok").strip() or "ok",
+        "prompt_shape": prompt_shape if isinstance(prompt_shape, dict) else {},
+    }
+    email = str(account_email or "").strip()
+    if not email and access_token:
+        try:
+            from services.account_service import account_service
+
+            acct = account_service.get_account(str(access_token)) or {}
+            email = str(acct.get("email") or "").strip()
+        except Exception:
+            email = ""
+    if email:
+        detail["account_email"] = email
+    if outcome_code:
+        detail["outcome_code"] = str(outcome_code)[:120]
+    label = summary or f"llm_ops {detail['source']}/{detail['kind']} {detail['outcome']}"
+    log_service.add(LOG_TYPE_LLM_OPS, label, detail)
 
 
 class LogService:
@@ -75,17 +121,46 @@ class LogService:
         if not self.path.exists():
             return []
         items: list[dict[str, Any]] = []
-        lines = self.path.read_text(encoding="utf-8").splitlines()
-        for line_number in range(len(lines) - 1, -1, -1):
-            item = self._parse_line(lines[line_number], line_number)
+        for line_number, raw_line in self._iter_lines_reverse():
+            item = self._parse_line(raw_line, line_number)
             if item is None:
                 continue
             if not self._matches_filters(item, type=type, start_date=start_date, end_date=end_date):
+                day = str(item.get("time") or "")[:10]
+                if start_date and day and day < start_date:
+                    break
                 continue
             items.append(item)
             if len(items) >= limit:
                 break
         return items
+
+    def _iter_lines_reverse(self, chunk_size: int = 1024 * 1024):
+        with self.path.open("rb") as file:
+            file.seek(0, 2)
+            position = file.tell()
+            pending = b""
+            line_number = 0
+            while position > 0:
+                read_size = min(chunk_size, position)
+                position -= read_size
+                file.seek(position)
+                chunk = file.read(read_size)
+                lines = (chunk + pending).split(b"\n")
+                pending = lines[0]
+                for raw_line in reversed(lines[1:]):
+                    if not raw_line:
+                        continue
+                    try:
+                        yield line_number, raw_line.decode("utf-8")
+                    except UnicodeDecodeError:
+                        yield line_number, raw_line.decode("utf-8", errors="ignore")
+                    line_number += 1
+            if pending:
+                try:
+                    yield line_number, pending.decode("utf-8")
+                except UnicodeDecodeError:
+                    yield line_number, pending.decode("utf-8", errors="ignore")
 
     def delete(self, ids: list[str]) -> dict[str, int]:
         target_ids = {str(item or "").strip() for item in ids if str(item or "").strip()}
@@ -184,17 +259,22 @@ def _image_error_response(exc: Exception) -> JSONResponse:
 
     message = public_image_error_message(str(exc))
     if "no available image quota" in message.lower():
-        return openai_error_response(
-            {
-                "error": {
-                    "message": "no available image quota",
-                    "type": "insufficient_quota",
-                    "param": None,
-                    "code": "insufficient_quota",
-                }
-            },
-            429,
-        )
+        payload: dict[str, Any] = {
+            "error": {
+                "message": "no available image quota",
+                "type": "insufficient_quota",
+                "param": None,
+                "code": "insufficient_quota",
+            }
+        }
+        breakdown = getattr(exc, "breakdown", None)
+        if isinstance(breakdown, dict):
+            payload["schedulable_breakdown"] = {
+                "buckets": breakdown.get("buckets"),
+                "primary_reason_counts": breakdown.get("primary_reason_counts"),
+                "runtime": breakdown.get("runtime"),
+            }
+        return openai_error_response(payload, 429)
     if hasattr(exc, "to_openai_error") and hasattr(exc, "status_code"):
         return JSONResponse(status_code=int(exc.status_code), content=exc.to_openai_error())
     return openai_error_response(message, 502)
@@ -245,8 +325,13 @@ class LoggedCall:
         if isinstance(result, dict):
             self.log("调用完成", result)
             response = dict(result)
-            response.pop("_account_email", None)
-            return response
+            account_email = str(response.pop("_account_email", "") or "").strip()
+            from fastapi.responses import JSONResponse
+
+            out = JSONResponse(content=response)
+            if account_email:
+                out.headers["X-Account-Email"] = account_email
+            return out
 
         sender = anthropic_sse_stream if sse == "anthropic" else sse_json_stream
         try:
@@ -266,7 +351,21 @@ class LoggedCall:
         if not has_first:
             self.log("流式调用结束")
             return StreamingResponse(sender(()), media_type="text/event-stream")
-        return StreamingResponse(sender(self.stream(itertools.chain([first], result))), media_type="text/event-stream")
+        account_email = ""
+        if isinstance(first, dict):
+            account_email = str(first.get("_account_email") or "").strip()
+        stream_headers = {
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+        if account_email:
+            stream_headers["X-Account-Email"] = account_email
+        return StreamingResponse(
+            sender(self.stream(itertools.chain([first], result))),
+            media_type="text/event-stream",
+            headers=stream_headers,
+        )
 
     def stream(self, items):
         urls: list[str] = []

@@ -302,6 +302,7 @@ class ImageTaskService:
         self._tasks: dict[str, dict[str, Any]] = {}
         self._runtime_recovered = False
         self._recent_prompt_hashes: dict[str, float] = {}
+        self._cancel_events: dict[str, threading.Event] = {}
         self._success_duration_ewma_secs = _SUCCESS_DURATION_EWMA_INITIAL_SECS
         self._last_submit_start_ts = 0.0
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -362,7 +363,23 @@ class ImageTaskService:
         digest = hashlib.sha256(str(prompt or "").strip().encode("utf-8")).hexdigest()
         return f"{owner}:{digest}"
 
+    def _count_unfinished_same_prompt_locked(self, owner: str, fingerprint: str) -> int:
+        count = 0
+        for task in self._tasks.values():
+            if task.get("owner_id") != owner:
+                continue
+            if _clean(task.get("status")) not in UNFINISHED_STATUSES:
+                continue
+            payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+            prompt = _clean(payload.get("prompt"))
+            if not prompt:
+                continue
+            if self._prompt_fingerprint(owner, prompt) == fingerprint:
+                count += 1
+        return count
+
     def _enforce_prompt_dedup_locked(self, owner: str, payload: dict[str, Any]) -> None:
+        """同 prompt 允许最多 N 路未完成并行；无未完成且窗口内刚提交过才拒绝。"""
         settings = config.get_scheduler_settings()
         window = float(settings.get("prompt_dedup_window_sec") or 0.0)
         if not settings.get("enabled") or window <= 0:
@@ -370,12 +387,26 @@ class ImageTaskService:
         prompt = _clean(payload.get("prompt"))
         if not prompt:
             return
+        try:
+            max_parallel = max(1, int(settings.get("prompt_dedup_max_parallel") or 4))
+        except (TypeError, ValueError):
+            max_parallel = 4
         now = time.time()
         stale = [key for key, ts in self._recent_prompt_hashes.items() if now - float(ts) > window]
         for key in stale:
             self._recent_prompt_hashes.pop(key, None)
         fingerprint = self._prompt_fingerprint(owner, prompt)
+        unfinished = self._count_unfinished_same_prompt_locked(owner, fingerprint)
+        if unfinished >= max_parallel:
+            raise ImageTaskDuplicatePromptError(
+                f"duplicate prompt within {int(window)}s window; please wait or vary the prompt"
+            )
         last = float(self._recent_prompt_hashes.get(fingerprint) or 0.0)
+        # 仍有未完成同 prompt → 同批兄弟，放行
+        if unfinished > 0:
+            self._recent_prompt_hashes[fingerprint] = now
+            return
+        # 无未完成：窗口内刚提交过则视为刷单拒绝
         if last > 0 and (now - last) < window:
             raise ImageTaskDuplicatePromptError(
                 f"duplicate prompt within {int(window)}s window; please wait or vary the prompt"
@@ -564,6 +595,57 @@ class ImageTaskService:
                 items.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
                 missing_ids = []
             return {"items": items, "missing_ids": missing_ids}
+
+    def cancel_task(self, identity: dict[str, object], task_id: str) -> dict[str, Any]:
+        """取消未完成任务：queued 立即失败；running/timeout_pending 触发 cancel_event。"""
+        owner = _owner_id(identity)
+        tid = _clean(task_id)
+        if not tid:
+            raise ValueError("task_id is required")
+        key = _task_key(owner, tid)
+        with self._condition:
+            self._ensure_workers_locked()
+            task = self._tasks.get(key) or self._load_task_from_db_locked(key)
+            if task is None:
+                raise KeyError(f"image task not found: {tid}")
+            status = _clean(task.get("status"))
+            if status in TERMINAL_STATUSES:
+                return _public_task(task)
+            now = time.time()
+            now_iso = _now_iso()
+            if status == TASK_STATUS_QUEUED:
+                task.update(
+                    {
+                        "status": TASK_STATUS_ERROR,
+                        "progress": "cancelled",
+                        "error": "cancelled by user",
+                        "updated_at": now_iso,
+                        "updated_ts": now,
+                        "duration_ms": int(max(0.0, now - float(task.get("created_ts") or now)) * 1000),
+                    }
+                )
+                self._cancel_events.pop(key, None)
+                self._save_task_locked(key)
+                self._condition.notify_all()
+                return _public_task(task)
+            # running / timeout_pending：发取消信号，并立刻标为 cancelled（避免 UI 挂死）
+            event = self._cancel_events.get(key)
+            if event is not None:
+                event.set()
+            task.update(
+                {
+                    "status": TASK_STATUS_ERROR,
+                    "progress": "cancelled",
+                    "error": "cancelled by user",
+                    "updated_at": now_iso,
+                    "updated_ts": now,
+                    "duration_ms": int(max(0.0, now - float(task.get("created_ts") or now)) * 1000),
+                }
+            )
+            self._cancel_events.pop(key, None)
+            self._save_task_locked(key)
+            self._condition.notify_all()
+            return _public_task(task)
 
     def list_task_statuses(self, identity: dict[str, object], task_ids: list[str]) -> dict[str, Any]:
         owner = _owner_id(identity)
@@ -899,6 +981,16 @@ class ImageTaskService:
         outcome: dict[str, Any] = {"payload_for_run": dict(payload)}
         leased_access_tokens: set[str] = set()
         released_access_tokens: set[str] = set()
+        with self._lock:
+            self._cancel_events[key] = cancelled
+            # 若用户在入队后、开跑前已取消，任务可能已是 error
+            existing = self._tasks.get(key)
+            if existing is not None and _clean(existing.get("status")) in TERMINAL_STATUSES:
+                self._cancel_events.pop(key, None)
+                return
+            if existing is not None and _clean(existing.get("error")) == "cancelled by user":
+                self._cancel_events.pop(key, None)
+                return
 
         def claim_release(access_token: str) -> bool:
             token = _clean(access_token)
@@ -1508,6 +1600,12 @@ class ImageTaskService:
             if task is None:
                 return
             prev_status = _clean(task.get("status"))
+            prev_error = _clean(task.get("error"))
+            # 用户取消后禁止迟到的 success/timeout_pending 覆盖
+            if prev_status == TASK_STATUS_ERROR and prev_error == "cancelled by user":
+                next_status = _clean(updates.get("status"), prev_status)
+                if next_status != TASK_STATUS_ERROR or _clean(updates.get("error"), prev_error) != "cancelled by user":
+                    return
             task.update(updates)
             now = time.time()
             task["updated_at"] = _now_iso()
@@ -1518,6 +1616,8 @@ class ImageTaskService:
                 and not float(task.get("resume_deadline_ts") or 0.0)
             ):
                 task["resume_deadline_ts"] = self._resume_deadline_ts(now)
+            if _clean(task.get("status")) in TERMINAL_STATUSES:
+                self._cancel_events.pop(key, None)
             self._save_task_locked(key)
             self._condition.notify_all()
 

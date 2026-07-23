@@ -15,13 +15,16 @@ import { getValidatedAuthSession } from "@/lib/auth-session";
 import { cn } from "@/lib/utils";
 import { clearStoredAuthSession, type StoredAuthSession } from "@/store/auth";
 
+const hideRegisterUi = process.env.NEXT_PUBLIC_HIDE_REGISTER === "1";
+
 const adminNavItems = [
   { href: "/image", label: "生图" },
   { href: "/accounts", label: "号池管理" },
-  { href: "/register", label: "注册机" },
+  ...(!hideRegisterUi ? [{ href: "/register", label: "注册机" }] : []),
   { href: "/image-manager", label: "图片管理" },
   { href: "/logs", label: "日志管理" },
-  { href: "/debug", label: "调试" },
+  { href: "/ops", label: "运维" },
+  { href: "/chat", label: "对话" },
   { href: "/settings", label: "设置" },
 ];
 

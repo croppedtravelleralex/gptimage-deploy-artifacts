@@ -1,0 +1,180 @@
+{
+  "har": "spa-image-20260721T144019Z.har",
+  "har_bytes": 41793415,
+  "image_signals": {
+    "async_task": 0,
+    "image_gen": 3,
+    "image_asset_pointer": 0,
+    "file_service_file": 0,
+    "dalle": 0
+  },
+  "prepare_count": 2,
+  "conv_post_count": 1,
+  "conv_system_hints_seq": [
+    [
+      "picture_v2"
+    ]
+  ],
+  "live_picture_v2_conv": {
+    "top_keys": [
+      "action",
+      "client_contextual_info",
+      "client_prepare_state",
+      "conversation_mode",
+      "enable_message_followups",
+      "force_parallel_switch",
+      "messages",
+      "model",
+      "paragen_cot_summary_display_override",
+      "parent_message_id",
+      "supported_encodings",
+      "supports_buffering",
+      "system_hints",
+      "timezone",
+      "timezone_offset_min"
+    ],
+    "system_hints": [
+      "picture_v2"
+    ],
+    "header_keys": [
+      "Accept",
+      "OAI-Client-Build-Number",
+      "OAI-Client-Version",
+      "OAI-Device-Id",
+      "OpenAI-Sentinel-Chat-Requirements-Token",
+      "OpenAI-Sentinel-Proof-Token",
+      "OpenAI-Sentinel-Turnstile-Token",
+      "x-conduit-token",
+      "x-oai-turn-trace-id"
+    ],
+    "headers": {
+      "Accept": "text/event-stream",
+      "OAI-Device-Id": "ac091ce3-8941-4402-9522-b1078f7e2e96",
+      "OAI-Client-Version": "prod-773467609da990104e0f78db96ed90bc4b199c3b",
+      "OAI-Client-Build-Number": "8448714",
+      "OpenAI-Sentinel-Chat-Requirements-Token": "gAAAAABqX4TyksavZgdJoXVEFL4MibFGWXwkZ7vRVRou05P-AGTdiMsalWgU...<+2792>",
+      "OpenAI-Sentinel-Turnstile-Token": "QxcWABoAAAwMFntnXVd2X2RndGYMcmx3U359SW9xe3R7UBYUFx8YAQ0XFAcE...<+2216>",
+      "OpenAI-Sentinel-Proof-Token": "gAAAAABWzM0MDAsIlR1ZSBKdWwgMjEgMjAyNiAyMzo0MDo0OSBHTVQrMDkwM...<+569>",
+      "x-conduit-token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJjb25kdWl0X3V1aWQiOiJ...<+290>",
+      "x-oai-turn-trace-id": "e753ac25-c906-49c1-b82d-3b9b5ab1985e"
+    },
+    "summary": {
+      "action": "next",
+      "messages": [
+        {
+          "author": "user",
+          "content_type": "text",
+          "parts_kinds": [
+            "text"
+          ],
+          "metadata_keys": [
+            "serialization_metadata",
+            "system_hints"
+          ],
+          "metadata_system_hints": [
+            "picture_v2"
+          ]
+        }
+      ],
+      "parent_message_id": "client-created-root",
+      "model": "auto",
+      "client_prepare_state": "none",
+      "timezone_offset_min": "-540",
+      "timezone": "Asia/Tokyo",
+      "conversation_mode": "{\"kind\": \"primary_assistant\"}",
+      "enable_message_followups": "true",
+      "system_hints": "[\"picture_v2\"]",
+      "supports_buffering": "true",
+      "supported_encodings": "[\"v1\"]",
+      "client_contextual_info": "{\"is_dark_mode\": true, \"time_since_loaded\": 27, \"page_height\": 1129, \"page_width\": 2190, \"pixel_ratio\": 1, \"screen_height\": 1224, \"screen_width\": 2176, \"app_name\": \"chatgpt.com\", \"has_web_push_capabil...<+60>",
+      "paragen_cot_summary_display_override": "allow",
+      "force_parallel_switch": "auto"
+    }
+  },
+  "bench_start_top_keys": [
+    "action",
+    "client_contextual_info",
+    "client_prepare_state",
+    "conversation_mode",
+    "enable_message_followups",
+    "force_parallel_switch",
+    "messages",
+    "model",
+    "paragen_cot_summary_display_override",
+    "parent_message_id",
+    "supported_encodings",
+    "supports_buffering",
+    "system_hints",
+    "timezone",
+    "timezone_offset_min"
+  ],
+  "bench_start_msg0_meta_keys": [
+    "developer_mode_connector_ids",
+    "selected_all_github_repos",
+    "selected_github_repos",
+    "serialization_metadata",
+    "system_hints"
+  ],
+  "bench_start_msg0_system_hints": [
+    "picture_v2"
+  ],
+  "bench_prepare_keys": [
+    "action",
+    "client_contextual_info",
+    "client_prepare_state",
+    "conversation_mode",
+    "fork_from_shared_post",
+    "model",
+    "parent_message_id",
+    "partial_query",
+    "supported_encodings",
+    "supports_buffering",
+    "system_hints",
+    "timezone",
+    "timezone_offset_min"
+  ],
+  "top_key_diff": {
+    "only_in_live": [],
+    "only_in_bench": [],
+    "common": [
+      "action",
+      "client_contextual_info",
+      "client_prepare_state",
+      "conversation_mode",
+      "enable_message_followups",
+      "force_parallel_switch",
+      "messages",
+      "model",
+      "paragen_cot_summary_display_override",
+      "parent_message_id",
+      "supported_encodings",
+      "supports_buffering",
+      "system_hints",
+      "timezone",
+      "timezone_offset_min"
+    ]
+  },
+  "msg_metadata_key_diff": {
+    "only_in_live": [],
+    "only_in_bench": [
+      "developer_mode_connector_ids",
+      "selected_all_github_repos",
+      "selected_github_repos"
+    ],
+    "common": [
+      "serialization_metadata",
+      "system_hints"
+    ]
+  },
+  "live_header_keys": [
+    "Accept",
+    "OAI-Client-Build-Number",
+    "OAI-Client-Version",
+    "OAI-Device-Id",
+    "OpenAI-Sentinel-Chat-Requirements-Token",
+    "OpenAI-Sentinel-Proof-Token",
+    "OpenAI-Sentinel-Turnstile-Token",
+    "x-conduit-token",
+    "x-oai-turn-trace-id"
+  ]
+}

@@ -131,12 +131,39 @@ def is_codex_image_model(model: object) -> bool:
     return base_model == CODEX_IMAGE_MODEL
 
 
+def looks_like_image_prompt(text: object) -> bool:
+    """Detect user intent to generate an image from natural-language chat."""
+    prompt = str(text or "").strip()
+    if not prompt:
+        return False
+    patterns = (
+        r"生成图片",
+        r"生图",
+        r"画一[张幅个]",
+        r"帮我画",
+        r"画个",
+        r"画张",
+        r"生成一[张幅].{0,12}图",
+        r"make (an? |me )?(image|picture|photo)",
+        r"generate (an? )?(image|picture)",
+        r"draw (an? |me )?",
+    )
+    return any(re.search(pattern, prompt, flags=re.IGNORECASE) for pattern in patterns)
+
+
 def is_image_chat_request(body: dict[str, object]) -> bool:
     model = str(body.get("model") or "").strip()
     modalities = body.get("modalities")
     if is_supported_image_model(model):
         return True
-    return isinstance(modalities, list) and "image" in {str(item or "").strip().lower() for item in modalities}
+    if isinstance(modalities, list) and "image" in {str(item or "").strip().lower() for item in modalities}:
+        return True
+    # Plain chat with image intent (model=auto) should route to image pipeline.
+    try:
+        prompt = extract_chat_prompt(body)
+    except Exception:
+        prompt = ""
+    return looks_like_image_prompt(prompt)
 
 
 _UPSTREAM_BODY_LOG_LIMIT = 500
@@ -182,6 +209,24 @@ def ensure_ok(response: requests.Response, context: str) -> None:
         body = response.json()
     except Exception:
         pass
+    # Cloudflare / edge HTML challenge — keep message short for UI toasts
+    raw_text = response.text if isinstance(getattr(response, "text", None), str) else ""
+    raw_l = raw_text.lower() if isinstance(raw_text, str) else ""
+    status = int(response.status_code or 0)
+    looks_cf = status in {403, 429, 502, 503, 520, 521, 522, 523, 524} and (
+        (status == 403 and not str(raw_text or "").strip())
+        or "<html" in raw_l
+        or "cloudflare" in raw_l
+        or "cf-ray" in raw_l
+        or "just a moment" in raw_l
+        or "cf-error" in raw_l
+    )
+    if looks_cf:
+        body = (
+            "cloudflare_or_edge_html_block: upstream returned an HTML challenge page "
+            f"(context={context}). Usually intermittent proxy/CF edge block — retry or switch egress; "
+            "not necessarily an invalid token."
+        )
     retry_after_header = response.headers.get("Retry-After") if hasattr(response, "headers") else None
     retry_after: int | None = None
     if retry_after_header is not None:

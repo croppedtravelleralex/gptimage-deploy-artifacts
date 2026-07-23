@@ -264,6 +264,15 @@ class ChatCompletionCacheTests(unittest.TestCase):
 
         self.assertEqual(sanitize_output_text(text), "The character is Invincible.")
 
+    def test_output_sanitizer_strips_leaked_search_tool_call(self) -> None:
+        text = 'search("\\u4f60\\u662f\\u4ec0\\u4e48\\u6a21\\u578b")我是 ChatGPT，基于 GPT-5.5-mini 模型。'
+        self.assertEqual(
+            sanitize_output_text(text),
+            "我是 ChatGPT，基于 GPT-5.5-mini 模型。",
+        )
+        text2 = 'search(["帮我搜索 chatgpt2api"])找到这些项目。'
+        self.assertEqual(sanitize_output_text(text2), "找到这些项目。")
+
     def test_stream_sanitizer_does_not_emit_partial_annotation_or_repeat_prefix(self) -> None:
         events = [
             {"p": "/message/content/parts/0", "o": "append", "v": "Repo: \ue200url\ue202chat"},

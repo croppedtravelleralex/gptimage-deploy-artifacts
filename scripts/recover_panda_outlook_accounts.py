@@ -132,6 +132,7 @@ def select_recovery_targets(
     credential_emails: set[str],
     target_emails: set[str] | None = None,
     limit: int = 0,
+    allow_account_password: bool = False,
 ) -> list[dict[str, Any]]:
     normalized_credentials = {normalize_email(item) for item in credential_emails if normalize_email(item)}
     explicit_targets = {normalize_email(item) for item in (target_emails or set()) if normalize_email(item)}
@@ -145,7 +146,9 @@ def select_recovery_targets(
             continue
         if is_terminal_recovery_account(account):
             continue
-        if email not in normalized_credentials:
+        has_password = bool(str(account.get("password") or "").strip())
+        in_credentials = email in normalized_credentials
+        if not in_credentials and not (allow_account_password and has_password):
             continue
         if explicit_targets:
             if email not in explicit_targets:
@@ -434,7 +437,7 @@ def preflight_mailbox_access(
     mailbox: dict[str, Any],
 ) -> dict[str, Any]:
     """恢复前先验证邮箱可读，避免 ChatGPT 登录已发出 OTP 后才发现 Graph/IMAP 都挂。"""
-    from services.register import mail_provider
+    from services import outlook_mail as mail_provider
 
     provider = mail_provider._create_provider(
         mail_config,
@@ -511,7 +514,7 @@ def _terminal_recovery_message(reason: str) -> str:
 
 def prime_mailbox_messages(mail_config: dict[str, Any], mailbox: dict[str, Any]) -> int:
     """把当前已有邮件标为已看，后续只消费本次登录新产生的 OTP。"""
-    from services.register import mail_provider
+    from services import outlook_mail as mail_provider
 
     provider = mail_provider._create_provider(
         mail_config,
@@ -899,12 +902,23 @@ def login_with_chatgpt_email_otp(
             upstream=True,
         )
     )
+    # NextAuth CSRF/signin 走 Panda/本机出口；authorize/OTP 仍走账号 sticky Webshare。
+    nextauth_session = requests.Session(
+        **proxy_settings.build_session_kwargs(
+            account=None,
+            proxy="",
+            impersonate=fp["impersonate"],
+            verify=False,
+            upstream=False,
+        )
+    )
     stage = "csrf"
     original_wait_timeout = int(mail_config.get("wait_timeout") or 180)
     try:
-        session.cookies.set("oai-did", device_id, domain=".chatgpt.com")
-        session.cookies.set("oai-did", device_id, domain="chatgpt.com")
-        csrf_response = session.get(
+        for auth_session in (nextauth_session, session):
+            auth_session.cookies.set("oai-did", device_id, domain=".chatgpt.com")
+            auth_session.cookies.set("oai-did", device_id, domain="chatgpt.com")
+        csrf_response = nextauth_session.get(
             f"{chatgpt_base}/api/auth/csrf",
             headers={"accept": "application/json", "referer": f"{chatgpt_base}/", "user-agent": user_agent},
             timeout=30,
@@ -1081,7 +1095,7 @@ def login_with_chatgpt_email_otp(
 
 
 def validate_webshare_proxy(spec: ProxySpec, timeout: int) -> dict[str, Any]:
-    from services.register.proxy_health import validate_http_proxy
+    from services.proxy_health import validate_http_proxy
 
     result = validate_http_proxy(spec.url, timeout=float(timeout), require_sticky=True, sticky_gap_sec=2.0)
     if "error" in result and result.get("error"):
@@ -1127,7 +1141,7 @@ def recover_one_account(
     *,
     index: int,
     account: dict[str, Any],
-    credential: dict[str, str],
+    credential: dict[str, str] | None,
     proxy_specs: Sequence[ProxySpec],
     account_service: Any,
     wait_for_code: Callable[[dict[str, Any], dict[str, Any]], str | None],
@@ -1138,6 +1152,8 @@ def recover_one_account(
     activate_login_proxy: Callable[[str], None] | None = None,
     prime_mailbox: Callable[[dict[str, Any], dict[str, Any]], int] | None = None,
     allow_password_reset: bool = False,
+    prefer_yumail_otp: bool = False,
+    skip_mailbox_if_missing: bool = False,
 ) -> dict[str, Any]:
     email = normalize_email(account.get("email"))
     old_token = str(account.get("access_token") or "").strip()
@@ -1157,7 +1173,6 @@ def recover_one_account(
     emit_progress(index, email, "proxy_preflight")
     candidates = list(proxy_specs)
     existing_proxy = str(account.get("proxy") or "").strip()
-    # 优先账号 sticky proxy，再回退到池内节点
     if existing_proxy:
         sticky = ProxySpec(existing_proxy, proxy_label_from_url(existing_proxy))
         candidates = [sticky] + [spec for spec in candidates if spec.url != sticky.url]
@@ -1177,49 +1192,165 @@ def recover_one_account(
         activate_login_proxy(proxy.url)
 
     openai_password = str(account.get("password") or "").strip()
-    login_credential = dict(credential)
-    login_credential["email"] = email
-    login_credential["password"] = openai_password
-    mailbox = build_mailbox(login_credential, datetime.now(timezone.utc))
-    mail_config = build_mail_config(
-        account_service,
-        login_credential,
-        otp_timeout,
-        otp_interval,
-        proxy_url=proxy.url,
+    has_mailbox_credential = bool(
+        credential
+        and str(credential.get("client_id") or "").strip()
+        and str(credential.get("refresh_token") or "").strip()
     )
+    use_yumail = False
+    if prefer_yumail_otp:
+        try:
+            from services import yumail_otp as yumail_otp_mod
+
+            if not yumail_otp_mod.is_configured():
+                if has_mailbox_credential:
+                    row["yumail_skipped_reason"] = "yumail_not_configured"
+                    row["otp_fallback"] = "graph"
+                else:
+                    row.update(
+                        {
+                            "stage": "mailbox_preflight",
+                            "error": "yumail_not_configured: prefer_yumail_otp 但未配置 YUMAIL_API_KEY",
+                        }
+                    )
+                    row["elapsed_sec"] = round(time.time() - started, 1)
+                    return row
+            else:
+                probe = yumail_otp_mod.probe_reachable()
+                if probe.get("ok"):
+                    use_yumail = True
+                elif has_mailbox_credential:
+                    row["yumail_skipped_reason"] = str(probe.get("error") or "yumail_unreachable")
+                    row["otp_fallback"] = "graph"
+                else:
+                    row.update(
+                        {
+                            "stage": "mailbox_preflight",
+                            "error": f"yumail_unreachable: {probe.get('error') or 'probe failed'}",
+                        }
+                    )
+                    row["elapsed_sec"] = round(time.time() - started, 1)
+                    return row
+        except Exception as exc:  # noqa: BLE001
+            if has_mailbox_credential:
+                row["yumail_skipped_reason"] = str(exc)[:240]
+                row["otp_fallback"] = "graph"
+            else:
+                row.update(
+                    {
+                        "stage": "mailbox_preflight",
+                        "error": sanitize_error(f"yumail_unreachable: {exc}", limit=400),
+                    }
+                )
+                row["elapsed_sec"] = round(time.time() - started, 1)
+                return row
+
+    mailbox: dict[str, Any] | None = None
+    mail_config: dict[str, Any] | None = None
+    if has_mailbox_credential and credential is not None:
+        login_credential = dict(credential)
+        login_credential["email"] = email
+        login_credential["password"] = openai_password
+        mailbox = build_mailbox(login_credential, datetime.now(timezone.utc))
+        mail_config = build_mail_config(
+            account_service,
+            login_credential,
+            otp_timeout,
+            otp_interval,
+            proxy_url=proxy.url,
+        )
 
     try:
-        row["stage"] = "mailbox_preflight"
-        emit_progress(index, email, "mailbox_preflight")
-        try:
-            preflight = preflight_mailbox_access(mail_config, mailbox)
-            row["mailbox_preflight"] = preflight
-            if preflight.get("imap_host"):
-                row["mailbox_imap_host"] = preflight.get("imap_host")
-                # Graph 常常缺 Mail.Read；预检已证明 IMAP 可读时，后续 OTP 全部钉死 IMAP，避免再撞 AADSTS70000。
-                mailbox["_outlook_prefer_imap"] = True
-                mailbox["_outlook_imap_host"] = str(preflight.get("imap_host") or "")
-                for provider in mail_config.get("providers") or []:
-                    if not isinstance(provider, dict):
-                        continue
-                    if str(provider.get("type") or "").strip() != "outlook_token":
-                        continue
-                    provider["mode"] = "imap"
-                    provider["imap_host"] = str(preflight.get("imap_host") or provider.get("imap_host") or "outlook.live.com")
-        except Exception as exc:
-            row.update(
-                {
-                    "stage": "mailbox_preflight",
-                    "error": sanitize_error(
-                        f"mailbox_preflight: {exc}. "
-                        "Graph Mail.Read 可能缺同意，且 IMAP 主机均不可读；请换带 Mail.Read 的 refresh_token 或确认 IMAP 可用",
-                        limit=800,
-                    ),
-                }
-            )
-            row["elapsed_sec"] = round(time.time() - started, 1)
-            return row
+        if has_mailbox_credential and mailbox is not None and mail_config is not None and not use_yumail:
+            row["stage"] = "mailbox_preflight"
+            emit_progress(index, email, "mailbox_preflight")
+            try:
+                preflight = preflight_mailbox_access(mail_config, mailbox)
+                row["mailbox_preflight"] = preflight
+                if preflight.get("imap_host"):
+                    row["mailbox_imap_host"] = preflight.get("imap_host")
+                    mailbox["_outlook_prefer_imap"] = True
+                    mailbox["_outlook_imap_host"] = str(preflight.get("imap_host") or "")
+                    for provider in mail_config.get("providers") or []:
+                        if not isinstance(provider, dict):
+                            continue
+                        if str(provider.get("type") or "").strip() != "outlook_token":
+                            continue
+                        provider["mode"] = "imap"
+                        provider["imap_host"] = str(
+                            preflight.get("imap_host") or provider.get("imap_host") or "outlook.live.com"
+                        )
+            except Exception as exc:
+                row.update(
+                    {
+                        "stage": "mailbox_preflight",
+                        "error": sanitize_error(
+                            f"mailbox_preflight: {exc}. "
+                            "Graph Mail.Read 可能缺同意，且 IMAP 主机均不可读；请换带 Mail.Read 的 refresh_token 或确认 IMAP 可用",
+                            limit=800,
+                        ),
+                    }
+                )
+                row["elapsed_sec"] = round(time.time() - started, 1)
+                return row
+        elif not has_mailbox_credential:
+            if use_yumail or skip_mailbox_if_missing:
+                row["mailbox_preflight_skipped"] = True
+                if not use_yumail:
+                    row.update(
+                        {
+                            "stage": "mailbox_preflight",
+                            "error": "need_outlook_mailbox_credentials_or_yumail: skip_mailbox_if_missing 但仍无 YuMail OTP",
+                        }
+                    )
+                    row["elapsed_sec"] = round(time.time() - started, 1)
+                    return row
+            else:
+                row.update(
+                    {
+                        "stage": "mailbox_preflight",
+                        "error": "need_outlook_mailbox_credentials_or_yumail: 无邮箱凭据且未配置 YuMail OTP",
+                    }
+                )
+                row["elapsed_sec"] = round(time.time() - started, 1)
+                return row
+
+        def resolve_otp_code(_mail_config: dict[str, Any], _mailbox: dict[str, Any]) -> str | None:
+            if use_yumail:
+                from services import yumail_otp as yumail_otp_mod
+
+                boundary = _mailbox.get("_code_not_before") if isinstance(_mailbox, dict) else None
+                try:
+                    return yumail_otp_mod.wait_for_code_by_email(
+                        email,
+                        not_before=boundary if isinstance(boundary, datetime) else datetime.now(timezone.utc),
+                        timeout_sec=float(otp_timeout),
+                        poll_interval=float(otp_interval),
+                    )
+                except RuntimeError as exc:
+                    text = str(exc)
+                    if "timeout" in text.lower():
+                        return None
+                    # YuMail 运行中失败且有 Graph 凭据：回退一次
+                    if has_mailbox_credential and mailbox is not None and mail_config is not None:
+                        row["otp_fallback"] = "graph"
+                        row["yumail_runtime_error"] = text[:240]
+                        return wait_for_code(_mail_config, _mailbox)
+                    raise
+            return wait_for_code(_mail_config, _mailbox)
+
+        otp_mailbox = mailbox or {
+            "provider": "yumail",
+            "address": email,
+            "email": email,
+            "_code_not_before": datetime.now(timezone.utc),
+        }
+        otp_mail_config = mail_config or {
+            "request_timeout": 30,
+            "wait_timeout": otp_timeout,
+            "wait_interval": otp_interval,
+            "providers": [{"type": "yumail", "enable": True}],
+        }
 
         row["stage"] = "login"
         emit_progress(index, email, "login")
@@ -1228,37 +1359,41 @@ def recover_one_account(
                 account_service=account_service,
                 email=email,
                 password=openai_password,
-                mail_config=mail_config,
-                mailbox=mailbox,
-                wait_for_code=wait_for_code,
-                prime_mailbox=prime_mailbox,
+                mail_config=otp_mail_config,
+                mailbox=otp_mailbox,
+                wait_for_code=resolve_otp_code,
+                prime_mailbox=None if use_yumail else prime_mailbox,
             )
         else:
             login_result, login_attempts = ({"ok": False, "error": "missing_openai_password"}, 0)
         row["login_attempts"] = login_attempts
+        row["otp_via_yumail"] = bool(use_yumail)
         terminal_reason = _terminal_recovery_reason(login_result)
 
         if not login_result.get("ok") and not terminal_reason:
-            emit_progress(index, email, "chatgpt_email_otp_login")
-            email_otp_result = login_with_chatgpt_email_otp(
-                account_service=account_service,
-                email=email,
-                mail_config=mail_config,
-                mailbox=mailbox,
-                wait_for_code=wait_for_code,
-                prime_mailbox=prime_mailbox,
-                proxy=proxy.url,
-            )
-            row["email_otp_attempts"] = int(email_otp_result.get("otp_attempts") or 0)
-            if email_otp_result.get("ok"):
-                login_result = email_otp_result
-                row["login_via_chatgpt_email_otp"] = True
-                emit_progress(index, email, "chatgpt_email_otp_token_received")
-            else:
-                terminal_reason = _terminal_recovery_reason(email_otp_result)
-                row["chatgpt_email_otp_error"] = sanitize_error(
-                    f"{email_otp_result.get('stage') or 'email_otp'}: {email_otp_result.get('error') or 'failed'}"
+            if use_yumail or has_mailbox_credential:
+                emit_progress(index, email, "chatgpt_email_otp_login")
+                email_otp_result = login_with_chatgpt_email_otp(
+                    account_service=account_service,
+                    email=email,
+                    mail_config=otp_mail_config,
+                    mailbox=otp_mailbox,
+                    wait_for_code=resolve_otp_code,
+                    prime_mailbox=None if use_yumail else prime_mailbox,
+                    proxy=proxy.url,
                 )
+                row["email_otp_attempts"] = int(email_otp_result.get("otp_attempts") or 0)
+                if email_otp_result.get("ok"):
+                    login_result = email_otp_result
+                    row["login_via_chatgpt_email_otp"] = True
+                    emit_progress(index, email, "chatgpt_email_otp_token_received")
+                else:
+                    terminal_reason = _terminal_recovery_reason(email_otp_result)
+                    row["chatgpt_email_otp_error"] = sanitize_error(
+                        f"{email_otp_result.get('stage') or 'email_otp'}: {email_otp_result.get('error') or 'failed'}"
+                    )
+            else:
+                row["chatgpt_email_otp_error"] = "need_outlook_mailbox_credentials_or_yumail"
 
         if terminal_reason:
             terminal_account = mark_terminal_account(account_service, old_token, terminal_reason)
@@ -1281,7 +1416,9 @@ def recover_one_account(
             or login_error.startswith("password_verify_failed_401")
             or login_error_code == "invalid_username_or_password"
         )
-        if not login_result.get("ok") and invalid_password and allow_password_reset:
+        if not login_result.get("ok") and invalid_password and allow_password_reset and (
+            use_yumail or has_mailbox_credential
+        ):
             row["stage"] = "password_reset"
             emit_progress(index, email, "password_reset")
             replacement_password = generate_recovery_password()
@@ -1289,10 +1426,10 @@ def recover_one_account(
                 account_service=account_service,
                 email=email,
                 new_password=replacement_password,
-                mail_config=mail_config,
-                mailbox=mailbox,
-                wait_for_code=wait_for_code,
-                prime_mailbox=prime_mailbox,
+                mail_config=otp_mail_config,
+                mailbox=otp_mailbox,
+                wait_for_code=resolve_otp_code,
+                prime_mailbox=None if use_yumail else prime_mailbox,
             )
             row["password_reset"] = bool(reset_result.get("ok"))
             row["password_reset_otp_attempts"] = int(reset_result.get("otp_attempts") or 0)
@@ -1317,7 +1454,6 @@ def recover_one_account(
 
             openai_password = replacement_password
             account["password"] = replacement_password
-            login_credential["password"] = replacement_password
             account_service.update_account(
                 old_token,
                 {"password": replacement_password, "updated_at": utc_now_iso()},
@@ -1335,10 +1471,10 @@ def recover_one_account(
                     account_service=account_service,
                     email=email,
                     password=replacement_password,
-                    mail_config=mail_config,
-                    mailbox=mailbox,
-                    wait_for_code=wait_for_code,
-                    prime_mailbox=prime_mailbox,
+                    mail_config=otp_mail_config,
+                    mailbox=otp_mailbox,
+                    wait_for_code=resolve_otp_code,
+                    prime_mailbox=None if use_yumail else prime_mailbox,
                 )
                 row["login_attempts"] = login_attempts + reset_login_attempts
                 if reset_result.get("token_exchange_error"):
@@ -1349,6 +1485,8 @@ def recover_one_account(
         if not login_result.get("ok"):
             row["login_error_code"] = _login_error_code(login_result)
             primary_error = sanitize_error(login_result.get("error") or "login failed")
+            if "need_verification" in primary_error.lower() and not use_yumail and not has_mailbox_credential:
+                primary_error = "need_outlook_mailbox_credentials_or_yumail"
             fallback_error = str(row.get("chatgpt_email_otp_error") or "").strip()
             row["error"] = f"{primary_error}; ChatGPT email OTP: {fallback_error}" if fallback_error else primary_error
             return row
@@ -1391,10 +1529,16 @@ def recover_one_account(
         row["stage"] = "commit"
         emit_progress(index, email, "commit")
         now = utc_now_iso()
-        commit_updates: dict[str, Any] = {"proxy": proxy.url, **build_verified_updates(now)}
+        commit_updates: dict[str, Any] = {
+            "proxy": proxy.url,
+            "last_refresh_error": None,
+            "last_refresh_error_at": None,
+            "outlook_recovery_last_error": None,
+            **build_verified_updates(now),
+        }
         try:
             from services.account_identity import proxy_binding_hash
-            from services.register.proxy_health import measure_proxy_egress_ip
+            from services.proxy_health import measure_proxy_egress_ip
 
             commit_updates["proxy_binding_hash"] = proxy_binding_hash(proxy.url)
             egress = measure_proxy_egress_ip(proxy.url, timeout=float(proxy_timeout))
@@ -1403,11 +1547,7 @@ def recover_one_account(
                 row["proxy_egress_hash"] = egress.get("egress_hash")
         except Exception as egress_exc:
             row["egress_writeback_error"] = sanitize_error(f"{type(egress_exc).__name__}: {egress_exc}")
-        account_service.update_account(
-            resolved_new_token,
-            commit_updates,
-            quiet=True,
-        )
+        account_service.update_account(resolved_new_token, commit_updates, quiet=True)
         final_account = account_service.get_account(resolved_new_token)
         if not isinstance(final_account, dict):
             row["error"] = "committed token missing from account service"
@@ -1460,22 +1600,41 @@ def recover_one_account(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "恢复 Panda 上失效的 Outlook 账号：邮箱 RT 读 OTP -> 密码重登 -> 新 token -> "
+            "恢复 Panda 上失效的 Outlook 账号：密码重登 + YuMail/Outlook OTP -> 新 token -> "
             "不继承旧 fp -> Webshare /backend-api 验证 -> 成功后删除旧 token。"
         )
     )
     parser.add_argument("--root", default=str(Path.cwd()), help="Panda 项目根目录")
-    parser.add_argument("--credentials-file", required=True, help="Outlook 凭据文件：email----password----client_id----refresh_token")
+    parser.add_argument(
+        "--credentials-file",
+        default="",
+        help="可选 Outlook 凭据文件：email----password----client_id----refresh_token（YuMail OTP 时可省略）",
+    )
     parser.add_argument("--proxy-file", help="Webshare 代理文件；默认回退到账号已有 proxy")
     parser.add_argument("--target-file", help="可选，每行一个要恢复的邮箱；不传则恢复全部异常 Outlook")
     parser.add_argument("--target-email", action="append", default=[], help="可重复指定目标邮箱")
     parser.add_argument("--limit", type=int, default=0, help="最多恢复数量，0 表示不限")
     parser.add_argument("--dry-run", action="store_true", help="只列出目标和凭据覆盖，不登录、不改库")
-    parser.add_argument("--otp-timeout", type=int, default=180, help="等待 Outlook OTP 的秒数")
-    parser.add_argument("--otp-interval", type=int, default=2, help="轮询 Outlook 邮件间隔秒数")
+    parser.add_argument("--otp-timeout", type=int, default=180, help="等待 OTP 的秒数")
+    parser.add_argument("--otp-interval", type=int, default=2, help="轮询邮件间隔秒数")
     parser.add_argument("--proxy-attempts", type=int, default=10, help="每个账号最多尝试的 Webshare 代理数")
     parser.add_argument("--proxy-timeout", type=int, default=20, help="Webshare csrf 单次验证超时秒数")
     parser.add_argument("--allow-password-reset", action="store_true", help="邮箱 OTP 登录也失败时，允许重置 OpenAI 密码")
+    parser.add_argument(
+        "--allow-account-password",
+        action="store_true",
+        help="允许仅凭号池 OpenAI 密码选中目标（无需 Outlook 邮箱凭据文件）",
+    )
+    parser.add_argument(
+        "--prefer-yumail-otp",
+        action="store_true",
+        help="优先用 YuMail/mailManage API 收 OTP（默认环回 8782）",
+    )
+    parser.add_argument(
+        "--skip-mailbox-if-missing",
+        action="store_true",
+        help="无 Outlook mailbox 凭据时跳过 Graph/IMAP 预检（需 YuMail）",
+    )
     parser.add_argument("--report-dir", help="脱敏报告目录")
     parser.add_argument("--backup-dir", help="变更前备份目录；非 dry-run 必填")
     return parser
@@ -1491,14 +1650,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("invalid proxy validation settings")
 
     root = Path(args.root).expanduser().resolve()
-    credentials_path = Path(args.credentials_file).expanduser().resolve()
+    credentials_path = Path(args.credentials_file).expanduser().resolve() if str(args.credentials_file or "").strip() else None
     proxy_path = Path(args.proxy_file).expanduser().resolve() if args.proxy_file else None
     target_path = Path(args.target_file).expanduser().resolve() if args.target_file else None
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     report_dir = Path(args.report_dir).expanduser().resolve() if args.report_dir else root / "reports" / f"panda-outlook-manual-recovery-{stamp}"
     backup_dir = Path(args.backup_dir).expanduser().resolve() if args.backup_dir else None
 
-    if not credentials_path.is_file():
+    if credentials_path is not None and not credentials_path.is_file():
         raise SystemExit(f"credentials file not found: {credentials_path}")
     if proxy_path is not None and not proxy_path.is_file():
         raise SystemExit(f"proxy file not found: {proxy_path}")
@@ -1506,16 +1665,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(f"target file not found: {target_path}")
     if not args.dry_run and backup_dir is None:
         raise SystemExit("--backup-dir is required unless --dry-run is used")
+    if credentials_path is None and not args.allow_account_password and not args.prefer_yumail_otp:
+        raise SystemExit("credentials file required unless --allow-account-password / --prefer-yumail-otp")
 
     sys.path.insert(0, str(root))
     from services.account_service import account_service
     from services.config import config
-    from services.register.mail_provider import parse_outlook_credentials, wait_for_code
+    from services.outlook_mail import parse_outlook_credentials, wait_for_code
 
     # 恢复报告只输出脱敏阶段信息，压掉后端 debug 中的完整邮箱/账号标识。
     config.data["log_levels"] = ["warning", "error"]
 
-    credentials = parse_outlook_credentials(credentials_path.read_text(encoding="utf-8-sig", errors="ignore"))
+    credentials = (
+        parse_outlook_credentials(credentials_path.read_text(encoding="utf-8-sig", errors="ignore"))
+        if credentials_path is not None
+        else []
+    )
     credentials_by_email = {normalize_email(item.get("email")): item for item in credentials if normalize_email(item.get("email"))}
     target_emails = read_target_emails(target_path, args.target_email)
     accounts = account_service.list_accounts()
@@ -1524,6 +1689,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         credential_emails=set(credentials_by_email),
         target_emails=target_emails,
         limit=args.limit,
+        allow_account_password=bool(args.allow_account_password or args.prefer_yumail_otp),
     )
 
     explicit_or_failed = [
@@ -1596,7 +1762,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         row = recover_one_account(
             index=index,
             account=account,
-            credential=credentials_by_email[email],
+            credential=credentials_by_email.get(email),
             proxy_specs=proxy_specs,
             account_service=account_service,
             wait_for_code=wait_for_code,
@@ -1607,6 +1773,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             activate_login_proxy=activate_login_proxy,
             prime_mailbox=prime_mailbox_messages,
             allow_password_reset=args.allow_password_reset,
+            prefer_yumail_otp=bool(args.prefer_yumail_otp),
+            skip_mailbox_if_missing=bool(args.skip_mailbox_if_missing),
         )
         rows.append(row)
         print(json.dumps(row, ensure_ascii=False), flush=True)

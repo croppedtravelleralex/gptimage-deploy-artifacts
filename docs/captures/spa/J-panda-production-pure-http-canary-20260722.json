@@ -1,0 +1,192 @@
+{
+  "schema_version": "pure-http-image-canary/v1",
+  "generated_at": "2026-07-22T06:50:46.963487+00:00",
+  "mode": "panda_webshare",
+  "account": {
+    "hash": "3b18db641494"
+  },
+  "proxy": {
+    "provider": "webshare",
+    "hash": "b2f3cb7639c2"
+  },
+  "prompt": {
+    "chars": 285,
+    "sha256": "b353298e49e97aef6e27a1b6a60dd6dd39d37d26d8fc73e3d4f453578c73fae0"
+  },
+  "ok": true,
+  "protocol": "spa_tool_pure_http",
+  "system_hints": [],
+  "sent_x_conduit": false,
+  "image_gen_deadline_secs": 45.0,
+  "request_shapes": {
+    "prepare": {
+      "body": {
+        "keys": [
+          "action",
+          "client_contextual_info",
+          "client_prepare_dispatch",
+          "client_prepare_source",
+          "client_prepare_state",
+          "conversation_mode",
+          "model",
+          "parent_message_id",
+          "partial_query",
+          "supported_encodings",
+          "supports_buffering",
+          "system_hints",
+          "timezone",
+          "timezone_offset_min"
+        ],
+        "key_count": 14,
+        "shape_hash": "f05d452372a64f91",
+        "bytes": 295
+      },
+      "headers": {
+        "header_names": [
+          "accept",
+          "accept-language",
+          "authorization",
+          "content-type",
+          "oai-client-build-number",
+          "oai-client-version",
+          "oai-device-id",
+          "oai-language",
+          "oai-session-id",
+          "origin",
+          "referer",
+          "user-agent"
+        ],
+        "header_count": 12,
+        "shape_hash": "e96c591df838c797",
+        "bytes": 329
+      }
+    },
+    "start": {
+      "body": {
+        "keys": [
+          "action",
+          "client_contextual_info",
+          "client_prepare_state",
+          "conversation_mode",
+          "enable_message_followups",
+          "force_parallel_switch",
+          "messages",
+          "model",
+          "paragen_cot_summary_display_override",
+          "parent_message_id",
+          "supported_encodings",
+          "supports_buffering",
+          "system_hints",
+          "timezone",
+          "timezone_offset_min"
+        ],
+        "key_count": 15,
+        "shape_hash": "a25cdbd5a6790305",
+        "bytes": 331
+      },
+      "headers": {
+        "header_names": [
+          "accept",
+          "accept-language",
+          "authorization",
+          "content-type",
+          "oai-client-build-number",
+          "oai-client-version",
+          "oai-device-id",
+          "oai-language",
+          "oai-session-id",
+          "openai-sentinel-chat-requirements-prepare-token",
+          "openai-sentinel-chat-requirements-token",
+          "openai-sentinel-proof-token",
+          "openai-sentinel-turnstile-token",
+          "origin",
+          "referer",
+          "user-agent"
+        ],
+        "header_count": 16,
+        "shape_hash": "628eb1143c952acc",
+        "bytes": 543
+      }
+    }
+  },
+  "conversation": {
+    "id": "6a606849-e1b8-83ec-96e4-e7cfbbbf305b",
+    "has_image_gen": true,
+    "file_ids": [],
+    "sediment_ids": [
+      "file_0000000086d081fbb4856bd42f0b94c3"
+    ]
+  },
+  "images": [
+    {
+      "index": 0,
+      "bytes": 2568782,
+      "format": "png",
+      "width": 1254,
+      "height": 1254,
+      "sha256": "1f886e15532bfc9973897a9d285f311ecadeedaa0346dc0101df25629e5fa5bd",
+      "path": "image_0.png"
+    }
+  ],
+  "egress": {
+    "ok": true,
+    "ip": "82.29.223.111",
+    "elapsed_ms": 765
+  },
+  "conduit_from_prepare": true,
+  "conversation_id": "6a606849-e1b8-83ec-96e4-e7cfbbbf305b",
+  "sse_chunks": 11,
+  "sse_bytes": 6184,
+  "has_image_gen": true,
+  "sse_file_ids": [],
+  "sse_sediment_ids": [
+    "file_0000000086d081fbb4856bd42f0b94c3"
+  ],
+  "sse_first_event_ms": 2109,
+  "image_gen_deadline_hit": false,
+  "sse_last_payloads": [
+    "{\"p\": \"\", \"o\": \"add\", \"v\": {\"message\": {\"id\": \"6cd0f279-fc5f-4d8f-9394-aeef971ea4c5\", \"author\": {\"role\": \"tool\", \"name\": \"t2uay3k.sj1i4kz\", \"metadata\": {}}, \"create_time\": 1784703078.67902, \"update_ti",
+    "{\"type\": \"title_generation\", \"title\": \"Rainy Tokyo Street Scene\", \"conversation_id\": \"6a606849-e1b8-83ec-96e4-e7cfbbbf305b\"}",
+    "{\"type\": \"server_ste_metadata\", \"metadata\": {\"server_ttfvt_ms\": 1898.4017979819328, \"conduit_prewarmed\": false, \"plan_type\": \"free\", \"plan_type_bucket\": \"free\", \"harness\": \"harmony\", \"user_agent\": \"we",
+    "{\"type\": \"message_stream_complete\", \"conversation_id\": \"6a606849-e1b8-83ec-96e4-e7cfbbbf305b\"}"
+  ],
+  "download_urls": 1,
+  "download_ok": true,
+  "timings_ms": {
+    "egress_ms": 765,
+    "requirements_ms": 1528,
+    "prepare_ms": 357,
+    "sse_ms": 32097,
+    "poll_resolve_ms": 6786,
+    "download_ms": 611,
+    "total_ms": 42246
+  },
+  "traffic": {
+    "http_calls": 18,
+    "req_bytes": 8885,
+    "resp_bytes": 2680660,
+    "total_bytes": 2689545
+  },
+  "cf_classification": "cf403_recovered",
+  "index": 1,
+  "elapsed_sec": 42.25,
+  "runner_cf_classification": "none",
+  "observed_cf": {
+    "source": "tasks",
+    "cf_streak": 1,
+    "abort_threshold": 2,
+    "recovered_via_conversation_poll": true,
+    "whole_request_retried": false,
+    "account_switched": false
+  },
+  "deployment": {
+    "artifact_commit": "650e899084c319ede7436c7b9497b4af9b991eba",
+    "backup": "/root/gptimage/backups/pure-http-prod-20260722-144517",
+    "runtime_hashes": {
+      "services/openai_backend_api.py": "91001d147685b658e3ea2757939037510cdab4d5f61473b8ebbe31b656e9a460",
+      "services/protocol/chatgpt_web_request.py": "9426c5ff4756c370dd2a56261caedcf415e763e15bebd7bfcc24af890be2c430",
+      "services/config.py": "6607876b07d0d4f21b5263a2114f0c942494c04d85420e2d51cb33c489454706",
+      "utils/turnstile.py": "9817bf49777d027ee44aace935acc23b8248e3877336381d9487c063d4695891"
+    }
+  }
+}

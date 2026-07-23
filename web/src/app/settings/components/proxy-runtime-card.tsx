@@ -21,6 +21,8 @@ import {
 
 import { useSettingsStore } from "../store";
 
+const hideClearanceUi = process.env.NEXT_PUBLIC_HIDE_CLEARANCE === "1";
+
 export function ProxyRuntimeCard() {
   const [isTestingProxy, setIsTestingProxy] = useState(false);
   const [isTestingClearance, setIsTestingClearance] = useState(false);
@@ -102,10 +104,12 @@ export function ProxyRuntimeCard() {
           <div>
             <div className="flex items-center gap-2 text-base font-semibold text-stone-900">
               <PlugZap className="size-5 text-stone-500" />
-              FlareSolverr 清障
+              {hideClearanceUi ? "出口代理" : "FlareSolverr 清障"}
             </div>
             <p className="mt-1 text-xs leading-6 text-stone-500">
-              默认关闭。用于注册遇到 Cloudflare 拦截后获取 clearance，可配合 WARP / Privoxy 代理链路重试。
+              {hideClearanceUi
+                ? "配置全局出站代理（WARP / Privoxy / SOCKS）。Panda 生产环境不启用 FlareSolverr 清障。"
+                : "默认关闭。用于注册遇到 Cloudflare 拦截后获取 clearance，可配合 WARP / Privoxy 代理链路重试。"}
             </p>
           </div>
           <span className={`rounded-full px-3 py-1 text-xs ${runtimeEnabled ? "bg-emerald-50 text-emerald-700" : "bg-stone-100 text-stone-500"}`}>
@@ -114,13 +118,17 @@ export function ProxyRuntimeCard() {
         </div>
 
         <div className="rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-xs leading-6 text-stone-600">
-          代理优先级：账号代理 &gt; FlareSolverr 代理链路 &gt; 显式代理 &gt; 全局代理。Cookie / cf_clearance 不会在接口响应中明文返回。
+          {hideClearanceUi
+            ? "代理优先级：账号代理 > 运行时出口代理 > 显式代理 > 全局代理。"
+            : "代理优先级：账号代理 > FlareSolverr 代理链路 > 显式代理 > 全局代理。Cookie / cf_clearance 不会在接口响应中明文返回。"}
         </div>
 
+        {!hideClearanceUi ? (
         <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-6 text-amber-800">
           <AlertTriangle className="mt-1 size-4 shrink-0" />
           <span>使用 FlareSolverr 模式前，请先通过 Docker 启动 flaresolverr、privoxy、warp-proxy 等相关容器；容器内 URL 通常填写 http://flaresolverr:8191。</span>
         </div>
+        ) : null}
 
         <div className="grid gap-4 md:grid-cols-2">
           <label className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-700 md:col-span-2">
@@ -128,7 +136,7 @@ export function ProxyRuntimeCard() {
               checked={runtimeEnabled}
               onCheckedChange={(checked) => setProxyRuntimeField("enabled", Boolean(checked))}
             />
-            启用 FlareSolverr 清障
+            {hideClearanceUi ? "启用出口代理运行时" : "启用 FlareSolverr 清障"}
           </label>
 
           <div className="space-y-2">
@@ -204,7 +212,7 @@ export function ProxyRuntimeCard() {
               disabled={isTestingProxy || !runtimeEnabled}
             >
               {isTestingProxy ? <LoaderCircle className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
-              测试当前清障代理
+              {hideClearanceUi ? "测试出口代理" : "测试当前清障代理"}
             </Button>
           </div>
 
@@ -217,6 +225,7 @@ export function ProxyRuntimeCard() {
           ) : null}
         </div>
 
+        {!hideClearanceUi ? (
         <div className="space-y-4 rounded-xl border border-stone-200 bg-white px-4 py-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-2 text-sm font-medium text-stone-800">
@@ -361,6 +370,7 @@ export function ProxyRuntimeCard() {
             ) : null}
           </div>
         </div>
+        ) : null}
 
         <div className="flex justify-end">
           <Button

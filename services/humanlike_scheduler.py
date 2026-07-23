@@ -66,6 +66,7 @@ def update_quota_peak_state(
     prev_reset_at: str | None,
     prev_soft_band: float | None,
     soft: float = 0.70,
+    soft_band_override: float | None = None,
     rng: random.Random | None = None,
 ) -> QuotaPeakState:
     """用 remaining/reset_after 估窗口 peak，并判定 soft band 熔断。"""
@@ -83,9 +84,12 @@ def update_quota_peak_state(
         peak = rem
     if peak <= 0:
         peak = rem
-    band = float(prev_soft_band) if prev_soft_band and not new_window else draw_soft_band(soft, rng=rng)
-    if new_window:
+    if soft_band_override is not None:
+        band = _clamp(float(soft_band_override), 0.05, 0.99)
+    elif new_window:
         band = draw_soft_band(soft, rng=rng)
+    else:
+        band = float(prev_soft_band) if prev_soft_band else draw_soft_band(soft, rng=rng)
     used_ratio = 0.0 if peak <= 0 else 1.0 - (rem / float(peak))
     soft_capped = peak > 0 and used_ratio >= band
     return QuotaPeakState(

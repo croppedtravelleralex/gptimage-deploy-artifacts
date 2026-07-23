@@ -1,0 +1,174 @@
+{
+  "schema_version": "pure-http-image-canary/v1",
+  "generated_at": "2026-07-22T04:45:54.288351+00:00",
+  "mode": "panda_webshare",
+  "account": {
+    "hash": "f289854023ad"
+  },
+  "proxy": {
+    "provider": "webshare",
+    "hash": "49675fdabb54"
+  },
+  "prompt": {
+    "chars": 285,
+    "sha256": "b353298e49e97aef6e27a1b6a60dd6dd39d37d26d8fc73e3d4f453578c73fae0"
+  },
+  "ok": false,
+  "protocol": "spa_tool_pure_http",
+  "system_hints": [],
+  "sent_x_conduit": false,
+  "image_gen_deadline_secs": 30.0,
+  "request_shapes": {
+    "prepare": {
+      "body": {
+        "keys": [
+          "action",
+          "client_contextual_info",
+          "client_prepare_dispatch",
+          "client_prepare_source",
+          "client_prepare_state",
+          "conversation_mode",
+          "model",
+          "parent_message_id",
+          "partial_query",
+          "supported_encodings",
+          "supports_buffering",
+          "system_hints",
+          "timezone",
+          "timezone_offset_min"
+        ],
+        "key_count": 14,
+        "shape_hash": "f05d452372a64f91",
+        "bytes": 295
+      },
+      "headers": {
+        "header_names": [
+          "accept",
+          "accept-language",
+          "authorization",
+          "content-type",
+          "oai-client-build-number",
+          "oai-client-version",
+          "oai-device-id",
+          "oai-language",
+          "oai-session-id",
+          "origin",
+          "referer",
+          "user-agent"
+        ],
+        "header_count": 12,
+        "shape_hash": "e96c591df838c797",
+        "bytes": 329
+      }
+    },
+    "start": {
+      "body": {
+        "keys": [
+          "action",
+          "client_contextual_info",
+          "client_prepare_state",
+          "conversation_mode",
+          "enable_message_followups",
+          "force_parallel_switch",
+          "messages",
+          "model",
+          "paragen_cot_summary_display_override",
+          "parent_message_id",
+          "supported_encodings",
+          "supports_buffering",
+          "system_hints",
+          "timezone",
+          "timezone_offset_min"
+        ],
+        "key_count": 15,
+        "shape_hash": "a25cdbd5a6790305",
+        "bytes": 331
+      },
+      "headers": {
+        "header_names": [
+          "accept",
+          "accept-language",
+          "authorization",
+          "content-type",
+          "oai-client-build-number",
+          "oai-client-version",
+          "oai-device-id",
+          "oai-language",
+          "oai-session-id",
+          "openai-sentinel-chat-requirements-prepare-token",
+          "openai-sentinel-chat-requirements-token",
+          "openai-sentinel-proof-token",
+          "openai-sentinel-turnstile-token",
+          "origin",
+          "referer",
+          "user-agent"
+        ],
+        "header_count": 16,
+        "shape_hash": "c780aea18db40878",
+        "bytes": 543
+      }
+    }
+  },
+  "conversation": {
+    "id": "6a604b04-d4f8-83ec-9ada-df3d82276d85",
+    "has_image_gen": true,
+    "file_ids": [],
+    "sediment_ids": [
+      "file_00000000584881fab11f12fe745f3f9b"
+    ]
+  },
+  "images": [],
+  "egress": {
+    "ok": true,
+    "ip": "92.113.246.176",
+    "elapsed_ms": 570
+  },
+  "conduit_from_prepare": true,
+  "conversation_id": "6a604b04-d4f8-83ec-9ada-df3d82276d85",
+  "sse_chunks": 22,
+  "sse_bytes": 21292,
+  "has_image_gen": true,
+  "sse_file_ids": [],
+  "sse_sediment_ids": [
+    "file_00000000584881fab11f12fe745f3f9b"
+  ],
+  "sse_first_event_ms": 1975,
+  "image_gen_deadline_hit": false,
+  "sse_last_payloads": [
+    "{\"o\": \"patch\", \"v\": [{\"p\": \"/message/status\", \"o\": \"replace\", \"v\": \"finished_successfully\"}, {\"p\": \"/message/end_turn\", \"o\": \"replace\", \"v\": true}, {\"p\": \"/message/metadata\", \"o\": \"append\", \"v\": {\"can",
+    "{\"type\": \"message_marker\", \"conversation_id\": \"6a604b04-d4f8-83ec-9ada-df3d82276d85\", \"message_id\": \"90ca5f85-cc27-4524-a6d7-490ecd4aa965\", \"marker\": \"last_token\", \"event\": \"last\"}",
+    "{\"type\": \"server_ste_metadata\", \"metadata\": {\"server_ttfvt_ms\": 1812.3272830853239, \"conduit_prewarmed\": false, \"plan_type\": \"free\", \"plan_type_bucket\": \"free\", \"harness\": \"harmony\", \"user_agent\": \"we",
+    "{\"type\": \"message_stream_complete\", \"conversation_id\": \"6a604b04-d4f8-83ec-9ada-df3d82276d85\"}"
+  ],
+  "download_urls": 0,
+  "download_ok": false,
+  "timings_ms": {
+    "egress_ms": 570,
+    "requirements_ms": 1062,
+    "prepare_ms": 638,
+    "sse_ms": 29995,
+    "poll_resolve_ms": 2049,
+    "download_ms": 0,
+    "total_ms": 34317
+  },
+  "traffic": {
+    "http_calls": 12,
+    "req_bytes": 9053,
+    "resp_bytes": 136594,
+    "total_bytes": 145647
+  },
+  "error": "image_poll/conversation failed: status=403, body=cloudflare_or_edge_html_block: image poll aborted after 2 consecutive CF edge blocks",
+  "cf_classification": "cf403",
+  "index": 1,
+  "elapsed_sec": 34.32,
+  "failure_stage": "poll_download",
+  "observed_cf": {
+    "home_soft_403": true,
+    "poll_cf_streak": 2,
+    "sources": [
+      "tasks",
+      "conversation"
+    ],
+    "legacy_attachment_request_after_abort": true
+  }
+}

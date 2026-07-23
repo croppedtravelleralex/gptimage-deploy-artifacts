@@ -356,14 +356,17 @@ export function ImageResults({
 
                       const imageTaskStatus = image.taskStatus || (turn.status === "queued" ? "queued" : "running");
                       const imageStatusLabel = imageTaskStatus === "queued" ? "排队中" : getProgressLabel(image.progress);
-                      const showElapsed = imageTaskStatus === "running" && image.elapsedSecs != null;
-                      const elapsedDisplay = showElapsed
-                        ? formatElapsed(
-                            image.elapsedUpdatedAt != null
-                              ? image.elapsedSecs! + (currentTime - image.elapsedUpdatedAt!) / 1000
-                              : image.elapsedSecs!,
-                          )
-                        : null;
+                      // 与右侧任务列表统一：一律用本地 startTime 墙钟
+                      const elapsedDisplay =
+                        image.startTime != null
+                          ? formatElapsed(Math.max(0, (currentTime - image.startTime) / 1000))
+                          : image.elapsedSecs != null
+                            ? formatElapsed(
+                                image.elapsedUpdatedAt != null
+                                  ? image.elapsedSecs + (currentTime - image.elapsedUpdatedAt) / 1000
+                                  : image.elapsedSecs,
+                              )
+                            : null;
                       return (
                         <div key={image.id} className="break-inside-avoid">
                           <div

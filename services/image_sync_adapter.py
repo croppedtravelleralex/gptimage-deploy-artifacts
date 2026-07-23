@@ -36,7 +36,7 @@ def _task_error_message(task: dict[str, Any]) -> str:
     return str(task.get("error") or "image task failed").strip() or "image task failed"
 
 
-def build_openai_image_response(task: dict[str, Any]) -> dict[str, Any]:
+def build_openai_image_response(task: dict[str, Any], *, task_id: str | None = None) -> dict[str, Any]:
     status = str(task.get("status") or "")
     if status == TASK_STATUS_SUCCESS:
         response: dict[str, Any] = {
@@ -46,6 +46,9 @@ def build_openai_image_response(task: dict[str, Any]) -> dict[str, Any]:
         usage = task.get("usage")
         if isinstance(usage, dict) and usage:
             response["usage"] = usage
+        resolved_task_id = str(task_id or task.get("id") or task.get("task_id") or "").strip()
+        if resolved_task_id:
+            response["task_id"] = resolved_task_id
         return response
     if status == TASK_STATUS_ERROR:
         raise RuntimeError(_task_error_message(task))
@@ -81,7 +84,7 @@ def run_generation_sync(
         timeout_secs=_wait_timeout_secs(),
         poll_interval_secs=_poll_interval_secs(),
     )
-    return build_openai_image_response(task)
+    return build_openai_image_response(task, task_id=task_id)
 
 
 def run_edit_sync(
@@ -121,4 +124,4 @@ def run_edit_sync(
         timeout_secs=_wait_timeout_secs(),
         poll_interval_secs=_poll_interval_secs(),
     )
-    return build_openai_image_response(task)
+    return build_openai_image_response(task, task_id=task_id)

@@ -1,6 +1,6 @@
 # Outlook 账号长期存活、真实队列编排与逆向链路 99+ 方案
 
-最后更新：2026-07-16
+最后更新：2026-07-17
 
 ## 1. 目标、边界与评分
 
@@ -16,70 +16,54 @@ chatgpt2api 反代文本模型维持聊天能力；`/v1/chat/completions`、`/v1
 | 文本与生图运行编排 | 12 | 独立速率域、图片容量保护、真实任务驱动 |
 | 聊天/生图逆向链路 | 14 | 请求身份一致、会话连续、SSE/poll、去重、失败归因与性能 |
 | 性能与容量 | 10 | Windows/Panda 分层预算、无常驻浏览器扩散 |
-| 可观测性与账号页 | 10 | 代理/出口、累计流量、生命周期和错误原因 |
+| 可观测性与账号页 | 10 | 代理/出口、生命周期和错误原因 |
 | 测试矩阵 | 10 | 功能、故障注入、兼容性、性能、生产 canary |
 | 备份、回滚与生产门禁 | 8 | SQLite、代码、前端、配置和节点租约回滚 |
 
 设计覆盖目标为 `99+/100`。`cohort 7 天存活率 >99%` 是运行 SLO；工程侧负责固定变量、止损、证据与统计可信度，不把小样本短期存活写成统计结论。
 
-## 2. 当前事实与上一轮未完成项
+## 2. 当前事实与缺口（2026-07-17）
 
 ### 2.1 已落地
 
-- 账号页已增加“代理 / 出口”和“累计流量”；代理凭据隐藏，历史未采集流量显示“待统计”。
-- 文本与生图已记录应用层上传、下载和总字节数。
-- 图片 SSE ready 以真实 `conversation_id` 为准，ping/control 不解除 deadline；已有 conversation 的超时进入原会话续轮询。
-- 注册、OTP、首次登录在 Windows 本机执行，账号材料再上传 Panda。
-- 文本与生图的额度数值彼此独立，共享账号健康、节点绑定和总 in-flight 门禁。
+- 账号页「代理 / 出口」「累计流量」；应用层 `traffic_*` 记账（聊天流 + 生图池）。
+- 一对一 sticky：`proxy_binding_hash == registration_proxy_hash`，出口 hash 一致；2026-07-17 深检 7/7 无共享、无漂移。
+- 逆向链路：API/resource Session 隔离、`account_fingerprint`、canonical `chatgpt_web_request`、`request_shape`、`ImagePollBudget`、CF soft-fail bootstrap、`/me` CF 重试 + **轻量头回退**。
+- 新号指纹轻微分化：Chrome 120/124/131 × Windows/macOS × accept-language（seed 稳定；不洗现网 device-id）。
+- 观察号 `identity_isolated` + T+1h+ 巡检（iv***3 ~T+3h `/me` 3/3）；成熟度字段 `maturity_stage` / `maturity_checked_at` / `cohort_id` 已透传，观察脚本可 `--write-maturity`。
+- FlareSolverr：**注册走 Camoufox 浏览器内解 CF，不依赖 Panda FlareSolverr**。Panda `clearance.enabled=false` 合理——全局 clearance 与 sticky 出口不一致时无效甚至有害；真正要用须 per-account 同出口刷 cookie（未接好，本轮不开）。
 
 ### 2.2 仍待落地
 
-1. 节点租约表、绑定写保护、出口漂移阻断和释放冷却。
-2. `1h/6h/24h/72h/7d` 成熟期任务状态机与补跑机制。
-3. `AccountWorkloadPolicyService`、文本 lease、图片容量保护和真实队列 shadow/live canary。
-4. Windows 持久 Profile 与 Panda 轻量会话元数据的完整交接。
-5. ChatGPT Web 聊天/生图 canonical request builder、请求形状遥测、单一重试协调器和会话恢复去重。
-6. survivor 与 terminal 的请求/节点/生命周期差异报告。
+1. `proxy_nodes` 表、节点分层 READY/OBSERVE/QUARANTINED、漂移阻断与释放冷却。
+2. `1h/6h/24h/72h/7d` 成熟期自动状态机与 cohort 熔断（现仅字段 + 手动/脚本写入）。
+3. `AccountWorkloadPolicyService` live、文本 lease、图片容量保护。
+4. Windows 持久 Profile ↔ Panda 轻量会话元数据完整交接。
+5. per-account clearance jar（经该号 sticky proxy）。
 
-## 3. 2026-07-16 Panda 最新只读证据
+### 2.3 FlareSolverr 边界（勿误开）
 
-权威快照改为 **22:09 SSH 深检**（取代 20:34 中已过时的磁盘结论）。报告：`data/runlogs/panda-deep-audit-readonly-20260716-220921.md`；20:34 旧报告仍保留作对照：`panda-account-evidence-readonly-20260716-203416.md`。
+| 路径 | 谁解 CF | clearance 角色 |
+| --- | --- | --- |
+| Windows Camoufox 注册 | 浏览器内 challenge | 不依赖 Panda FlareSolverr |
+| Panda `/me` / bootstrap / 聊天生图 | curl_cffi + 可选 `build_headers` 合并 `cf_clearance` | 仅 `enabled=true` 且 cookie 与**同出口**匹配时有用 |
 
-| 项目 | 20:34（旧） | 22:09（权威） |
-| --- | ---: | ---: |
-| 账号总数 | 18 | 18 |
-| 正常 / 限流 / 异常 / 禁用 | 4 / 2 / 7 / 5 | 5 / 1 / 7 / 5 |
-| 可调度 / ready / dispatchable | 0 / 0 / 0 | 0 / 0 / 0 |
-| verified_total_quota | 0 | 0 |
-| Panda rejected | 12 | 12 |
-| `invalid_count > 0` | 12 | 12 |
-| app RSS | 447.5MiB / 1.5GiB | 444.8MiB / 1.5GiB |
-| 根分区 | 86.1% | **49%**（门禁已解除） |
-| 完整 fp / egress hash | 0 / 0 | 0 / 0 |
-| 同代理 host 签名 | 12 条相同 | 12 条相同（`b51d9569ebf5`） |
+---
 
-补充事实（22:09）：
+## 3. 历史只读证据（2026-07-16，已非当前池面）
 
-- 账面 quota 合计 271 全在异常/禁用号；5 个「正常」均为 `q=0`。
-- 无 `proxy_nodes` / cohort / lease 表；`node_lease` / `cohort_id` / `maturity_*` 字段覆盖 0/18。
-- 任务库 success15 / error401 / timeout_pending21 / running1；`image_tasks.db` ≈ 1.6G。
-- 近 24h 日志：`429×2024`、`quota×664`、`timeout×661`、`account_deactivated×16`。
-- 生产缺 `account_fingerprint.py` / `account_workload_policy.py`；`openai_backend_api.py` 仍为 07-10 哈希，与本地 ACC-010 漂移。
+下列 18 号池 / `schedulable=0` / fingerprint 缺失快照仅作历史对照；**当前以 §2 与 `docs/02-current-state.md` 摘要为准**。
 
-20:34 仍有效的历史样本（未在 22:09 重采）：
+权威当时报告：`data/runlogs/panda-deep-audit-readonly-20260716-220921.md`。
 
-- 最近 7 天日志样本的生图成功占比从 07-14 的 `22.0%` 降至 07-16 的 `2.8%`。
-- 8961 条有文本样本仅 828 种精确文本，最大同一规范化文本重复 3501 次；9119 条调用均为 `gpt-image-2`。
-- `request_shape` 样本极少；请求头未进结构化日志。
+| 项目 | 22:09（当时） |
+| --- | ---: |
+| 账号总数 | 18 |
+| 可调度 | 0 |
+| 完整 fp / egress（当时审计口径） | 0 / 0 |
+| 同代理 host 签名 | 12 条相同 |
 
-当前证据支持的根因优先级：
-
-1. 共同出口、出口迁移和账号强绑定缺失。
-2. 高失败重试、密集轮询、超时与零额度压力。
-3. token 失效及批次关联处置。
-4. 高度重复提示与单一工作负载。
-5. 固定 header/payload 形状属于待增加脱敏遥测后验证的因素。
-6. 生产代码/模块落后本地，导致 fp 持久化路径无法在 Panda 生效。
+2026-07-17 复核：fingerprint 模块已在 Panda；7 号池 fp/egress/binding 齐全且一对一。
 
 ## 4. 账号页与证据字段
 
@@ -90,14 +74,14 @@ chatgpt2api 反代文本模型维持聊天能力；`/v1/chat/completions`、`/v1
 - 累计流量：`traffic_uploaded_bytes`、`traffic_downloaded_bytes`、`traffic_total_bytes`、`traffic_updated_at`。
 - 当前流量是应用层载荷，不等同于 Webshare 账单；TLS、隧道和重传开销由代理商统计。
 
-### 4.2 必补字段
+### 4.2 必补 / 部分已有
 
-- 节点状态：READY / OBSERVE / QUARANTINED / RESERVED / BOUND / COOLING。
-- 成熟度：T+1h、T+6h、T+24h、T+72h、T+7d。
-- 注册出口 hash、当前出口 hash、IPv4/IPv6、地区、最后复测时间和漂移次数。
+- 成熟度字段：`maturity_stage`、`maturity_checked_at`、`cohort_id` 已透传；自动状态机仍待。
+- 节点状态：READY / OBSERVE / QUARANTINED / RESERVED / BOUND / COOLING（`proxy_nodes` 表仍待）。
+- 注册出口 hash、当前出口 hash：账号级已有且一对一；节点级租约表仍待。
 - runtime profile 版本/hash、客户端版本、locale、timezone；正文和 secret 不入日志。
 - 文本/生图请求数、分项流量、重复提交数、poll 次数和错误阶段。
-- cohort、批次、绑定时间、首个真实任务时间、terminal 事件时间。
+- 批次、绑定时间、首个真实任务时间、terminal 事件时间。
 
 ## 5. Webshare 节点状态机
 

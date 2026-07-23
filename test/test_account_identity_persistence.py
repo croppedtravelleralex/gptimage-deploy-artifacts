@@ -97,6 +97,74 @@ class AccountIdentityPersistenceTests(unittest.TestCase):
             self.assertEqual(updated.get("proxy_binding_hash"), proxy_binding_hash(new_proxy))
             self.assertEqual(updated.get("identity_revision"), 1)
             self.assertEqual(updated.get("identity_update_reason"), "identity_backfill")
+            self.assertEqual(updated.get("cf_daily"), [])
+            self.assertEqual(updated.get("egress_daily"), [])
+
+    def test_update_identity_proxy_change_resets_observability_lights(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            service.add_account_items(
+                [{
+                    "access_token": "token",
+                    "status": "正常",
+                    "quota": 5,
+                    "proxy": "http://old:pass@old.example:8080",
+                    "proxy_binding_hash": proxy_binding_hash("http://old:pass@old.example:8080"),
+                    "proxy_egress_hash": "egress-old",
+                    "cf_daily": [{"date": "2026-07-20", "ok": 3, "cf": 1, "image_fail": 0}],
+                    "egress_daily": [{"date": "2026-07-20", "ip": "1.2.3.4", "hash": "abcd", "status": "ok"}],
+                }],
+                include_items=False,
+            )
+            new_proxy = "http://new:pass@new.example:8080"
+            updated = service.update_account_identity(
+                "token",
+                {
+                    "proxy": new_proxy,
+                    "proxy_binding_hash": proxy_binding_hash(new_proxy),
+                    "proxy_egress_hash": "egress-new",
+                },
+                reason="proxy_rebind",
+            ) or {}
+            self.assertEqual(updated.get("cf_daily"), [])
+            self.assertEqual(updated.get("egress_daily"), [])
+
+    def test_manual_scheduling_toggle_clear_isolation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            service.add_account_items(
+                [{
+                    "access_token": "sched-token",
+                    "status": "正常",
+                    "quota": 5,
+                    "panda_receive_state": "identity_isolated",
+                    "last_quota_refresh_at": "2026-07-19T00:00:00+00:00",
+                }],
+                include_items=False,
+            )
+            isolated = service.get_account("sched-token") or {}
+            self.assertFalse(AccountService.is_manual_scheduling_enabled(isolated))
+            self.assertTrue(service._requires_panda_receive_verification(isolated))
+
+            # ordinary update must not promote out of isolation
+            blocked = service.update_account(
+                "sched-token",
+                {"panda_receive_state": "verified_ready"},
+            ) or {}
+            self.assertEqual(blocked.get("panda_receive_state"), "identity_isolated")
+
+            entered = service.set_account_scheduling("sched-token", enabled=True) or {}
+            self.assertEqual(entered.get("panda_receive_state"), "verified_ready")
+            self.assertTrue(AccountService.is_manual_scheduling_enabled(entered))
+            self.assertFalse(service._requires_panda_receive_verification(entered))
+
+            exited = service.set_account_scheduling("sched-token", enabled=False) or {}
+            self.assertEqual(exited.get("panda_receive_state"), "identity_isolated")
+            self.assertFalse(AccountService.is_manual_scheduling_enabled(exited))
+
+            bulk = service.set_accounts_scheduling(["sched-token"], enabled=True)
+            self.assertEqual(bulk.get("updated"), 1)
+            self.assertEqual((bulk.get("item") or {}).get("panda_receive_state"), "verified_ready")
 
     def test_proxy_binding_hash_distinguishes_credential_selected_nodes(self) -> None:
         left = proxy_binding_hash("http://user-one:pass@proxy.example:8080")

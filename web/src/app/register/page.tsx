@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { LoaderCircle } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import webConfig from "@/constants/common-env";
 import { useAuthGuard } from "@/lib/use-auth-guard";
@@ -10,6 +11,8 @@ import { getStoredAuthKey } from "@/store/auth";
 
 import { useSettingsStore } from "../settings/store";
 import { RegisterCard } from "./components/register-card";
+
+const hideRegisterUi = process.env.NEXT_PUBLIC_HIDE_REGISTER === "1";
 
 function RegisterDataController() {
   const didLoadRef = useRef(false);
@@ -60,7 +63,22 @@ function RegisterPageContent() {
 }
 
 export default function RegisterPage() {
+  const router = useRouter();
   const { isCheckingAuth, session } = useAuthGuard(["admin"]);
+
+  useEffect(() => {
+    if (hideRegisterUi) {
+      router.replace("/accounts");
+    }
+  }, [router]);
+
+  if (hideRegisterUi) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center">
+        <LoaderCircle className="size-5 animate-spin text-stone-400" />
+      </div>
+    );
+  }
 
   if (isCheckingAuth || !session || session.role !== "admin") {
     return (

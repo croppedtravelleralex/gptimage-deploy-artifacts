@@ -42,3 +42,12 @@ web/out/
 web/node_modules/
 web_dist.backup-*/
 *.zip
+docs/captures/spa/*.har
+
+# local secrets
+data/runlogs/*.secret.txt
+data/runlogs/**/*.secret.txt
+**/yumail_api_key.secret.txt
+
+
+**/outlook_imap_creds.secret.json

@@ -1,83 +1,72 @@
 # 维护文档总入口
 
-本目录是本项目的维护真相源入口。以后接手、排障、做路线图调整，先看这里，再进代码。
+最后更新：2026-07-22
 
-## 本目录用途
+本目录是维护真相源。冲突时：代码/命令结果 > `02` > `03`/`04` > `06` > `logs/`。
 
-- 固定沉淀当前事实、长期目标、路线图、改进待办、交接摘要和月度日志。
-- 避免维护知识只停留在聊天记录里。
-- 让后续接手的人先看文档，再看代码。
+## 按意图检索
 
-## 阅读顺序
+| 你想… | 先读 |
+|--------|------|
+| 现在池面/生产事实 | `02-current-state.md` |
+| **新号怎么产出（固定链路）** | `16-camoufox-stable-pipeline.md` → `scripts/outlook_camoufox_stable_register.py` |
+| 继续上次工作 | `06-handoff.md` |
+| **CF 403 / 能不能协议绕过** | `17-cf403-and-egress.md` |
+| **严格纯 HTTP 生图 / 不出图 / Turnstile** | `20-pure-http-image-sentinel-todo.md` → `04` **PROTO-PURE-HTTP** |
+| **新开对话：按逆向结果改造生产** | `04` **PROTO-REFACTOR**（上传等）；生图 Sentinel 优先 `20`；任务书 `18`（挖矿已完成） |
+| **协议全量逆向目录（A–F / 机房 IP 前提）** | `19-protocol-full-reverse-catalog.md` → `captures/spa/` |
+| 空池 / 不可调度归因 | `04` SCHED-001；`11` L2；脚本模式 `_panda_why_not_schedulable` |
+| estuary / SSE / 协议差距与改造 | `12`；挖全进度 `19`；生图阻塞 `20`；改造待办 `04` |
+| 拟人化 / 降封是否有效 | `12` 风控复盘；`10-human-like-workload-plan.md`（对照未齐） |
+| 养号 / 自带 GPT / LLM 分层 | `11-llm-ops-and-text-nurture.md` |
+| 性能占用 / Go·Rust 重写预估 | `13-performance-and-rewrite-estimate.md` |
+| Rust 重写（进度 / Phase A→E） | `14-rust-rewrite-plan.md` → `../gptimage-gateway-rs/plan.md`（权威） |
+| 任务库归档 / 日志轮转 | `15-store-archive-and-log-rotation.md` |
+| 调度进出台开关 | `02` 摘要；API `/api/accounts/scheduling` |
+| Outlook 长寿 / sticky / 成熟期 | `09-outlook-longevity-99-plan.md` |
+| NewAPI 生图 / admission | `08-image-pipeline-newapi-async-plan.md` |
+| **生图调度 / 前端 P-C / 多阶段流水线** | `21-image-scheduling-and-pipeline.md` |
+| 部署 Panda | `deployment.md`（artifacts → pull overlay；禁 scp/远程 build） |
+| 额度三态 | `quota-semantics.md` |
+| AI 接手纪律 | `05-ai-maintenance-playbook.md` |
 
-1. `02-current-state.md`：当前事实主档（含生产环境 Panda VPS 信息）
-2. `05-ai-maintenance-playbook.md`：后续 AI 的接手规则
-3. `06-handoff.md`：本轮交接摘要
-4. `07-account-pool-performance-upgrade.md`：账号池与性能升级落地方案
-5. `sync-strategy.md`：Panda 同步、水位线与公网入口保护
-6. `performance-acceptance-test-plan.md`：多轮测试与验收计划
-7. `08-image-pipeline-newapi-async-plan.md`：IMG-012 方案与实施状态（§13：busy_6=0 已验收，24 路成功率待修 NewAPI 传输层）
-8. `01-project-charter.md`：项目长期目标和边界
-9. `03-roadmap.md`：近期 / 中期 / 远期路线图
-10. `04-improvement-backlog.md`：长期改进池
-11. `logs/YYYY/YYYY-MM.md`：月度历史
+## 阅读顺序（新人）
+
+1. `02-current-state.md`（只看文首摘要）
+2. `16-camoufox-stable-pipeline.md`（新号产出）
+3. `06-handoff.md`
+4. `11` + `12`（LLM / 协议差距）
+4. `09` / `10`（长寿与拟人化方案）
+5. `04-improvement-backlog.md`（待办）
+6. `logs/YYYY/`、`archive/`（历史，非当前事实）
 
 ## 目录地图
 
-- `01-project-charter.md`：项目愿景、完成态、边界
-- `02-current-state.md`：当前状态、生产部署、已验证事实、风险、下一步
-- `03-roadmap.md`：Now / Next / Later
-- `04-improvement-backlog.md`：长期待办与技术债
-- `05-ai-maintenance-playbook.md`：AI 接手和回写纪律
-- `06-handoff.md`：简短交接摘要
-- `07-account-pool-performance-upgrade.md`：账号池、本地 SQLite、Panda SQLite、maintenance、b64 回传落地设计
-- `sync-strategy.md`：Panda 水位线、动态公网 IP 同步保护、HMAC、幂等和限频
-- `performance-acceptance-test-plan.md`：优化完成后的多轮测试、压测和验收标准
-- `08-image-pipeline-newapi-async-plan.md`：IMG-012 sync-over-async（已部署 Panda；§13 实施状态与压测结果）
-- `quota-semantics.md`：**额度三态规范**（真无限额 / 未知 / 数值）
-- `deployment.md`：部署与升级（含 Panda 生产热更新）
-- `logs/YYYY/YYYY-MM.md`：每月工作记录
-
-## 真相来源优先级
-
-按下面顺序判断事实：
-
-1. 代码、配置、测试、数据库、命令结果
-2. `docs/02-current-state.md`
-3. `docs/03-roadmap.md`
-4. `docs/06-handoff.md`
-5. `docs/logs/`
-6. 项目根目录 `README.md`
-7. 其他专题文档
-
-如果冲突，以更高优先级来源为准，并在同一轮把文档修正。
+| 文件 | 用途 |
+|------|------|
+| `01-project-charter.md` | 愿景与边界 |
+| `02-current-state.md` | **当前事实**（摘要权威；下文历史勿覆盖摘要） |
+| `03-roadmap.md` | Now / Next / Later |
+| `04-improvement-backlog.md` | 工程待办 |
+| `05-ai-maintenance-playbook.md` | AI 接手规则 |
+| `06-handoff.md` | 短交接 |
+| `07` / `sync-strategy` / `performance-acceptance-*` | 号池性能与验收（偏历史方案） |
+| `08-image-pipeline-newapi-async-plan.md` | 生图 sync/async |
+| `09-outlook-longevity-99-plan.md` | Outlook 99+ |
+| `10-human-like-workload-plan.md` | 拟人化容量 |
+| `11-llm-ops-and-text-nurture.md` | LLM 分层与养号红线 |
+| `12-protocol-gap-vs-web.md` | 逆向差距与风控复盘 |
+| `16-camoufox-stable-pipeline.md` | **Camoufox 新号固定链路**（取号→检查→注册→观察） |
+| `17-cf403-and-egress.md` | CF 403 裁决（不可协议绕过） |
+| `18-openai-web-reverse-proxy-brief.md` | 新对话：SPA→反代任务书 |
+| `19-protocol-full-reverse-catalog.md` | **协议全量逆向 A–F 目录/看板**（机房 IP 前提） |
+| `20-pure-http-image-sentinel-todo.md` | **严格纯 HTTP 生图：已做/未做/验收全量待办**（Turnstile VM） |
+| `quota-semantics.md` / `deployment.md` | 额度 / 部署 |
+| `upstream-sse-conversation.md` | SSE 事件语义 |
+| `logs/` / `archive/` | 月度日志 / 归档长文 |
 
 ## 更新纪律
 
-- 先确认事实，再写文档。
-- 不把推测写成结论；不确定项统一标成“待确认”。
-- 历史日志只追加，不回写旧日志改历史。
-- 代码、测试或命令结果发生变化时，优先更新 `02-current-state.md`。
-- 若路线、优先级或长期待办变化，再同步更新 `03-roadmap.md` 和 `04-improvement-backlog.md`。
-
-## 当前维护入口
-
-- 想快速看现在：先读 `02-current-state.md`
-- 想继续上次工作：先读 `06-handoff.md`
-- 想改额度 / 健康页 / 账号展示：先读 `quota-semantics.md`
-- 想上生产热更新：先读 `deployment.md`「Panda 生产热更新」
-- 想按固定规则接手：先读 `05-ai-maintenance-playbook.md`
-- 想执行账号池性能升级：先读根目录 `../plan.md`，再读 `07-account-pool-performance-upgrade.md`、`sync-strategy.md` 和 `performance-acceptance-test-plan.md`
-- 想执行 NewAPI 生图入口异步化 / 6+burst8 / 带宽窗口：先读 `08-image-pipeline-newapi-async-plan.md`
-
-## 专题资料（非事实主档，作补充）
-
-- `docs/feature-status.en.md`
-- `docs/flaresolverr-cloudflare.md`
-- `docs/upstream-sse-conversation.md`
-- `docs/review.md`
-
-根目录 `README.md` 为对外介绍，不作为内部维护真相源。
-
-
-
+- 先证据后文档；推测标「待确认」。
+- `logs/` 只追加；不回写旧月日志改历史。
+- 状态变化优先改 `02` 摘要；路线/待办同步 `03`/`04`。

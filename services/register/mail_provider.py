@@ -1257,6 +1257,125 @@ def _normalize_outlook_pool(value: Any) -> list[dict[str, str]]:
     return []
 
 
+class YumailPoolProvider(BaseMailProvider):
+    """对接 mailManage / yumailManage 对外池（默认环回 :8782/api/v1）。
+
+    - acquire/register：领 yumail.co 池号
+    - wait_for_code：Outlook 走 Graph inbox；yumail.co 走 /pool/otp/poll
+    鉴权：Authorization Bearer 或 X-API-Key；Key 可配或读 data/runlogs/yumail_api_key.secret.txt
+    """
+
+    name = "yumail"
+    DEFAULT_API_BASE = "http://127.0.0.1:8782/api/v1"
+
+    def __init__(self, entry: dict, conf: dict):
+        super().__init__(conf, str(entry.get("provider_ref") or ""))
+        from services import yumail_otp as yumail_otp_mod
+
+        self._yumail = yumail_otp_mod
+        self.api_base = yumail_otp_mod.resolve_api_base(str(entry.get("api_base") or self.DEFAULT_API_BASE))
+        self.api_key = yumail_otp_mod.resolve_api_key(str(entry.get("api_key") or ""))
+        self.mode = str(entry.get("mode") or "acquire").strip().lower() or "acquire"
+        self.acquire_status = str(entry.get("acquire_status") or "active").strip() or "active"
+        self.acquire_tag = str(entry.get("acquire_tag") or "dispatchable").strip() or "dispatchable"
+        self.otp_sender_contains = str(entry.get("otp_sender_contains") or "openai").strip() or "openai"
+        self.otp_subject_contains = str(entry.get("otp_subject_contains") or "验证码").strip() or "验证码"
+        if not self.api_key:
+            raise RuntimeError("yumail_not_configured")
+
+    def _request(self, method: str, path: str, *, params: dict | None = None, payload: dict | None = None) -> dict:
+        from urllib.parse import urlencode
+
+        url = f"{self.api_base}{path}"
+        if params:
+            url = f"{url}?{urlencode(params)}"
+        return self._yumail._request_json(
+            method,
+            url,
+            api_key=self.api_key,
+            payload=payload,
+            timeout=float(self.conf.get("request_timeout") or 45),
+        )
+
+    def create_mailbox(self, username: str | None = None) -> dict[str, Any]:
+        if self.mode == "register":
+            data = self._request(
+                "POST",
+                "/pool/register",
+                payload={"username": username, "auto_activate": True, "import_to_accounts": True},
+            )
+            email = str(data.get("email") or "").strip()
+            if not email:
+                raise RuntimeError("yumail_register_empty")
+            return {
+                "provider": self.name,
+                "provider_ref": self.provider_ref,
+                "address": email,
+                "email": email,
+                "password": str(data.get("password") or ""),
+            }
+        # acquire：优先 /pool/accounts/acquire；失败再扫 /pool/accounts
+        try:
+            data = self._request(
+                "POST",
+                "/pool/accounts/acquire",
+                params={
+                    "business": "openai",
+                    "status": self.acquire_status,
+                    "tag": self.acquire_tag,
+                },
+            )
+        except Exception:
+            data = {}
+        email = str(data.get("email") or "").strip()
+        if not email:
+            listed = self._request("GET", "/pool/accounts", params={"status": self.acquire_status})
+            items = listed.get("items") if isinstance(listed.get("items"), list) else []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                tags = item.get("tags") if isinstance(item.get("tags"), list) else []
+                if self.acquire_tag and self.acquire_tag not in tags and tags:
+                    continue
+                email = str(item.get("email") or "").strip()
+                if email:
+                    data = item
+                    break
+        if not email:
+            raise RuntimeError("yumail_acquire_empty")
+        return {
+            "provider": self.name,
+            "provider_ref": self.provider_ref,
+            "address": email,
+            "email": email,
+            "password": str(data.get("password") or ""),
+        }
+
+    def fetch_latest_message(self, mailbox: dict[str, Any]) -> dict[str, Any] | None:
+        # OTP 走 wait_for_code 专用路径；inbox 探测仅占位。
+        return None
+
+    def wait_for_code(self, mailbox: dict[str, Any]) -> str | None:
+        email = str(mailbox.get("address") or mailbox.get("email") or "").strip()
+        if not email:
+            raise RuntimeError("yumail_mailbox_email_required")
+        boundary = mailbox.get("_code_not_before")
+        try:
+            return self._yumail.wait_for_code_by_email(
+                email,
+                not_before=boundary if isinstance(boundary, datetime) else None,
+                timeout_sec=float(self.conf.get("wait_timeout") or 180),
+                poll_interval=float(self.conf.get("wait_interval") or 4),
+                api_base=self.api_base,
+                api_key=self.api_key,
+            )
+        except RuntimeError as exc:
+            text = str(exc)
+            if "timeout" in text.lower():
+                return None
+            raise
+
+
 class OutlookTokenProvider(BaseMailProvider):
     """使用 refresh_token 读取 Outlook/Hotmail 邮箱验证码。
 
@@ -1559,6 +1678,8 @@ def _create_provider(mail_config: dict, provider: str = "", provider_ref: str = 
         return InbucketMailProvider(entry, conf)
     if entry["type"] == "yyds_mail":
         return YydsMailProvider(entry, conf)
+    if entry["type"] == "yumail":
+        return YumailPoolProvider(entry, conf)
     if entry["type"] == "outlook_token":
         return OutlookTokenProvider(entry, conf)
     raise RuntimeError(f"不支持的 mail.provider: {entry['type']}")

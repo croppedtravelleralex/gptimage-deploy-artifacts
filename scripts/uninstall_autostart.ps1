@@ -12,10 +12,12 @@ if ($null -ne $task) {
 
 $startupDir = [Environment]::GetFolderPath("Startup")
 if (-not [string]::IsNullOrWhiteSpace($startupDir)) {
-    $startupCmd = Join-Path $startupDir "$TaskName.cmd"
-    if (Test-Path -LiteralPath $startupCmd) {
-        Remove-Item -LiteralPath $startupCmd -Force
-        Write-Host "autostart_removed=startup_folder path=$startupCmd"
+    foreach ($ext in @(".cmd", ".vbs", ".lnk")) {
+        $startupItem = Join-Path $startupDir ($TaskName + $ext)
+        if (Test-Path -LiteralPath $startupItem) {
+            Remove-Item -LiteralPath $startupItem -Force
+            Write-Host "autostart_removed=startup_folder path=$startupItem"
+        }
     }
 }
 

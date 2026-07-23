@@ -32,6 +32,15 @@ export type Account = {
   }>;
   default_model_slug?: string | null;
   restore_at?: string | null;
+  lazy_refresh_eligible_at?: string | null;
+  lazy_refresh_in_sec?: number | null;
+  image_next_ok_ts?: number | null;
+  image_next_ok_at?: string | null;
+  image_next_ok_in_sec?: number | null;
+  text_next_ok_ts?: number | null;
+  text_next_ok_at?: string | null;
+  text_next_ok_in_sec?: number | null;
+  text_last_gap_sec?: number | null;
   success: number;
   fail: number;
   /** 当前图片在途数(正在生成、尚未结束的图片数)。号池空闲时持续 > 0 表示并发槽位泄漏。 */
@@ -58,12 +67,26 @@ export type Account = {
   proxy_scope?: string | null;
   proxy_node_id?: string | null;
   proxy_egress_ip?: string | null;
+  proxy_binding_hash?: string | null;
   proxy_egress_hash?: string | null;
+  registration_egress_hash?: string | null;
+  egress_daily?: Array<{ date?: string; ip?: string; hash?: string; status?: string }> | null;
+  cf_daily?: Array<{ date?: string; ok?: number; cf?: number; image_fail?: number }> | null;
   traffic_total_bytes?: number | null;
   traffic_uploaded_bytes?: number | null;
   traffic_downloaded_bytes?: number | null;
   traffic_updated_at?: string | null;
+  image_soft_band?: number | null;
+  image_soft_used_ratio?: number | null;
+  image_soft_capped?: boolean | null;
+  image_soft_band_override?: number | null;
+  maturity_stage?: string | null;
+  maturity_checked_at?: string | null;
+  cohort_id?: string | null;
+  fp?: Record<string, unknown> | string | null;
+  fp_origin?: string | null;
   created_at?: string | null;
+  last_refresh_error?: string | null;
   outlook_recovery_state?: string | null;
   outlook_recovery_terminal_reason?: string | null;
   outlook_recovery_terminal_at?: string | null;
@@ -182,6 +205,12 @@ export type AccountActivityDailyResponse = {
     uploaded: number;
     received: number;
     deleted: number;
+    images?: number;
+    images_api?: number;
+    images_chat?: number;
+    dialogues?: number;
+    dialogues_real?: number;
+    dialogues_nurture?: number;
   }>;
 };
 
@@ -691,6 +720,21 @@ export async function syncAccountsToPanda() {
   });
 }
 
+
+export async function setAccountScheduling(accessToken: string, enabled: boolean) {
+  return httpRequest<{ ok: boolean; enabled: boolean; item?: Account }>("/api/accounts/scheduling", {
+    method: "POST",
+    body: { access_token: accessToken, enabled },
+  });
+}
+
+export async function setAccountsSchedulingBulk(accessTokens: string[], enabled: boolean) {
+  return httpRequest<{ ok: boolean; updated: number; enabled: boolean }>("/api/accounts/scheduling/bulk", {
+    method: "POST",
+    body: { access_tokens: accessTokens, enabled },
+  });
+}
+
 export async function fetchAccountActivityDaily(days = 14) {
   return httpRequest<AccountActivityDailyResponse>(`/api/accounts/activity/daily?days=${days}`);
 }
@@ -859,6 +903,26 @@ export async function updateAccount(
   });
 }
 
+export async function setAccountSoftBand(accessToken: string, percent: number | null) {
+  return httpRequest<{ item: Account; stats?: AccountListResponse["stats"] }>("/api/accounts/soft-band", {
+    method: "POST",
+    body:
+      percent === null
+        ? { access_token: accessToken, clear: true }
+        : { access_token: accessToken, percent, clear: false },
+  });
+}
+
+export type AccountUsageRecentResponse = {
+  days: number;
+  dates: string[];
+  by_email: Record<string, Array<{ date: string; images: number; dialogues: number }>>;
+};
+
+export async function fetchAccountsUsageRecent(days = 6) {
+  return httpRequest<AccountUsageRecentResponse>(`/api/accounts/usage/recent?days=${days}`);
+}
+
 export async function generateImage(prompt: string, model?: ImageModel, size?: string, quality = "auto") {
   return httpRequest<ImageResponse>(
     "/v1/images/generations",
@@ -958,6 +1022,12 @@ export async function resumeImagePoll(taskId: string, extraTimeoutSecs = 30) {
   return httpRequest<ImageTask>(`/api/image-tasks/${encodeURIComponent(taskId)}/resume-poll`, {
     method: "POST",
     body: { extra_timeout_secs: extraTimeoutSecs },
+  });
+}
+
+export async function cancelImageTask(taskId: string) {
+  return httpRequest<ImageTask>(`/api/image-tasks/${encodeURIComponent(taskId)}/cancel`, {
+    method: "POST",
   });
 }
 
@@ -1139,6 +1209,129 @@ export async function updateUserKey(keyId: string, updates: { enabled?: boolean;
 export async function deleteUserKey(keyId: string) {
   return httpRequest<{ items: UserKey[] }>(`/api/auth/users/${keyId}`, {
     method: "DELETE",
+  });
+}
+
+
+export async function fetchOpsTools() {
+  return httpRequest<{ tools: Array<{ name: string; description: string; mutate: boolean }> }>("/api/ops/tools");
+}
+
+export async function runOpsAgent(query: string, max_tools = 4) {
+  return httpRequest<{
+    query: string;
+    plan: string[];
+    steps: Array<Record<string, unknown>>;
+    summary: string;
+    suggestions: string[];
+    latency_ms: number;
+  }>("/api/ops/agent", {
+    method: "POST",
+    body: { query, max_tools },
+  });
+}
+
+export type IpNurturePreset = {
+  id: string;
+  label: string;
+  weights: number[][];
+};
+
+export type IpNurtureBinding = {
+  binding_key: string;
+  preset_id: string;
+  label?: string;
+  custom_matrix?: number[][] | null;
+  updated_at?: string | null;
+};
+
+export async function fetchIpNurturePresets() {
+  return httpRequest<{ presets: IpNurturePreset[] }>("/api/ops/ip-nurture/presets");
+}
+
+export async function fetchIpNurtureBindings() {
+  return httpRequest<{ bindings: IpNurtureBinding[] }>("/api/ops/ip-nurture/bindings");
+}
+
+export async function saveIpNurtureBinding(
+  binding_key: string,
+  preset_id: string,
+  custom_matrix?: number[][],
+) {
+  return httpRequest<{ binding: IpNurtureBinding }>("/api/ops/ip-nurture/bindings", {
+    method: "POST",
+    body: { binding_key, preset_id, custom_matrix },
+  });
+}
+
+export async function fetchNurtureStatus() {
+  return httpRequest<{
+    enabled: boolean;
+    worker_alive: boolean;
+    running: boolean;
+    queue: { depth: number; oldest_age_sec: number };
+    completed_in_hour?: number;
+    max_per_hour?: number;
+    completed_in_day?: number;
+    max_per_account_per_day?: number;
+    turns_per_session?: number;
+    last_error: string;
+    last_ok_at: number | null;
+    require_persist_history: boolean;
+    auto_enqueue: boolean;
+    prompt_count: number;
+  }>("/api/ops/nurture/status");
+}
+
+export async function setNurtureEnabled(enabled: boolean) {
+  return httpRequest<Record<string, unknown>>("/api/ops/nurture/enable", {
+    method: "POST",
+    body: { enabled },
+  });
+}
+
+export async function enqueueNurture(body: { prompt?: string; email?: string; source?: string } = {}) {
+  return httpRequest<{ item_id: string; queue: { depth: number }; prompt_chars: number }>("/api/ops/nurture/enqueue", {
+    method: "POST",
+    body,
+  });
+}
+
+export async function processNurtureOne(
+  body: { prompt?: string; email?: string; access_token?: string; source?: string } = {},
+) {
+  return httpRequest<{
+    ok?: boolean;
+    chars_out?: number;
+    prompt_chars?: number;
+    latency_ms?: number;
+  }>("/api/ops/nurture/process-one", {
+    method: "POST",
+    body,
+  });
+}
+
+export async function fetchHumanlikeDashboard() {
+  return httpRequest<Record<string, unknown>>("/api/ops/humanlike-dashboard");
+}
+
+export async function fetchRiskCalendar(days = 30) {
+  return httpRequest<{ days: number; items: Array<Record<string, unknown>> }>(`/api/ops/risk-calendar?days=${days}`);
+}
+
+
+export async function fetchRiskChecks(hours = 24) {
+  return httpRequest<{ items: Array<Record<string, unknown>> }>(`/api/ops/risk-checks?hours=${hours}`);
+}
+
+export async function runRiskCheck() {
+  return httpRequest<Record<string, unknown>>("/api/ops/risk-checks/run", { method: "POST", body: {} });
+}
+
+export async function runRiskAudit(force = false) {
+  return httpRequest<Record<string, unknown>>("/api/ops/risk-checks/run", {
+    method: "POST",
+    body: { force },
   });
 }
 

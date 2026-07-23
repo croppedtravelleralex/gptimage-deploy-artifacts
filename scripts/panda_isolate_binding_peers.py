@@ -88,7 +88,8 @@ def main() -> int:
         bad = [
             item
             for item in peers
-            if str(item.get("before_receive_state") or "").strip().lower() != "identity_isolated"
+            if str(item.get("before_receive_state") or "").strip().lower()
+            not in {"identity_isolated", "rejected"}
         ]
         result = {
             "ok": len(bad) == 0,

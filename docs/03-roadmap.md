@@ -1,89 +1,80 @@
 # 路线图
 
+最后校准：2026-07-22
+
 ## Now
 
+### 0. 严格纯 HTTP 生图（Sentinel / Turnstile）【P0】
 
-### 0. 执行账号池与生图性能升级计划（新增 2026-07-03）
+- 目标：生产 curl_cffi 路径触发 `image_gen` 并出图；禁浏览器/FlareSolverr 作数据面。
+- 当前事实：P1 finalize、P2 Turnstile VM、P3 strict auto-tool 均已打通；artifact `650e899084c3` 已正式部署 Panda。生产单账号/单 Webshare canary 已触发 `image_gen` 并成功下载 PNG `1254×1254`、`2,568,782` bytes（conversation `6a606849-e1b8-83ec-96e4-e7cfbbbf305b`）。期间 `/tasks` 出现 1 次 CF403，随后 conversation poll 恢复；未整单重试、未换号。详见 `docs/20`、`captures/spa/J-panda-production-pure-http-canary-20260722.json` / `04` **PROTO-PURE-HTTP**。
+- 当前事实：同账号保持原 fp/session 已换绑到新 IP `45.39.75.27`；串行 5 续验执行 `4/5`，前 3 次成功，第 4 次在活跃 SSE 流中 45 秒内未识别到明确 `image_gen` 后止损。首页软失败 403 为 `4/4`，但 requirements/prepare/start 未传播 CF，前三轮 `/tasks` 无 CF，第四轮未进入 poll；因此不能把旧 IP 定性为唯一主因。
+- 当前动作：先完成 SSE deadline/事件时间线与分阶段 CF 观测修复；45 秒保持验收线，诊断模式可在 gate fail 后继续只读监听同一流至 60 秒。完成前不补第 5 轮、不启动并发 4，也不重新提交整单。
+- 完成标准：见 `20` §4（非空 Turnstile + `image_gen` + Panda 串行 5 / 并发 4 `no_image_gen=0`）。
 
-- 目标：按根目录 `plan.md` 降低本地/Panda 账号池 IO、减少死号进入 Panda、保护同步入口、消除账号池并发 bug，并为 b64 回传建立独立窗口。
-- 预期产出：本地 SQLite 账号池、`1h/3h/6h` 探测、高水位同步、Panda 低写放大存储、同步入口保护、同步/异步双通道生图队列、CPU deadlock_guard、多轮测试报告。
-- 进入条件：执行前完成备份、明确回滚路径、读取 `docs/07-account-pool-performance-upgrade.md`、`docs/sync-strategy.md`、`docs/performance-acceptance-test-plan.md`。
-- 完成标准：`dictionary changed size during iteration=0`，Panda BlockIO 明显下降，import-batch 频率符合水位策略，异步 100 任务提交不丢任务/不重复上游提交，8 并发验收优于当前基线，CPU p95<=70%，CPU>=90% 触发 deadlock_guard，公共 API 不出现无限排队。
-- 依赖关系：Panda SSH 可用、本地账号池读写链路确认、SQLite 迁移脚本、Nginx / 应用层同步保护、压测脚本。
-- 进展：2026-07-04 生图 P6 本地代码已落地并部署到 Panda（SQLite 中央队列、`timeout_pending`、deadlock_guard、maintenance pause），受影响测试集合 71 passed；生产 12 异步任务受控压测 12/12 成功；R5.5 真实 100 任务压测、b64 回传窗口和账号池 SQLite 仍未完成。
+### 1. Panda 低并发生图恢复观察
 
-### ~~1. 完成当前额度语义修复的远端验收~~（已完成 2026-06-29）
+- 目标：确认恢复后真实业务不再被 `image_generation_paused` 或历史队列卡住。
+- 当前事实：Panda `12/12` 可调度；refresh/maintenance 自动删 invalid 已关闭；IMG-017 conversation-ready deadline、post-ready 15 秒转轮询、hard-timeout cancel/timeout_pending 与 session executor 回收已部署。2026-07-10 直连同步 canary `78.91s` 成功，线程 `2 -> 2`，无 `CLOSE_WAIT`，`unfinished={}`。
+- 完成标准：
+  - 真实业务低并发连续运行稳定
+  - `image_tasks.db` 无 queued/running 残留
+  - 日志无 502/524、Traceback、`image service busy` 大量出现
+  - NewAPI/Relai 无长期排队
 
-- 目标：确认真无限额、未知额度、普通额度的展示和统计都符合当前代码逻辑
-- 完成事实：已部署至 Panda VPS（`ssh panda`，`/root/gptimage`）；公网 health JSON 已含 `unknown_quota_count`
-- 规范文档：`docs/quota-semantics.md`
-- 后续：仅需 spot-check 账号页展示，无需重复部署除非回滚或新改动
+### 2. 恢复 Panda clean 可调度池
 
-### 1. 收口“刷新 -> 增量同步 -> 本地删除”链路
+- 目标：把 Panda 可调度面从当前 12 个 clean 账号继续恢复到可支撑业务的安全水位。
+- 当前事实：2026-07-22 最新健康为 `total=14 / schedulable=11 / dispatchable=11`；`iv***3` 已通过 Panda 转发 Webshare + 本机 Camoufox OTP 换新 token，并在 Panda `/backend-api/me` 验证 quota 25 后安全替换旧 token。Outlook `token invalidated` 不能清证据硬恢复；其余目标仍须逐号执行同一“新 token 隔离 → Panda 实测 → 删除旧 token”流程。
+- 完成标准：
+  - 从本地 clean ready 池自动或手动补 Panda，成功 ACK 后本地删除
+  - Outlook invalid 只允许新 token 经过 Panda 实测后再入池，UI/CLI 失败必须保留旧记录
+  - `dispatchable_candidate_count` 明显提升
+  - `panda_incoming_count` 不持续堆积
+  - 同步失败仍留本地主池，不回到 pending
 
-- 目标：刷新出可用账号后，能及时进入 Panda 增量同步；同步成功后按配置删除本地账号
-- 预期产出：手动刷新、慢刷和 watcher 的行为口径一致
-- 进入条件：Panda 远端 auth key 与 base_url 正常
-- 完成标准：成功账号进入同步，失败账号进入 pending，成功后本地可删除
-- 依赖关系：Panda 远端可访问、同步接口稳定
+### 3. 账号调度可观测性
 
-### 2. 维持注册后验号的稳定性
-
-- 目标：把注册后 5 分钟内的异常区分成 transient、invalid、normal 三类
-- 预期产出：诊断日志更容易定位问题
-- 进入条件：已有诊断日志和测试基线
-- 完成标准：超时 / 代理抖动不会被误判成死号
-- 依赖关系：代理、邮箱链路、OpenAI 侧网络稳定性
+- 目标：让 `no available image quota` 能解释清楚具体排除原因。
+- 当前事实：上传链路已先暴露 details，可解释 eligible、远端缺失重传、已在远端、水位/配置/失败证据阻断；生图调度 breakdown 仍待补。
+- 完成标准：
+  - health 或管理接口暴露候选排除 breakdown
+  - 调度失败日志能区分状态、失败证据、接收态、backoff、并发占用、额度新鲜度
+  - 不引入自动删号风险
 
 ## Next
 
-### 1. 补强观察和告警
+### 1. SQLite mmap / cache / checkpoint 小步实验
 
-- 目标：把健康页、统计和日志进一步变成可读的运维信号
-- 预期产出：更清晰的失败类型和趋势
-- 进入条件：当前主链路验收完成
-- 完成标准：运维人员能从文档和页面快速判断是否需要处理
-- 依赖关系：日志结构和监控约定
+- 目标：评估 SQLite 读性能优化是否对账号页、health、任务状态查询有实际收益。
+- 当前事实：已有 WAL / NORMAL / busy_timeout；未启 mmap。
+- 完成标准：
+  - 本地和 Panda 小流量数据证明 p95 或 CPU sys 下降
+  - RSS / 容器内存不接近 85% 墙
+  - 无 `database locked` 增加
 
-### 2. 减少账号池与同步链路的重复判断
+### 2. image_tasks.db 结果瘦身
 
-- 目标：减少多个入口对同一语义重复实现
-- 预期产出：更少的分支误差
-- 进入条件：当前语义修复稳定
-- 完成标准：账号状态、额度状态、可调度状态只有一套判定口径
-- 依赖关系：服务层与前端约定统一
+- 目标：避免终态任务大结果继续推高 DB 体积，复发启动 OOM/502。
+- 完成标准：
+  - 终态任务不被启动全量加载
+  - 状态查询不读 b64 大字段
+  - DB/WAL 大小有监控或保留期策略
 
-### 3. 让维护文档和公共 README 更容易对齐
+### 3. NewAPI 异步适配/回调
 
-- 目标：降低新接手时的认知成本
-- 预期产出：对外介绍与内部维护入口分层清晰
-- 进入条件：维护主档已经落地
-- 完成标准：接手时先看 docs 就能知道状态与下一步
-- 依赖关系：文档更新纪律
+- 目标：解决 NewAPI/Cloudflare 同步长连接在 24 路以上断流的问题。
+- 当前事实：Panda 后台队列能力不等于同步入口体验稳定。
+- 完成标准：NewAPI 侧以异步 task/callback 或短等待 admission 控制承载高并发。
 
 ## Later
 
-### 1. 更细的调度与回退策略
+### 1. 调度升档策略
 
-- 目标：让刷新、保活、同步、删除之间的策略更稳
-- 预期产出：更少误删、误判和资源浪费
-- 进入条件：现有主链路稳定
-- 完成标准：策略可配置、可观测、可回退
-- 依赖关系：长期运行数据与指标
+- 目标：在 clean 可调度池恢复后，逐步评估 `submit_workers`、`per_user_running_max`、`image_global_concurrency` 和 burst。
+- 完成标准：每次只改一个变量，并有 before/after 资源、成功率、账号消耗数据。
 
-### 2. 更完整的端到端验收脚本
+### 2. 文档自动化
 
-- 目标：把常用运维动作变成可复用的自动化验收
-- 预期产出：部署后可快速证明功能是否正常
-- 进入条件：核心链路已稳定
-- 完成标准：一组脚本能验证刷新、同步、删除、健康页
-- 依赖关系：测试环境和授权
-
-### 3. 更系统的文档自动化
-
-- 目标：减少“改了代码却忘了改文档”的概率
-- 预期产出：日志、待办和交接能更自动地被维护
-- 进入条件：现有 docs 结构稳定
-- 完成标准：每次会话结束时有固定回写动作
-- 依赖关系：维护纪律和工具链
-
+- 目标：防止当前事实再次被历史流水淹没。
+- 完成标准：主状态短版、月度日志流水、archive 追溯三层持续执行。

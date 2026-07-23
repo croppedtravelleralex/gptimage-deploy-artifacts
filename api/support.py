@@ -53,7 +53,15 @@ def resolve_image_base_url(request: Request) -> str:
 def raise_image_quota_error(exc: Exception) -> None:
     message = str(exc)
     if "no available image quota" in message.lower():
-        raise HTTPException(status_code=429, detail={"error": "no available image quota"}) from exc
+        detail: dict = {"error": "no available image quota"}
+        breakdown = getattr(exc, "breakdown", None)
+        if isinstance(breakdown, dict):
+            detail["schedulable_breakdown"] = {
+                "buckets": breakdown.get("buckets"),
+                "primary_reason_counts": breakdown.get("primary_reason_counts"),
+                "runtime": breakdown.get("runtime"),
+            }
+        raise HTTPException(status_code=429, detail=detail) from exc
     raise HTTPException(status_code=502, detail={"error": message}) from exc
 
 

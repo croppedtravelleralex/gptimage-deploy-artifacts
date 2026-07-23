@@ -17,6 +17,7 @@ from services.image_return_window_service import image_return_window_service
 from services.image_storage_service import image_storage_service
 from services.openai_backend_api import (
     ImageContentPolicyError,
+    ImagePollRateLimitedError,
     ImagePollTimeoutError,
     ImageStreamCancelledError,
     InvalidAccessTokenError,
@@ -87,6 +88,17 @@ def is_token_invalid_error(message: str) -> bool:
     )
 
 
+def is_cf_edge_chat_error(message: str) -> bool:
+    """CF/边缘拦截：可换号重试，不等于 token 失效。"""
+    text = str(message or "").lower()
+    return (
+        "cloudflare_or_edge_html_block" in text
+        or "cf_edge_block" in text
+        or ("status=403" in text and ("conversation" in text or "chat_requirements" in text or "bootstrap" in text))
+        or ("http 403" in text and ("conversation" in text or "chat_requirements" in text))
+    )
+
+
 def prefer_stream_for_multi_image(body: dict[str, Any]) -> dict[str, Any]:
     """n>1 且未显式指定 stream 时默认开启 SSE，便于逐张返回结果。"""
     n = int(body.get("n") or 1)
@@ -98,6 +110,9 @@ def prefer_stream_for_multi_image(body: dict[str, Any]) -> dict[str, Any]:
 def is_tls_connection_error(message: str) -> bool:
     """检测 TLS/代理/网络连接错误，这类错误通常可以通过重试解决。"""
     text = str(message or "").lower()
+    # CF 边缘 HTML/403 不是 TLS 断连；避免 "proxy" 子串把 CF 误判成 connection failed
+    if is_cf_edge_chat_error(text):
+        return False
     return (
         "curl: (35)" in text
         or "curl: (56)" in text
@@ -136,8 +151,11 @@ def is_tls_connection_error(message: str) -> bool:
         or "connection closed abruptly" in text
         or "remote disconnected" in text
         or "connection reset by peer" in text
-        or "proxy" in text
-        or "network" in text
+        or "proxy connect" in text
+        or "proxy error" in text
+        or "socks proxy" in text
+        or "network unreachable" in text
+        or "network is unreachable" in text
         or "service unavailable" in text
     )
 
@@ -163,7 +181,8 @@ def is_rate_limit_http_error(message: object = None, status_code: object = None)
 def is_pre_conversation_transient_error(message: str) -> bool:
     text = str(message or "").lower()
     return (
-        is_tls_connection_error(text)
+        is_cf_edge_chat_error(text)
+        or is_tls_connection_error(text)
         or is_connection_timeout_error(text)
         or "http/2 stream" in text
         or "http2 stream" in text
@@ -194,6 +213,8 @@ def image_stream_error_message(message: str) -> str:
     text = str(message or "")
     if is_token_invalid_error(text):
         return "image generation failed"
+    if is_cf_edge_chat_error(text):
+        return "upstream CF edge blocked (403), please retry or switch proxy egress"
     if is_tls_connection_error(text):
         return "upstream image connection failed, please retry later"
     if is_connection_timeout_error(text):
@@ -445,6 +466,7 @@ class ConversationState:
     text: str = ""
     raw_text: str = ""
     conversation_id: str = ""
+    last_message_id: str = ""
     file_ids: list[str] = field(default_factory=list)
     sediment_ids: list[str] = field(default_factory=list)
     blocked: bool = False
@@ -519,8 +541,26 @@ def strip_history(text: str, history_text: str = "") -> str:
     return text
 
 
+_LEAKED_TOOL_CALL_RE = re.compile(
+    r"(?is)\b(?:search|web_search|browser|open_url|web\.search)\s*\(\s*"
+    r"(?:\[.*?\]|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')\s*\)\s*"
+)
+
+
+def strip_leaked_tool_calls(text: str) -> str:
+    """Remove model-leaked tool-call stubs like search(\"...\") from visible text."""
+    value = str(text or "")
+    if not value:
+        return value
+    prev = None
+    while prev != value:
+        prev = value
+        value = _LEAKED_TOOL_CALL_RE.sub("", value)
+    return value
+
+
 def sanitize_output_text(text: str) -> str:
-    text = str(text or "")
+    text = strip_leaked_tool_calls(str(text or ""))
 
     def is_internal_annotation_part(part: str) -> bool:
         value = part.strip()
@@ -716,6 +756,14 @@ def update_conversation_state(state: ConversationState, payload: str, event: dic
     value = event.get("v")
     if isinstance(value, dict):
         state.conversation_id = str(value.get("conversation_id") or state.conversation_id)
+    message = event.get("message") or (value.get("message") if isinstance(value, dict) else None)
+    if isinstance(message, dict):
+        msg_id = str(message.get("id") or "").strip()
+        author = message.get("author") or {}
+        role = str(author.get("role") or "").strip().lower()
+        # Parent for next turn should be the latest assistant (or tool) leaf, not the user echo.
+        if msg_id and role in {"assistant", "tool"}:
+            state.last_message_id = msg_id
     if event.get("type") == "moderation":
         moderation = event.get("moderation_response")
         if isinstance(moderation, dict) and moderation.get("blocked") is True:
@@ -733,6 +781,7 @@ def conversation_base_event(event_type: str, state: ConversationState, **extra: 
         "type": event_type,
         "text": state.text,
         "conversation_id": state.conversation_id,
+        "parent_message_id": state.last_message_id,
         "file_ids": list(state.file_ids),
         "sediment_ids": list(state.sediment_ids),
         "blocked": state.blocked,
@@ -807,7 +856,11 @@ def conversation_events(
 
 
 def text_backend() -> OpenAIBackendAPI:
-    return OpenAIBackendAPI(access_token=account_service.get_text_access_token())
+    from services.request_account_context import get_preferred_account_email
+
+    prefer = get_preferred_account_email()
+    token = account_service.get_text_access_token(preferred_email=prefer) if prefer else account_service.get_text_access_token()
+    return OpenAIBackendAPI(access_token=token)
 
 
 def _json_payload_bytes(value: object) -> int:
@@ -868,12 +921,24 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
         downloaded_bytes = 0
         request_started = False
         active_backend: OpenAIBackendAPI | None = None
+        started_at = time.monotonic()
+        outcome = "ok"
+        outcome_code = ""
+        seen_conversation_id = ""
+        seen_parent_message_id = ""
         try:
             if first_attempt:
                 active_backend = backend
                 first_attempt = False
             else:
                 active_backend = OpenAIBackendAPI(access_token=token)
+            try:
+                from services.account_warmup_service import account_warmup_service
+
+                acc = account_service.get_account(token) or {}
+                account_warmup_service.begin_chat_session(str(acc.get("email") or ""))
+            except Exception:
+                pass
             request_started = True
             for event in conversation_events(
                 active_backend,
@@ -882,6 +947,12 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
                 prompt=request.prompt,
                 thinking_effort=request.thinking_effort,
             ):
+                cid = str(event.get("conversation_id") or "").strip()
+                if cid:
+                    seen_conversation_id = cid
+                parent = str(event.get("parent_message_id") or "").strip()
+                if parent:
+                    seen_parent_message_id = parent
                 if event.get("type") != "conversation.delta":
                     continue
                 delta = str(event.get("delta") or "")
@@ -890,20 +961,78 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
                     downloaded_bytes += len(delta.encode("utf-8"))
                     yield delta
             account_service.mark_text_used(token)
+            if token and (seen_conversation_id or seen_parent_message_id):
+                account_service.remember_text_conversation(
+                    token,
+                    conversation_id=seen_conversation_id,
+                    parent_message_id=seen_parent_message_id,
+                )
             return
         except Exception as exc:
+            outcome = "error"
+            outcome_code = type(exc).__name__
             error_message = str(exc)
-            if token and not emitted and is_token_invalid_error(error_message):
-                refreshed_token = account_service.refresh_access_token(token, force=True, event="text_stream")
-                if refreshed_token and refreshed_token != token and refreshed_token not in attempted_tokens:
-                    token = refreshed_token
+            if token and not emitted and (
+                is_token_invalid_error(error_message) or is_cf_edge_chat_error(error_message)
+            ):
+                if is_token_invalid_error(error_message):
+                    refreshed_token = account_service.refresh_access_token(token, force=True, event="text_stream")
+                    if refreshed_token and refreshed_token != token and refreshed_token not in attempted_tokens:
+                        token = refreshed_token
+                    else:
+                        account_service.remove_invalid_token(token, "text_stream")
+                        token = account_service.get_text_access_token(attempted_tokens)
                 else:
-                    account_service.remove_invalid_token(token, "text_stream")
+                    # CF 边缘：勿删号；换其它可调度号继续，并下预热池
+                    try:
+                        from services.account_warmup_service import account_warmup_service
+
+                        acc = account_service.get_account(token) or {}
+                        account_warmup_service.demote(str(acc.get("email") or ""), reason="cf_edge_chat")
+                    except Exception:
+                        pass
+                    try:
+                        account_service.record_cf_sample(token, kind="cf")
+                    except Exception:
+                        pass
+                    logger.warning(
+                        {
+                            "event": "text_stream_cf_failover",
+                            "from_token_prefix": str(token or "")[:16],
+                            "error": error_message[:240],
+                        }
+                    )
                     token = account_service.get_text_access_token(attempted_tokens)
                 if token:
                     continue
             raise
         finally:
+            try:
+                if request_started:
+                    from services.log_service import log_llm_ops
+
+                    prompt_len = len(str(request.prompt or ""))
+                    if request.messages:
+                        prompt_len = max(
+                            prompt_len,
+                            sum(len(str(m.get("content") or "")) for m in request.messages if isinstance(m, dict)),
+                        )
+                    log_llm_ops(
+                        source="L0",
+                        kind="chat",
+                        access_token=attempt_token or token,
+                        latency_ms=int((time.monotonic() - started_at) * 1000),
+                        outcome=outcome,
+                        outcome_code=outcome_code,
+                        prompt_shape={
+                            "chars": prompt_len,
+                            "has_images": False,
+                            "model": str(request.model or ""),
+                            "has_conversation_id": bool(seen_conversation_id),
+                        },
+                    )
+            except Exception:
+                pass
             try:
                 if request_started and attempt_token:
                     account_service.record_account_traffic(
@@ -912,6 +1041,13 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
                         downloaded_bytes=downloaded_bytes,
                     )
             finally:
+                try:
+                    from services.account_warmup_service import account_warmup_service
+
+                    acc = account_service.get_account(attempt_token or token) or {}
+                    account_warmup_service.end_chat_session(str(acc.get("email") or ""))
+                except Exception:
+                    pass
                 if active_backend is not None:
                     _close_backend_quietly(active_backend)
 
@@ -1125,8 +1261,32 @@ def stream_image_outputs(
 
     try:
         image_urls = backend.resolve_conversation_image_urls(
-            conversation_id, file_ids, sediment_ids, poll_timeout_secs=poll_timeout,
+            conversation_id,
+            file_ids,
+            sediment_ids,
+            poll_timeout_secs=poll_timeout,
+            sse_image_gen_ms=getattr(backend, "_last_image_sse_gen_ms", None),
         )
+    except ImagePollRateLimitedError as exc:
+        try:
+            account_service.apply_429_cooldown(token, exc)
+        except Exception:
+            pass
+        try:
+            from services.proxy_cf_failover import swap_account_proxy_on_cf
+
+            swap_account_proxy_on_cf(token, threshold=1)
+        except Exception:
+            pass
+        raise ImageGenerationError(
+            str(exc) or "Image poll rate limited by upstream (HTTP 429).",
+            status_code=429,
+            error_type="rate_limit_error",
+            code="image_poll_rate_limited",
+            account_email=account_email,
+            conversation_id=getattr(exc, "conversation_id", conversation_id or ""),
+            access_token=token,
+        ) from exc
     except (ImageContentPolicyError, ImagePollTimeoutError) as exc:
         # 当检测到文本回复时，task error 不应直接判定为内容策略违规，
         # 因为图片可能仍在后台异步生成中
@@ -1454,11 +1614,15 @@ def _generate_single_image(
                 request.progress_callback("getting_account")
             plan_type, _ = split_image_model(request.model)
             codex_model = is_codex_image_model(request.model)
+            from services.request_account_context import get_preferred_account_email
+
+            prefer = get_preferred_account_email()
             token = account_service.get_available_access_token(
                 plan_type=plan_type,
                 source_type="codex" if codex_model else None,
                 plan_types=("plus", "team", "pro") if codex_model and not plan_type else None,
                 skip_global_limit=bool(request.queue_coordinated),
+                preferred_email=prefer,
             )
             if request.progress_callback:
                 request.progress_callback({"step": "account_acquired", "access_token": token})
@@ -1507,7 +1671,7 @@ def _generate_single_image(
                     uploaded_bytes=_image_request_bytes(request),
                     downloaded_bytes=_image_outputs_bytes(outputs),
                 )
-                account_service.mark_image_result(token, False)
+                account_service.mark_image_result(token, False, error="upstream text message instead of image")
                 return outputs
             if not returned_result:
                 account_service.record_account_traffic(
@@ -1515,7 +1679,7 @@ def _generate_single_image(
                     uploaded_bytes=_image_request_bytes(request),
                     downloaded_bytes=_image_outputs_bytes(outputs),
                 )
-                account_service.mark_image_result(token, False)
+                account_service.mark_image_result(token, False, error="upstream completed without generating images")
                 if emitted_for_token:
                     conv_id = outputs[-1].conversation_id if outputs else ""
                     raise ImageGenerationError(
@@ -1539,7 +1703,7 @@ def _generate_single_image(
             # error/timeout_pending 状态；这里不得再次 mark，避免重复释放和误增失败数。
             raise
         except InvalidAccessTokenError as exc:
-            account_service.mark_image_result(token, False)
+            account_service.mark_image_result(token, False, error=exc)
             if account_email:
                 setattr(exc, "account_email", account_email)
             conversation_id = _conversation_id_from_exception(exc)
@@ -1578,7 +1742,7 @@ def _generate_single_image(
                 access_token=token,
             ) from exc
         except ImagePollTimeoutError as exc:
-            account_service.mark_image_result(token, False)
+            account_service.mark_image_result(token, False, error=exc)
             if account_email:
                 setattr(exc, "account_email", account_email)
             conversation_id = str(getattr(exc, "conversation_id", "") or "").strip()
@@ -1612,6 +1776,13 @@ def _generate_single_image(
                         "index": index,
                         "error": str(exc)[:200],
                     })
+                    # pin 住故障号时若不清除 preferred，会反复拿到同一账号。
+                    try:
+                        from services.request_account_context import set_preferred_account_email
+
+                        set_preferred_account_email("")
+                    except Exception:
+                        pass
                     continue
                 logger.warning({
                     "event": "image_poll_timeout_exhausted_retries",
@@ -1623,7 +1794,7 @@ def _generate_single_image(
                 raise
             raise
         except ImageContentPolicyError as exc:
-            account_service.mark_image_result(token, False)
+            account_service.mark_image_result(token, False, error=exc)
             logger.warning({
                 "event": "image_stream_content_policy_error",
                 "request_token": token,
@@ -1640,7 +1811,7 @@ def _generate_single_image(
                 conversation_id=getattr(exc, "conversation_id", ""),
             ) from exc
         except ImageGenerationError as exc:
-            account_service.mark_image_result(token, False)
+            account_service.mark_image_result(token, False, error=exc)
             if is_rate_limit_http_error(exc, getattr(exc, "status_code", None)):
                 try:
                     account_service.apply_429_cooldown(token, exc)
@@ -1688,7 +1859,7 @@ def _generate_single_image(
             })
             raise
         except Exception as exc:
-            account_service.mark_image_result(token, False)
+            account_service.mark_image_result(token, False, error=exc)
             last_error = str(exc)
             if is_rate_limit_http_error(last_error, getattr(exc, "status_code", None)):
                 try:
@@ -1709,6 +1880,44 @@ def _generate_single_image(
                     continue
                 account_service.remove_invalid_token(token, "image_stream")
                 continue
+            if not emitted_for_token and is_cf_edge_chat_error(last_error):
+                pre_conversation_transient_count += 1
+                max_attempts = max(1, int(config.image_pre_conversation_max_attempts))
+                try:
+                    from services.account_warmup_service import account_warmup_service
+
+                    account_warmup_service.demote(account_email, reason="cf_edge_image")
+                except Exception:
+                    pass
+                try:
+                    from services.request_account_context import set_preferred_account_email
+
+                    set_preferred_account_email("")
+                except Exception:
+                    pass
+                try:
+                    account_service.record_image_transient_backoff(token, last_error)
+                except Exception:
+                    pass
+                logger.warning({
+                    "event": "image_stream_cf_failover",
+                    "request_token": token,
+                    "account_email": account_email,
+                    "attempt": pre_conversation_transient_count,
+                    "max_attempts": max_attempts,
+                    "index": index,
+                    "error": last_error[:240],
+                })
+                if pre_conversation_transient_count < max_attempts:
+                    wait_secs = max(0.0, float(config.image_pre_conversation_retry_backoff_secs))
+                    if wait_secs > 0:
+                        time.sleep(min(wait_secs, 1.5))
+                    continue
+                raise ImageGenerationError(
+                    image_stream_error_message(last_error),
+                    account_email=account_email,
+                    conversation_id="",
+                ) from exc
             if not emitted_for_token and is_pre_conversation_transient_error(last_error):
                 pre_conversation_transient_count += 1
                 max_attempts = max(1, int(config.image_pre_conversation_max_attempts))

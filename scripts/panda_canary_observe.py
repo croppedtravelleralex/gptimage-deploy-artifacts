@@ -2,6 +2,7 @@
 """Panda canary observation snapshot (T+0 / T+1h / ...).
 
 Reads local SQLite + health; never prints secrets. Writes t{label}.json under --out-dir.
+Optional --write-maturity updates maturity_stage / maturity_checked_at on matched accounts.
 """
 from __future__ import annotations
 
@@ -51,7 +52,11 @@ def _account_view(account: dict[str, Any]) -> dict[str, Any]:
         "registration_proxy_hash": account.get("registration_proxy_hash"),
         "fp_hash": _sha(fp, 16) if fp else "",
         "fp_origin": account.get("fp_origin"),
+        "fp_impersonate": (fp or {}).get("impersonate") if isinstance(fp, dict) else None,
         "traffic_total_bytes": account.get("traffic_total_bytes"),
+        "maturity_stage": account.get("maturity_stage"),
+        "maturity_checked_at": account.get("maturity_checked_at"),
+        "cohort_id": account.get("cohort_id"),
         "success": int(account.get("success") or 0),
         "fail": int(account.get("fail") or 0),
         "invalid_count": int(account.get("invalid_count") or 0),
@@ -63,13 +68,51 @@ def _health(url: str) -> dict[str, Any]:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _write_maturity(db: Path, token_hashes: set[str], stage: str) -> int:
+    """Persist maturity_stage for matching token hashes. Returns updated row count."""
+    now = datetime.now(timezone.utc).isoformat()
+    con = sqlite3.connect(str(db))
+    rows = con.execute("select access_token, data from accounts").fetchall()
+    updated = 0
+    for access_token, raw in rows:
+        try:
+            item = json.loads(raw)
+        except Exception:
+            continue
+        if not isinstance(item, dict):
+            continue
+        th = _token_hash(item.get("access_token") or access_token)
+        if th not in token_hashes:
+            continue
+        item["maturity_stage"] = stage
+        item["maturity_checked_at"] = now
+        con.execute(
+            "update accounts set data = ? where access_token = ?",
+            (json.dumps(item, ensure_ascii=False), access_token),
+        )
+        updated += 1
+    con.commit()
+    con.close()
+    return updated
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--label", required=True, help="t0 / t1h / t6h / t24h / t72h")
     parser.add_argument("--db", default="/root/gptimage/data/accounts.db")
     parser.add_argument("--health-url", default="http://127.0.0.1:8012/health?format=json")
-    parser.add_argument("--token-hash", default="", help="optional canary token hash filter")
+    parser.add_argument("--token-hash", default="", help="optional canary token hash filter (16 hex)")
     parser.add_argument("--out-dir", required=True)
+    parser.add_argument(
+        "--write-maturity",
+        action="store_true",
+        help="write maturity_stage=<label> for filtered accounts (identity_isolated or --token-hash)",
+    )
+    parser.add_argument(
+        "--maturity-isolated-only",
+        action="store_true",
+        help="when writing maturity without --token-hash, only touch identity_isolated accounts",
+    )
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -77,7 +120,27 @@ def main() -> int:
     accounts = _load_accounts(Path(args.db))
     views = [_account_view(a) for a in accounts]
     if args.token_hash:
-        views = [v for v in views if v["token_hash"] == args.token_hash]
+        views = [v for v in views if v["token_hash"] == args.token_hash or v["token_hash"].startswith(args.token_hash)]
+
+    if args.write_maturity:
+        if args.token_hash:
+            targets = {v["token_hash"] for v in views}
+        elif args.maturity_isolated_only:
+            targets = {
+                _token_hash(a.get("access_token"))
+                for a in accounts
+                if str(a.get("panda_receive_state") or "") == "identity_isolated"
+            }
+        else:
+            raise SystemExit("--write-maturity requires --token-hash or --maturity-isolated-only")
+        updated = _write_maturity(Path(args.db), targets, str(args.label))
+        # reload views after write
+        accounts = _load_accounts(Path(args.db))
+        views = [_account_view(a) for a in accounts]
+        if args.token_hash:
+            views = [v for v in views if v["token_hash"] == args.token_hash or v["token_hash"].startswith(args.token_hash)]
+        print(json.dumps({"maturity_updated": updated, "stage": args.label}, ensure_ascii=False))
+
     health = _health(args.health_url)
     payload = {
         "label": args.label,
@@ -95,6 +158,7 @@ def main() -> int:
             "with_fp": sum(1 for v in views if v.get("fp_hash")),
             "with_egress": sum(1 for v in views if v.get("proxy_egress_hash")),
             "with_proxy": sum(1 for v in views if v.get("proxy_present")),
+            "with_maturity": sum(1 for v in views if v.get("maturity_stage")),
         },
     }
     path = out_dir / f"{args.label}.json"

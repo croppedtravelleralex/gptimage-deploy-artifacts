@@ -38,6 +38,7 @@ from services.cpa_service import cpa_config, cpa_import_service, list_remote_fil
 from services.oauth_login_service import OAuthLoginError, oauth_login_service
 from services.outlook_account_recovery_service import outlook_account_recovery_service
 from services.outlook_auto_recovery_loop_service import outlook_auto_recovery_loop_service
+from services.proactive_refresh_loop_service import proactive_refresh_loop_service
 from services.sub2api_service import (
     list_remote_accounts as sub2api_list_remote_accounts,
     list_remote_groups as sub2api_list_remote_groups,
@@ -166,6 +167,24 @@ class AccountUpdateRequest(BaseModel):
     status: str | None = None
     quota: int | None = None
     proxy: str | None = None
+
+
+class AccountSoftBandRequest(BaseModel):
+    access_token: str = ""
+    percent: float | None = None
+    clear: bool = False
+
+
+class AccountSchedulingRequest(BaseModel):
+    access_token: str = ""
+    enabled: bool = True
+    reason: str = ""
+
+
+class AccountSchedulingBulkRequest(BaseModel):
+    access_tokens: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    reason: str = ""
 
 
 class CPAPoolCreateRequest(BaseModel):
@@ -474,6 +493,50 @@ def create_router() -> APIRouter:
         require_admin(authorization)
         return account_service.get_activity_daily(days=days)
 
+    @router.get("/api/accounts/usage/recent")
+    async def get_accounts_usage_recent(
+            authorization: str | None = Header(default=None),
+            days: int = Query(default=6, ge=1, le=14),
+    ):
+        """号池「记录」列：今日 + 过去若干日的生图/对话次数。"""
+        require_admin(authorization)
+        return await run_in_threadpool(account_service.get_accounts_usage_recent, days)
+
+    @router.post("/api/accounts/soft-band")
+    async def set_account_soft_band(
+            body: AccountSoftBandRequest,
+            authorization: str | None = Header(default=None),
+            include_items: bool = Query(default=False),
+    ):
+        """手动指定软限流%（5–99）；clear=true 清除覆盖。"""
+        require_admin(authorization)
+        access_token = str(body.access_token or "").strip()
+        if not access_token:
+            raise HTTPException(status_code=400, detail={"error": "access_token is required"})
+        percent: float | None
+        if body.clear:
+            percent = None
+        elif body.percent is None:
+            raise HTTPException(status_code=400, detail={"error": "percent is required unless clear=true"})
+        else:
+            percent = float(body.percent)
+            if percent < 5 or percent > 99:
+                raise HTTPException(status_code=400, detail={"error": "percent must be between 5 and 99"})
+        account = await run_in_threadpool(
+            account_service.set_soft_band_override,
+            access_token,
+            percent=percent,
+            quiet=False,
+        )
+        if account is None:
+            raise HTTPException(status_code=404, detail={"error": "account not found"})
+        response: dict = {"item": account}
+        if include_items:
+            response["items"] = account_service.list_accounts()
+        else:
+            response["stats"] = account_service.get_stats()
+        return response
+
     @router.get("/api/accounts/panda-sync")
     async def get_panda_sync_settings(authorization: str | None = Header(default=None)):
         require_admin(authorization)
@@ -713,6 +776,11 @@ def create_router() -> APIRouter:
         require_admin(authorization)
         return outlook_auto_recovery_loop_service.get_status()
 
+    @router.get("/api/accounts/proactive-refresh/status")
+    async def get_proactive_refresh_status(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return proactive_refresh_loop_service.get_status()
+
     @router.post("/api/accounts/outlook-auto-recovery")
     async def update_outlook_auto_recovery(
             body: OutlookAutoRecoveryUpdateRequest,
@@ -831,6 +899,61 @@ def create_router() -> APIRouter:
         else:
             response["stats"] = account_service.get_stats()
         return response
+
+    @router.get("/api/accounts/schedulable-breakdown")
+    async def get_schedulable_breakdown(
+            authorization: str | None = Header(default=None),
+    ):
+        """SCHED-001: structured exclusion buckets for image scheduling."""
+        require_admin(authorization)
+        return await run_in_threadpool(account_service.get_schedulable_breakdown)
+
+    @router.post("/api/accounts/scheduling")
+    async def set_account_scheduling(
+            body: AccountSchedulingRequest,
+            authorization: str | None = Header(default=None),
+    ):
+        """人工进/出调度：enabled=true → verified_ready；false → identity_isolated。"""
+        require_admin(authorization)
+        access_token = str(body.access_token or "").strip()
+        if not access_token:
+            raise HTTPException(status_code=400, detail={"error": "access_token is required"})
+        account = await run_in_threadpool(
+            account_service.set_account_scheduling,
+            access_token,
+            enabled=bool(body.enabled),
+            reason=str(body.reason or "").strip(),
+            quiet=False,
+        )
+        if account is None:
+            raise HTTPException(status_code=404, detail={"error": "account not found"})
+        return {
+            "item": account,
+            "enabled": account_service.is_manual_scheduling_enabled(account),
+            "stats": account_service.get_stats(),
+        }
+
+    @router.post("/api/accounts/scheduling/bulk")
+    async def set_accounts_scheduling_bulk(
+            body: AccountSchedulingBulkRequest,
+            authorization: str | None = Header(default=None),
+    ):
+        require_admin(authorization)
+        tokens = [str(token or "").strip() for token in (body.access_tokens or []) if str(token or "").strip()]
+        if not tokens:
+            raise HTTPException(status_code=400, detail={"error": "access_tokens is required"})
+        if len(tokens) > MAX_ACCOUNT_REFRESH_TOKENS:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"单次最多操作 {MAX_ACCOUNT_REFRESH_TOKENS} 个账号"},
+            )
+        result = await run_in_threadpool(
+            account_service.set_accounts_scheduling,
+            tokens,
+            enabled=bool(body.enabled),
+            reason=str(body.reason or "").strip(),
+        )
+        return result
 
     @router.post("/api/accounts/oauth/start")
     async def start_oauth_login(
