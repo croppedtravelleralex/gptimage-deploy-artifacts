@@ -393,15 +393,18 @@ class TextNurtureService:
         total_chars = 0
         completed_turns = 0
         try:
-            if isinstance(backend.account, dict):
-                backend.account = {
-                    **backend.account,
-                    "chat_persist_history": True,
-                    "chat_reuse_conversation": True,
-                }
             for idx, prompt in enumerate(prompts):
-                if idx > 0 and float(settings["turn_gap_sec"]) > 0:
-                    time.sleep(float(settings["turn_gap_sec"]))
+                if idx > 0:
+                    if float(settings["turn_gap_sec"]) > 0:
+                        time.sleep(float(settings["turn_gap_sec"]))
+                    # collect_text/stream_text_deltas close the backend after each turn.
+                    backend = OpenAIBackendAPI(access_token=token)
+                if isinstance(backend.account, dict):
+                    backend.account = {
+                        **backend.account,
+                        "chat_persist_history": True,
+                        "chat_reuse_conversation": True,
+                    }
                 text = collect_text(
                     backend,
                     ConversationRequest(model=model, prompt=prompt, messages=[{"role": "user", "content": prompt}]),

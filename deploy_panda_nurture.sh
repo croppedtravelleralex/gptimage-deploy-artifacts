@@ -16,6 +16,8 @@ PY_FILES=(
   services/account_service.py
   services/risk_dashboard_service.py
   api/ops.py
+  api/app.py
+  api/support.py
 )
 
 rollback_on_error() {
@@ -114,7 +116,7 @@ PY
 
 DEPLOYED=1
 
-python3 -m py_compile "${PY_FILES[@]/#/$ROOT/}" "$ROOT/api/ops.py"
+python3 -m py_compile "${PY_FILES[@]/#/$ROOT/}"
 
 docker exec \
   -e PYTHONPYCACHEPREFIX="/tmp/gptimage-pycache-$TS" \
@@ -125,7 +127,9 @@ docker exec \
   /app/services/config.py \
   /app/services/account_service.py \
   /app/services/risk_dashboard_service.py \
-  /app/api/ops.py
+  /app/api/ops.py \
+  /app/api/app.py \
+  /app/api/support.py
 
 docker restart chatgpt2api-local >/dev/null
 HEALTH_OK=0

@@ -2,13 +2,15 @@
   "release": "nurture-heatmap-20260723",
   "files": {
     "services/ip_nurture_schedule.py": "1b068b15d0e7bc04aba57d2629a9bf2d75bc8574070e90a2882d943026322de1",
-    "services/text_nurture_service.py": "be92cd8b9797c3779069b26a42416ef37a0c397bca01d72f2a45fbf8480fc3a8",
+    "services/text_nurture_service.py": "c366c0d0499ad17adc4d0493a24f48b3cf68cdb447bebf1736a2d20a22998e5c",
     "services/config.py": "37a3f036f1df301de1aa7d23d66861c9515c7edb07bbcd392abff2fd78226a57",
     "services/account_service.py": "0b91bfa60b6cc10470dd43393e29d38ed8aa63912b8b66f945632adb40941ad5",
     "services/risk_dashboard_service.py": "c94a306f2ab76faabb1e237b8fdb88cc0461c130fb7d19ac4c8f50d057723757",
     "api/ops.py": "ec66b52cd62486e8a5846b4f5193d9e2654f65cc2c062fff89d62ef2cc6e827a",
-    "web_dist.tgz": "106d1fa9359c1d4a0a62cbd4a8773783f11f4d0907ecf22f5593dd12c2de1b43",
-    "deploy_panda_nurture.sh": "17000f4e80c33f462b96ee8240e3e5aef694d205439007d74cad27bb4bfc743f",
+    "api/app.py": "786242c9a92b8cf332a0646ba0dc2fd3983088347ee5a6c590acd51a20160d6e",
+    "api/support.py": "5fcdc4259b55107e55f2822ec8fdafa692f9c2c1ed4e6fe643ec2161bbf83856",
+    "web_dist.tgz": "12dd6a6303502aa7675cf24b9ce9b95233cdc1153143ef6b4840516ce171d126",
+    "deploy_panda_nurture.sh": "e9011f9e894bdf5c18c5c1c3631337ba89a512f23eb22f640eb9057f7b580cdc",
     "README.md": "ff8adc19e1e8e8349e11f0ab13c551a15d795d9c654de44975b9682b27f4c8ca"
   }
 }
