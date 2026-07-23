@@ -68,7 +68,9 @@ PY
 mkdir -p "$BACKUP/services" "$BACKUP/api"
 for rel in "${PY_FILES[@]}"; do
   mkdir -p "$BACKUP/$(dirname "$rel")"
-  cp -a "$ROOT/$rel" "$BACKUP/$rel"
+  if [ -f "$ROOT/$rel" ]; then
+    cp -a "$ROOT/$rel" "$BACKUP/$rel"
+  fi
 done
 tar -czf "$BACKUP/web_dist.tgz" -C "$ROOT" web_dist
 cp -a "$ROOT/config.json" "$BACKUP/config.json"
