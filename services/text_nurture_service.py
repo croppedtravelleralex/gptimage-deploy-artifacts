@@ -141,6 +141,14 @@ class TextNurtureService:
     def status(self) -> dict[str, Any]:
         settings = _settings()
         with self._lock:
+            day = self._daily_key(settings)
+            limit = int(settings.get("max_per_account_per_day") or 0)
+            today_total = sum(int(count) for (_, d), count in self._daily_counts.items() if d == day)
+            at_cap = (
+                sum(1 for (_, d), count in self._daily_counts.items() if d == day and int(count) >= limit)
+                if limit > 0
+                else 0
+            )
             return {
                 "enabled": settings["enabled"],
                 "worker_alive": bool(self._thread and self._thread.is_alive()),
@@ -150,8 +158,8 @@ class TextNurtureService:
                 "max_per_hour": settings["max_per_hour"],
                 "max_per_account_per_day": settings["max_per_account_per_day"],
                 "turns_per_session": settings["turns_per_session"],
-                "today_completed_total": self._today_completed_total(settings),
-                "accounts_at_cap": self._accounts_at_cap(settings),
+                "today_completed_total": today_total,
+                "accounts_at_cap": at_cap,
                 "last_error": self._last_error,
                 "last_ok_at": self._last_ok_at or None,
                 "require_persist_history": settings["require_persist_history"],

@@ -2,12 +2,12 @@
   "release": "nurture-heatmap-20260723",
   "files": {
     "services/ip_nurture_schedule.py": "c024bece3f1a82a5e56c0f9a5dfa977bd8a31a028edb67a149d25145d42a1f42",
-    "services/text_nurture_service.py": "07588ce8b5aa6640ef3729356f325f43ee02523742b2947b8475d6e37ac2cd6a",
+    "services/text_nurture_service.py": "be92cd8b9797c3779069b26a42416ef37a0c397bca01d72f2a45fbf8480fc3a8",
     "services/config.py": "37a3f036f1df301de1aa7d23d66861c9515c7edb07bbcd392abff2fd78226a57",
     "services/account_service.py": "0b91bfa60b6cc10470dd43393e29d38ed8aa63912b8b66f945632adb40941ad5",
     "services/risk_dashboard_service.py": "c94a306f2ab76faabb1e237b8fdb88cc0461c130fb7d19ac4c8f50d057723757",
     "api/ops.py": "ec66b52cd62486e8a5846b4f5193d9e2654f65cc2c062fff89d62ef2cc6e827a",
-    "web_dist.tgz": "250344bc505641cd8f60ccc9e84e5840c433c700b6280b14897492cad9d50510",
+    "web_dist.tgz": "c9a79444050099cc643cdc79479c647e18ecc1324db95572b680a98cf73e86fc",
     "deploy_panda_nurture.sh": "17000f4e80c33f462b96ee8240e3e5aef694d205439007d74cad27bb4bfc743f",
     "README.md": "ff8adc19e1e8e8349e11f0ab13c551a15d795d9c654de44975b9682b27f4c8ca"
   }
