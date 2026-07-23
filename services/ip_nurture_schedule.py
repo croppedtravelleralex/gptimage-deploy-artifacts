@@ -230,7 +230,7 @@ def resolve_binding_matrix(binding_key: str, *, default_preset_id: str = "busine
         resolved = binding_schedule_from_config().get(key)
         if resolved is not None:
             return copy.deepcopy(resolved["weights"])
-        presets = list_presets()
+        presets = list(_PRESETS)
         if presets:
             tz = ZoneInfo(resolve_tz_name(DEFAULT_TZ))
             week = datetime.now(timezone.utc).astimezone(tz).isocalendar().week
