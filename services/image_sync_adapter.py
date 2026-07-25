@@ -39,9 +39,11 @@ def _task_error_message(task: dict[str, Any]) -> str:
 def build_openai_image_response(task: dict[str, Any], *, task_id: str | None = None) -> dict[str, Any]:
     status = str(task.get("status") or "")
     if status == TASK_STATUS_SUCCESS:
+        raw_data = task.get("data") or []
+        data = [dict(item) for item in raw_data if isinstance(item, dict)]
         response: dict[str, Any] = {
             "created": int(time.time()),
-            "data": task.get("data") or [],
+            "data": data,
         }
         usage = task.get("usage")
         if isinstance(usage, dict) and usage:
