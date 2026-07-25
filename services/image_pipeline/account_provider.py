@@ -74,20 +74,15 @@ class StageAccountProvider:
     ) -> _Lease:
         from services.image_pipeline.account_lease_pool import account_lease_pool
 
-        pooled = account_lease_pool.try_take(preferred_email)
-        if pooled is not None:
-            return _Lease(
-                access_token=pooled.access_token,
-                account_id=pooled.account_id,
-                email=pooled.email,
-            )
+        hint_email = account_lease_pool.pop_hint(preferred_email)
+        effective_preferred = hint_email or str(preferred_email or "").strip()
         exclude = self._build_exclude_tokens()
         token = account_service.get_available_access_token(
             plan_type=plan_type,
             source_type=source_type,
             plan_types=plan_types,
             skip_global_limit=skip_global_limit,
-            preferred_email=preferred_email,
+            preferred_email=effective_preferred,
             excluded_tokens=exclude or None,
         )
         account = account_service.get_account(token) or {}

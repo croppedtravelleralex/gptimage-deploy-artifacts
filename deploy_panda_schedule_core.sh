@@ -20,6 +20,9 @@ PY_FILES=(
   services/protocol/conversation.py
   services/openai_backend_api.py
   services/config.py
+  services/storage/database_storage.py
+  api/system.py
+  utils/process_memory.py
 )
 
 NATIVE_LIBS=(

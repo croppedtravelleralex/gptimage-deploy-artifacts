@@ -9,8 +9,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Iterable, Iterator
 
-import tiktoken
-
 from services.account_service import account_service
 from services.config import config
 from services.image_return_window_service import image_return_window_service
@@ -459,6 +457,8 @@ def build_image_prompt(prompt: str, size: str | None, quality: str = "auto") -> 
 
 
 def encoding_for_model(model: str):
+    import tiktoken
+
     try:
         return tiktoken.encoding_for_model(model)
     except KeyError:

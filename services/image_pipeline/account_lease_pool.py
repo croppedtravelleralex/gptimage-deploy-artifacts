@@ -1,4 +1,4 @@
-"""Pre-acquired account leases sized to free sS / global slots."""
+"""Pre-warm preferred account emails without holding image_inflight slots."""
 from __future__ import annotations
 
 import threading
@@ -11,18 +11,24 @@ from services.config import config
 
 
 @dataclass
-class _PooledLease:
-    access_token: str
+class _EmailHint:
     email: str
-    account_id: str
     created_ts: float
 
 
 class AccountLeasePool:
+    """Queue of schedulable account emails for faster preferred routing.
+
+    Hints do **not** call ``get_available_access_token`` — they never consume
+    ``image_inflight`` until a worker actually acquires for sS.
+    """
+
+    HINT_TTL_SECS = 45.0
+    MAX_HINTS = 3
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._leases: deque[_PooledLease] = deque()
-        self._by_email: dict[str, _PooledLease] = {}
+        self._hints: deque[_EmailHint] = deque()
 
     def _enabled(self) -> bool:
         try:
@@ -31,78 +37,58 @@ class AccountLeasePool:
         except Exception:
             return True
 
-    def _target_depth(self) -> int:
-        try:
-            pipeline = config.get_image_pipeline_settings()
-            cap = int(pipeline.get("sse_slots") or 10)
-        except Exception:
-            cap = 10
-        try:
-            stats = account_service.get_image_candidate_runtime_stats()
-            inflight = int(stats.get("image_inflight_count") or 0)
-            global_limit = int(stats.get("image_global_limit") or stats.get("image_global_concurrency_limit") or cap)
-        except Exception:
-            inflight = 0
-            global_limit = cap
-        cap = max(1, min(cap, global_limit))
-        with self._lock:
-            pooled = len(self._leases)
-        return max(0, cap - inflight - pooled)
+    def _trim_stale_locked(self) -> None:
+        now = time.time()
+        while self._hints and (now - self._hints[0].created_ts) > self.HINT_TTL_SECS:
+            self._hints.popleft()
 
-    def maintain(self, *, max_acquire: int = 3) -> int:
+    def _known_emails_locked(self) -> set[str]:
+        return {item.email for item in self._hints if item.email}
+
+    def _pick_email(self, exclude: set[str]) -> str:
+        try:
+            accounts = account_service.list_accounts()
+        except Exception:
+            accounts = []
+        for account in accounts:
+            if not isinstance(account, dict):
+                continue
+            if not account.get("image_schedulable"):
+                continue
+            email = str(account.get("email") or "").strip().lower()
+            if not email or email in exclude:
+                continue
+            return email
+        return ""
+
+    def maintain(self, *, max_acquire: int = 2) -> int:
         if not self._enabled():
             return 0
         acquired = 0
-        while acquired < max_acquire:
-            need = self._target_depth()
-            if need <= 0:
-                break
-            try:
-                token = account_service.get_available_access_token(skip_global_limit=False)
-            except Exception:
-                break
-            account = account_service.get_account(token) or {}
-            email = str(account.get("email") or "").strip().lower()
-            lease = _PooledLease(
-                access_token=token,
-                email=email,
-                account_id=email or str(account.get("id") or token[:12]),
-                created_ts=time.time(),
-            )
-            with self._lock:
-                self._leases.append(lease)
-                if email:
-                    self._by_email[email] = lease
-            acquired += 1
+        with self._lock:
+            self._trim_stale_locked()
+            known = self._known_emails_locked()
+            while acquired < max_acquire and len(self._hints) < self.MAX_HINTS:
+                email = self._pick_email(known)
+                if not email:
+                    break
+                self._hints.append(_EmailHint(email=email, created_ts=time.time()))
+                known.add(email)
+                acquired += 1
         return acquired
 
-    def try_take(self, preferred_email: str = "") -> _PooledLease | None:
+    def pop_hint(self, preferred_email: str = "") -> str:
         prefer = str(preferred_email or "").strip().lower()
         with self._lock:
-            if prefer and prefer in self._by_email:
-                lease = self._by_email.pop(prefer)
-                try:
-                    self._leases.remove(lease)
-                except ValueError:
-                    pass
-                return lease
-            if self._leases:
-                lease = self._leases.popleft()
-                if lease.email and self._by_email.get(lease.email) is lease:
-                    self._by_email.pop(lease.email, None)
-                return lease
-        return None
-
-    def return_lease(self, lease: _PooledLease) -> None:
-        if not lease or not lease.access_token:
-            return
-        account_service.release_image_slot(lease.access_token)
-        with self._lock:
-            if lease in self._leases:
-                return
-            self._leases.append(lease)
-            if lease.email:
-                self._by_email[lease.email] = lease
+            self._trim_stale_locked()
+            if prefer:
+                for index, item in enumerate(self._hints):
+                    if item.email == prefer:
+                        del self._hints[index]
+                        return prefer
+            if self._hints:
+                return self._hints.popleft().email
+        return ""
 
 
 account_lease_pool = AccountLeasePool()

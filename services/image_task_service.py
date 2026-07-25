@@ -251,6 +251,25 @@ def _decode_from_json(value: Any) -> Any:
     return value
 
 
+def _compact_task_memory(task: dict[str, Any]) -> None:
+    """Drop heavy blobs from in-memory terminal tasks (persisted copy already saved)."""
+    payload = task.get("payload")
+    if isinstance(payload, dict):
+        if payload.get("images"):
+            payload["images"] = []
+        if payload.get("image"):
+            payload.pop("image", None)
+    data = task.get("data")
+    if not isinstance(data, list):
+        return
+    for item in data:
+        if isinstance(item, dict) and item.get("b64_json"):
+            item.pop("b64_json", None)
+
+
+TERMINAL_MEMORY_RETENTION_SECS = 3600.0
+
+
 def _public_task(task: dict[str, Any]) -> dict[str, Any]:
     item = {
         "id": task.get("id"),
@@ -1143,13 +1162,6 @@ class ImageTaskService:
                         remaining = (interval_ms / 1000.0) - (time.time() - float(self._last_submit_start_ts))
                         if 0 < remaining < wait_secs:
                             wait_secs = remaining
-                    if image_pipeline_scheduler.enabled():
-                        try:
-                            from services.image_pipeline.account_lease_pool import account_lease_pool
-
-                            account_lease_pool.maintain()
-                        except Exception:
-                            pass
                     self._condition.wait(timeout=max(0.05, wait_secs))
                     continue
             key, mode, payload, identity, model = run_args
@@ -2109,6 +2121,7 @@ class ImageTaskService:
             if _clean(task.get("status")) in TERMINAL_STATUSES:
                 self._cancel_events.pop(key, None)
                 self._apply_terminal_timing_fields(task)
+                _compact_task_memory(task)
             self._save_task_locked(key)
             self._condition.notify_all()
 
@@ -2331,11 +2344,15 @@ class ImageTaskService:
         except Exception:
             retention_days = 30
         cutoff = time.time() - retention_days * 86400
-        removed_keys = [
-            key
-            for key, task in self._tasks.items()
-            if task.get("status") in TERMINAL_STATUSES and _timestamp(task.get("updated_at")) < cutoff
-        ]
+        memory_cutoff = time.time() - TERMINAL_MEMORY_RETENTION_SECS
+        removed_keys = []
+        for key, task in list(self._tasks.items()):
+            status = task.get("status")
+            updated_ts = float(task.get("updated_ts") or _timestamp(task.get("updated_at")) or 0.0)
+            if status in TERMINAL_STATUSES and updated_ts < cutoff:
+                removed_keys.append(key)
+            elif status in TERMINAL_STATUSES and updated_ts < memory_cutoff:
+                removed_keys.append(key)
         for key in removed_keys:
             self._tasks.pop(key, None)
             self._save_task_locked(key)
