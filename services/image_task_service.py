@@ -260,14 +260,16 @@ def _compact_task_memory(task: dict[str, Any]) -> None:
         if payload.get("image"):
             payload.pop("image", None)
     data = task.get("data")
-    if not isinstance(data, list):
-        return
-    for item in data:
-        if isinstance(item, dict) and item.get("b64_json"):
-            item.pop("b64_json", None)
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict) and item.get("b64_json"):
+                item.pop("b64_json", None)
+    for heavy_key in ("schedule_trace", "detail", "log_detail"):
+        if heavy_key in task:
+            task.pop(heavy_key, None)
 
 
-TERMINAL_MEMORY_RETENTION_SECS = 3600.0
+TERMINAL_MEMORY_RETENTION_SECS = 600.0
 
 
 def _public_task(task: dict[str, Any]) -> dict[str, Any]:
@@ -2130,6 +2132,7 @@ class ImageTaskService:
             if _clean(task.get("status")) in TERMINAL_STATUSES:
                 self._cancel_events.pop(key, None)
                 self._apply_terminal_timing_fields(task)
+                _compact_task_memory(task)
             self._save_task_locked(key)
             self._condition.notify_all()
 

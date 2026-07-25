@@ -10,6 +10,7 @@ BACKUP="$ROOT/backups/schedule-core-deploy-$TS"
 DEPLOYED=0
 
 PY_FILES=(
+  api/ai.py
   services/image_pipeline/schedule_trace.py
   services/image_pipeline/schedule_trace_model.py
   services/image_pipeline/schedule_core.py
