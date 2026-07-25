@@ -49,6 +49,12 @@ def main() -> int:
                     reason="cf_ok_stamp",
                     quiet=True,
                 )
+                # Ensure row-level persist even when normalized dict compares equal.
+                with account_service._lock:
+                    resolved = account_service._resolve_access_token_locked(token)
+                    row = account_service._accounts.get(resolved)
+                    if isinstance(row, dict):
+                        account_service._persist_upsert_accounts([row])
         else:
             mark_gpt_unavailable(
                 proxy,

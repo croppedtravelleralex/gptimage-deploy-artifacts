@@ -1235,6 +1235,13 @@ class AccountService:
             normalized["cf_daily"] = cleaned_cf[-7:]
         else:
             normalized["cf_daily"] = []
+        normalized["proxy_cf_ok"] = bool(normalized.get("proxy_cf_ok"))
+        try:
+            normalized["proxy_cf_ok_at"] = float(normalized.get("proxy_cf_ok_at") or 0)
+        except (TypeError, ValueError):
+            normalized["proxy_cf_ok_at"] = 0.0
+        normalized["proxy_cf_probe_endpoint"] = str(normalized.get("proxy_cf_probe_endpoint") or "").strip().lower()
+        normalized["proxy_cf_classification"] = str(normalized.get("proxy_cf_classification") or "").strip()
         return normalized
 
     @staticmethod
@@ -3369,7 +3376,9 @@ class AccountService:
                 if account is None:
                     return None
             self._accounts[access_token] = account
-            if account != current:
+            cf_meta_keys = ("proxy_cf_ok", "proxy_cf_ok_at", "proxy_cf_probe_endpoint", "proxy_cf_classification")
+            force_persist = any(key in incoming for key in cf_meta_keys)
+            if account != current or force_persist:
                 self._persist_upsert_accounts([account])
             if not quiet:
                 log_service.add(
