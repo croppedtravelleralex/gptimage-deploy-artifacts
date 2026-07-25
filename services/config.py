@@ -61,11 +61,13 @@ DEFAULT_IMAGE_TASK_QUEUE = {
     "per_user_running_burst": 8,
     "burst_enabled": False,
     "burst_min_queued": 6,
-    "burst_min_dispatchable_candidates": 120,
+    "burst_min_dispatchable_candidates": 8,
     "burst_max_preflight_backoff": 0,
     "per_user_queue_max": 36,
     # 错峰启动，降低同 egress 突发 CF
     "submit_start_min_interval_ms": 1500,
+    # inflight < cap 且 queued 可立即开跑时 interval=0（conc≤sse_slots 时 task_queue≈0）
+    "submit_interval_adaptive": True,
     "timeout_pending_poll_secs": 180,
     "timeout_pending_max_attempts": 4,
     "generation_poll_timeout_secs": 120,
@@ -74,6 +76,28 @@ DEFAULT_IMAGE_TASK_QUEUE = {
     "pre_conversation_timeout_secs": 45,
     "pre_conversation_max_attempts": 4,
     "pre_conversation_retry_backoff_secs": 1,
+}
+
+DEFAULT_IMAGE_PIPELINE = {
+    "enabled": True,
+    "prompt_slots": 10,
+    "sse_slots": 10,
+    "download_concurrency": 8,
+    "asset_upload_concurrency": 8,
+    "global_queue_max": 200,
+    "relaxed_per_user_running": True,
+    "aci_epsilon": 0.05,
+    "ready_buffer_max_bytes": 512 * 1024 * 1024,
+    "ready_buffer_max_items": 32,
+    "ready_buffer_resume_bytes": 256 * 1024 * 1024,
+    "ready_buffer_hysteresis_secs": 5,
+    "require_quota_freshness": True,
+    "schedule_trace_enabled": True,
+    "account_lease_prewarm_enabled": True,
+    "release_account_after_sse": True,
+    "ss_stage_wall_timeout_secs": 75,
+    "pre_ticket_ttl_secs": 120,
+    "pre_ticket_pool_enabled": True,
 }
 
 DEFAULT_IMAGE_REFERENCE_ASSETS = {
@@ -373,6 +397,10 @@ def _normalize_image_task_queue_settings(value: object) -> dict[str, object]:
             int(DEFAULT_IMAGE_TASK_QUEUE["submit_start_min_interval_ms"]),
             0,
         ),
+        "submit_interval_adaptive": _normalize_bool(
+            source.get("submit_interval_adaptive"),
+            bool(DEFAULT_IMAGE_TASK_QUEUE["submit_interval_adaptive"]),
+        ),
         "timeout_pending_poll_secs": _normalize_positive_int(source.get("timeout_pending_poll_secs"), int(DEFAULT_IMAGE_TASK_QUEUE["timeout_pending_poll_secs"]), 5),
         "timeout_pending_max_attempts": _normalize_positive_int(source.get("timeout_pending_max_attempts"), int(DEFAULT_IMAGE_TASK_QUEUE["timeout_pending_max_attempts"]), 1),
         "generation_poll_timeout_secs": _normalize_positive_int(source.get("generation_poll_timeout_secs"), int(DEFAULT_IMAGE_TASK_QUEUE["generation_poll_timeout_secs"]), 30),
@@ -381,6 +409,85 @@ def _normalize_image_task_queue_settings(value: object) -> dict[str, object]:
         "pre_conversation_timeout_secs": _normalize_positive_int(source.get("pre_conversation_timeout_secs"), int(DEFAULT_IMAGE_TASK_QUEUE["pre_conversation_timeout_secs"]), 30),
         "pre_conversation_max_attempts": _normalize_positive_int(source.get("pre_conversation_max_attempts"), int(DEFAULT_IMAGE_TASK_QUEUE["pre_conversation_max_attempts"]), 1),
         "pre_conversation_retry_backoff_secs": _normalize_positive_int(source.get("pre_conversation_retry_backoff_secs"), int(DEFAULT_IMAGE_TASK_QUEUE["pre_conversation_retry_backoff_secs"]), 0),
+    }
+
+
+def _normalize_image_pipeline_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    return {
+        "enabled": _normalize_bool(source.get("enabled"), bool(DEFAULT_IMAGE_PIPELINE["enabled"])),
+        "prompt_slots": _normalize_positive_int(source.get("prompt_slots"), int(DEFAULT_IMAGE_PIPELINE["prompt_slots"]), 1),
+        "sse_slots": _normalize_positive_int(source.get("sse_slots"), int(DEFAULT_IMAGE_PIPELINE["sse_slots"]), 1),
+        "download_concurrency": _normalize_positive_int(
+            source.get("download_concurrency"),
+            int(DEFAULT_IMAGE_PIPELINE["download_concurrency"]),
+            1,
+        ),
+        "asset_upload_concurrency": _normalize_positive_int(
+            source.get("asset_upload_concurrency"),
+            int(DEFAULT_IMAGE_PIPELINE["asset_upload_concurrency"]),
+            1,
+        ),
+        "global_queue_max": _normalize_positive_int(
+            source.get("global_queue_max"),
+            int(DEFAULT_IMAGE_PIPELINE["global_queue_max"]),
+            1,
+        ),
+        "relaxed_per_user_running": _normalize_bool(
+            source.get("relaxed_per_user_running"),
+            bool(DEFAULT_IMAGE_PIPELINE["relaxed_per_user_running"]),
+        ),
+        "aci_epsilon": float(source.get("aci_epsilon") or DEFAULT_IMAGE_PIPELINE["aci_epsilon"]),
+        "ready_buffer_max_bytes": _normalize_positive_int(
+            source.get("ready_buffer_max_bytes"),
+            int(DEFAULT_IMAGE_PIPELINE["ready_buffer_max_bytes"]),
+            1,
+        ),
+        "ready_buffer_max_items": _normalize_positive_int(
+            source.get("ready_buffer_max_items"),
+            int(DEFAULT_IMAGE_PIPELINE["ready_buffer_max_items"]),
+            1,
+        ),
+        "ready_buffer_resume_bytes": _normalize_positive_int(
+            source.get("ready_buffer_resume_bytes"),
+            int(DEFAULT_IMAGE_PIPELINE["ready_buffer_resume_bytes"]),
+            1,
+        ),
+        "ready_buffer_hysteresis_secs": _normalize_positive_int(
+            source.get("ready_buffer_hysteresis_secs"),
+            int(DEFAULT_IMAGE_PIPELINE["ready_buffer_hysteresis_secs"]),
+            0,
+        ),
+        "require_quota_freshness": _normalize_bool(
+            source.get("require_quota_freshness"),
+            bool(DEFAULT_IMAGE_PIPELINE["require_quota_freshness"]),
+        ),
+        "schedule_trace_enabled": _normalize_bool(
+            source.get("schedule_trace_enabled"),
+            bool(DEFAULT_IMAGE_PIPELINE["schedule_trace_enabled"]),
+        ),
+        "account_lease_prewarm_enabled": _normalize_bool(
+            source.get("account_lease_prewarm_enabled"),
+            bool(DEFAULT_IMAGE_PIPELINE["account_lease_prewarm_enabled"]),
+        ),
+        "release_account_after_sse": _normalize_bool(
+            source.get("release_account_after_sse"),
+            bool(DEFAULT_IMAGE_PIPELINE["release_account_after_sse"]),
+        ),
+        "ss_stage_wall_timeout_secs": _normalize_positive_int(
+            source.get("ss_stage_wall_timeout_secs"),
+            int(DEFAULT_IMAGE_PIPELINE["ss_stage_wall_timeout_secs"]),
+            5,
+        ),
+        "pre_ticket_ttl_secs": _normalize_positive_int(
+            source.get("pre_ticket_ttl_secs"),
+            int(DEFAULT_IMAGE_PIPELINE["pre_ticket_ttl_secs"]),
+            30,
+        ),
+        "pre_ticket_pool_enabled": _normalize_bool(
+            source.get("pre_ticket_pool_enabled"),
+            bool(DEFAULT_IMAGE_PIPELINE["pre_ticket_pool_enabled"]),
+        ),
     }
 
 
@@ -728,6 +835,7 @@ DEFAULT_SCHEDULER_SETTINGS: dict[str, object] = {
     "resume_wall_sec": 240,
     "prompt_dedup_window_sec": 120,
     "prompt_dedup_max_parallel": 4,
+    "unrestricted": True,
 }
 
 DEFAULT_TEXT_NURTURE: dict[str, object] = {
@@ -768,6 +876,40 @@ DEFAULT_PROACTIVE_REFRESH_SETTINGS: dict[str, object] = {
     "slot_jitter_minutes": 10,
     "tick_sec": 60,
     "startup_delay_sec": 30,
+}
+
+DEFAULT_WEBSHARE_CF_SCAN_SETTINGS: dict[str, object] = {
+    "enabled": False,
+    "pool_path": "",
+    "interval_min_sec": 3600,
+    "interval_max_sec": 14400,
+    "batch_size": 20,
+    "workers": 4,
+    "auto_quarantine": True,
+    "skip_quarantined": True,
+    "active_window": ["08:00", "23:00"],
+    "timezone": "Asia/Singapore",
+    "startup_delay_sec": 120,
+    "probe_timeout_sec": 45.0,
+}
+
+DEFAULT_ACCOUNT_WARMUP_SETTINGS: dict[str, object] = {
+    "enabled": True,
+    "interval_sec": 60.0,
+    "max_hot": 10,
+    "max_sessions_per_hot": 3,
+    "demote_cooldown_sec": 180.0,
+    "freq_window_sec": 60.0,
+    "freq_max_starts": 6,
+    "startup_delay_sec": 20.0,
+    # bootstrap = 首页 PoW 缓存；requirements = prepare+finalize 全链 CF 探活（更重）
+    "depth": "requirements",
+    "rotate_per_tick": 0,
+    "hot_refresh_min_interval_sec": 300.0,
+    "schedulable_only": True,
+    # 连续 CF 探活失败后暂停对该号的 warmup 探活（默认 24h）
+    "cf_fail_max_streak": 2,
+    "cf_block_sec": 86400.0,
 }
 
 
@@ -928,6 +1070,10 @@ def _normalize_scheduler_settings(value: object) -> dict[str, object]:
             int(DEFAULT_SCHEDULER_SETTINGS["prompt_dedup_max_parallel"]),
             1,
         ),
+        "unrestricted": _normalize_bool(
+            source.get("unrestricted"),
+            bool(DEFAULT_SCHEDULER_SETTINGS["unrestricted"]),
+        ),
     }
 
 
@@ -1003,6 +1149,144 @@ def _normalize_proactive_refresh_settings(value: object) -> dict[str, object]:
         "startup_delay_sec": max(
             0.0,
             float(source.get("startup_delay_sec", DEFAULT_PROACTIVE_REFRESH_SETTINGS["startup_delay_sec"]) or 0.0),
+        ),
+    }
+
+
+def _normalize_webshare_cf_scan_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    interval_min = max(300.0, float(source.get("interval_min_sec", DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["interval_min_sec"]) or 3600))
+    interval_max = max(
+        interval_min,
+        float(source.get("interval_max_sec", DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["interval_max_sec"]) or interval_min),
+    )
+    return {
+        "enabled": _normalize_bool(source.get("enabled"), bool(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["enabled"])),
+        "pool_path": str(source.get("pool_path") or DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["pool_path"]).strip(),
+        "interval_min_sec": interval_min,
+        "interval_max_sec": interval_max,
+        "batch_size": max(
+            1,
+            _normalize_positive_int(
+                source.get("batch_size"),
+                int(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["batch_size"]),
+                1,
+            ),
+        ),
+        "workers": max(
+            1,
+            _normalize_positive_int(
+                source.get("workers"),
+                int(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["workers"]),
+                1,
+            ),
+        ),
+        "auto_quarantine": _normalize_bool(
+            source.get("auto_quarantine"),
+            bool(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["auto_quarantine"]),
+        ),
+        "skip_quarantined": _normalize_bool(
+            source.get("skip_quarantined"),
+            bool(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["skip_quarantined"]),
+        ),
+        "active_window": _normalize_window_pair(
+            source.get("active_window"),
+            list(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["active_window"]),  # type: ignore[arg-type]
+        ),
+        "timezone": str(source.get("timezone") or DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["timezone"]).strip()
+        or "Asia/Singapore",
+        "startup_delay_sec": max(
+            0.0,
+            float(source.get("startup_delay_sec", DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["startup_delay_sec"]) or 0.0),
+        ),
+        "probe_timeout_sec": max(
+            10.0,
+            float(source.get("probe_timeout_sec", DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["probe_timeout_sec"]) or 45.0),
+        ),
+    }
+
+
+def _normalize_account_warmup_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    depth = str(source.get("depth") or DEFAULT_ACCOUNT_WARMUP_SETTINGS["depth"]).strip().lower()
+    if depth not in {"bootstrap", "requirements"}:
+        depth = str(DEFAULT_ACCOUNT_WARMUP_SETTINGS["depth"])
+    return {
+        "enabled": _normalize_bool(source.get("enabled"), bool(DEFAULT_ACCOUNT_WARMUP_SETTINGS["enabled"])),
+        "interval_sec": max(
+            30.0,
+            float(source.get("interval_sec", DEFAULT_ACCOUNT_WARMUP_SETTINGS["interval_sec"]) or 60.0),
+        ),
+        "max_hot": max(
+            1,
+            _normalize_positive_int(
+                source.get("max_hot"),
+                int(DEFAULT_ACCOUNT_WARMUP_SETTINGS["max_hot"]),
+                1,
+            ),
+        ),
+        "max_sessions_per_hot": max(
+            1,
+            _normalize_positive_int(
+                source.get("max_sessions_per_hot"),
+                int(DEFAULT_ACCOUNT_WARMUP_SETTINGS["max_sessions_per_hot"]),
+                1,
+            ),
+        ),
+        "demote_cooldown_sec": max(
+            10.0,
+            float(source.get("demote_cooldown_sec", DEFAULT_ACCOUNT_WARMUP_SETTINGS["demote_cooldown_sec"]) or 180.0),
+        ),
+        "freq_window_sec": max(
+            10.0,
+            float(source.get("freq_window_sec", DEFAULT_ACCOUNT_WARMUP_SETTINGS["freq_window_sec"]) or 60.0),
+        ),
+        "freq_max_starts": max(
+            2,
+            _normalize_positive_int(
+                source.get("freq_max_starts"),
+                int(DEFAULT_ACCOUNT_WARMUP_SETTINGS["freq_max_starts"]),
+                2,
+            ),
+        ),
+        "startup_delay_sec": max(
+            0.0,
+            float(source.get("startup_delay_sec", DEFAULT_ACCOUNT_WARMUP_SETTINGS["startup_delay_sec"]) or 0.0),
+        ),
+        "depth": depth,
+        "rotate_per_tick": max(
+            0,
+            _normalize_positive_int(
+                source.get("rotate_per_tick"),
+                int(DEFAULT_ACCOUNT_WARMUP_SETTINGS["rotate_per_tick"]),
+                0,
+            ),
+        ),
+        "hot_refresh_min_interval_sec": max(
+            60.0,
+            float(
+                source.get(
+                    "hot_refresh_min_interval_sec",
+                    DEFAULT_ACCOUNT_WARMUP_SETTINGS["hot_refresh_min_interval_sec"],
+                )
+                or 300.0
+            ),
+        ),
+        "schedulable_only": _normalize_bool(
+            source.get("schedulable_only"),
+            bool(DEFAULT_ACCOUNT_WARMUP_SETTINGS["schedulable_only"]),
+        ),
+        "cf_fail_max_streak": max(
+            1,
+            _normalize_positive_int(
+                source.get("cf_fail_max_streak"),
+                int(DEFAULT_ACCOUNT_WARMUP_SETTINGS["cf_fail_max_streak"]),
+                1,
+            ),
+        ),
+        "cf_block_sec": max(
+            300.0,
+            float(source.get("cf_block_sec", DEFAULT_ACCOUNT_WARMUP_SETTINGS["cf_block_sec"]) or 86400.0),
         ),
     }
 
@@ -1209,6 +1493,15 @@ class ConfigStore:
             return 75.0
 
     @property
+    def image_ss_stage_wall_timeout_secs(self) -> float:
+        """Wall clock from acquire_ss until stream end; default 75s."""
+        try:
+            settings = self.get_image_pipeline_settings()
+            return max(5.0, float(settings.get("ss_stage_wall_timeout_secs") or 75))
+        except (TypeError, ValueError):
+            return 75.0
+
+    @property
     def image_pre_conversation_max_attempts(self) -> int:
         try:
             settings = self.get_image_task_queue_settings()
@@ -1295,6 +1588,33 @@ class ConfigStore:
             return 2
 
     @property
+    def image_poll_cf_retry_backoff_secs(self) -> float:
+        """poll 遇 CF403 时的短退避（秒），优先于通用指数退避。"""
+        try:
+            return max(0.0, min(30.0, float(self.data.get("image_poll_cf_retry_backoff_secs", 1.5))))
+        except (TypeError, ValueError):
+            return 1.5
+
+    @property
+    def image_poll_cf_swap_retry(self) -> bool:
+        """poll cf_abort 后是否换出口并重试 resolve（默认开）。"""
+        try:
+            raw = self.data.get("image_poll_cf_swap_retry", True)
+            if isinstance(raw, str):
+                return raw.strip().lower() in {"1", "true", "yes", "on"}
+            return bool(raw)
+        except (TypeError, ValueError):
+            return True
+
+    @property
+    def image_poll_cf_swap_retry_max(self) -> int:
+        """poll cf_abort 后最多换出口重试轮数（默认 5）。"""
+        try:
+            return max(1, min(10, int(self.data.get("image_poll_cf_swap_retry_max", 5))))
+        except (TypeError, ValueError):
+            return 5
+
+    @property
     def proxy_url(self) -> str:
         """兼容旧调用点的运行时代理地址。
 
@@ -1310,9 +1630,17 @@ class ConfigStore:
     @property
     def image_account_concurrency(self) -> int:
         try:
-            return max(1, int(self.data.get("image_account_concurrency", 4)))
+            return max(1, int(self.data.get("image_account_concurrency", 2)))
         except (TypeError, ValueError):
-            return 4
+            return 2
+
+    @property
+    def dispatch_hot_only(self) -> bool:
+        """为 True 时仅暖号池 hot 账号参与生图取号；默认 False（全部 image_schedulable 可派）。"""
+        try:
+            return bool(self.data.get("dispatch_hot_only", False))
+        except Exception:
+            return False
 
     @property
     def proxy_binding_max_accounts(self) -> int:
@@ -1327,7 +1655,7 @@ class ConfigStore:
 
     @property
     def image_binding_inflight_max(self) -> int:
-        """同一 proxy_binding 同时允许的生图路数；默认 1，避免共享出口并发撞 CF。"""
+        """同一 proxy_binding 同时允许的生图路数；默认 1（STAB-B4：防同出口突发）。"""
         try:
             return max(1, int(self.data.get("image_binding_inflight_max", 1)))
         except (TypeError, ValueError):
@@ -1479,6 +1807,33 @@ class ConfigStore:
             return 2.0
 
     @property
+    def image_sediment_fast_poll_enabled(self) -> bool:
+        """SSE 已带 sediment id 时走短 settle + 跳过双确认 poll。"""
+        value = self.data.get("image_sediment_fast_poll_enabled", True)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @property
+    def image_settle_secs_sediment(self) -> float:
+        """sediment 快路径 settle（秒）。"""
+        try:
+            return max(0.0, float(self.data.get("image_settle_secs_sediment", 0.5)))
+        except (TypeError, ValueError):
+            return 0.5
+
+    @property
+    def image_release_account_after_sse(self) -> bool:
+        """SSE 结束后释放账号 inflight，poll 不占全局槽。"""
+        pipeline = self.get_image_pipeline_settings()
+        if "release_account_after_sse" in pipeline:
+            return bool(pipeline.get("release_account_after_sse"))
+        value = self.data.get("image_release_account_after_sse", True)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @property
     def auto_remove_invalid_accounts(self) -> bool:
         value = self.data.get("auto_remove_invalid_accounts", False)
         if isinstance(value, str):
@@ -1597,7 +1952,11 @@ class ConfigStore:
         data["image_poll_max_tasks_gets"] = self.image_poll_max_tasks_gets
         data["image_poll_tasks_every_n_attempts"] = self.image_poll_tasks_every_n_attempts
         data["image_poll_cf_abort_streak"] = self.image_poll_cf_abort_streak
+        data["image_poll_cf_retry_backoff_secs"] = self.image_poll_cf_retry_backoff_secs
+        data["image_poll_cf_swap_retry"] = self.image_poll_cf_swap_retry
+        data["image_poll_cf_swap_retry_max"] = self.image_poll_cf_swap_retry_max
         data["image_account_concurrency"] = self.image_account_concurrency
+        data["dispatch_hot_only"] = self.dispatch_hot_only
         data["proxy_binding_max_accounts"] = self.proxy_binding_max_accounts
         data["image_binding_inflight_max"] = self.image_binding_inflight_max
         data["image_global_concurrency"] = self.image_global_concurrency
@@ -1632,6 +1991,8 @@ class ConfigStore:
         data["outlook_auto_recovery"] = self.get_outlook_auto_recovery_settings()
         data["scheduler"] = self.get_scheduler_settings()
         data["proactive_refresh"] = self.get_proactive_refresh_settings()
+        data["webshare_cf_scan"] = self.get_webshare_cf_scan_settings()
+        data["account_warmup"] = self.get_account_warmup_settings()
         data["panda_sync"] = self.get_public_panda_sync_settings()
         data.pop("auth-key", None)
         return data
@@ -1671,6 +2032,12 @@ class ConfigStore:
 
     def get_proactive_refresh_settings(self) -> dict[str, object]:
         return _normalize_proactive_refresh_settings(self.data.get("proactive_refresh"))
+
+    def get_webshare_cf_scan_settings(self) -> dict[str, object]:
+        return _normalize_webshare_cf_scan_settings(self.data.get("webshare_cf_scan"))
+
+    def get_account_warmup_settings(self) -> dict[str, object]:
+        return _normalize_account_warmup_settings(self.data.get("account_warmup"))
 
     def get_workload_settings(self) -> dict[str, object]:
         return _normalize_workload_settings(self.data.get("workload"))
@@ -1736,6 +2103,10 @@ class ConfigStore:
             next_data["scheduler"] = _normalize_scheduler_settings(next_data.get("scheduler"))
         if "proactive_refresh" in next_data:
             next_data["proactive_refresh"] = _normalize_proactive_refresh_settings(next_data.get("proactive_refresh"))
+        if "webshare_cf_scan" in next_data:
+            next_data["webshare_cf_scan"] = _normalize_webshare_cf_scan_settings(next_data.get("webshare_cf_scan"))
+        if "account_warmup" in next_data:
+            next_data["account_warmup"] = _normalize_account_warmup_settings(next_data.get("account_warmup"))
         if "workload" in next_data:
             next_data["workload"] = _normalize_workload_settings(next_data.get("workload"))
         if "text_nurture" in next_data:
@@ -1767,6 +2138,9 @@ class ConfigStore:
 
     def get_image_task_queue_settings(self) -> dict[str, object]:
         return _normalize_image_task_queue_settings(self.data.get("image_task_queue"))
+
+    def get_image_pipeline_settings(self) -> dict[str, object]:
+        return _normalize_image_pipeline_settings(self.data.get("image_pipeline"))
 
     def get_image_reference_assets_settings(self) -> dict[str, object]:
         return _normalize_image_reference_assets_settings(self.data.get("image_reference_assets"))

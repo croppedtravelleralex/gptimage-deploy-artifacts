@@ -176,10 +176,16 @@ def create_router(app_version: str) -> APIRouter:
         source: str = "",
         outcome: str = "",
         kind: str = "",
+        limit: int = Query(default=200, ge=1, le=2000),
         authorization: str | None = Header(default=None),
     ):
         require_admin(authorization)
-        items = log_service.list(type=type.strip(), start_date=start_date.strip(), end_date=end_date.strip())
+        items = log_service.list(
+            type=type.strip(),
+            start_date=start_date.strip(),
+            end_date=end_date.strip(),
+            limit=limit,
+        )
         source_f = source.strip()
         outcome_f = outcome.strip()
         kind_f = kind.strip()
@@ -373,12 +379,25 @@ def create_router(app_version: str) -> APIRouter:
             from services.config import config as cfg
             from services.image_task_service import image_task_service
             from services.text_task_queue import text_task_queue
+            from services.image_pipeline.pipeline_watchdog import pipeline_watchdog_service
+            from services.image_pipeline.pre_ticket_pool import pre_ticket_pool
 
             stats_json["workload"] = {
                 **cfg.get_workload_settings(),
                 "text_queue_depth": text_task_queue.depth(),
                 "image_queue_depth": int(getattr(image_task_service, "queue_depth", lambda: 0)()),
             }
+            stats_json["pipeline_watchdog"] = pipeline_watchdog_service.tick(force_release_expired=False)
+            stats_json["pre_ticket_pool"] = pre_ticket_pool.snapshot()
+        except Exception:
+            pass
+        try:
+            from utils.process_memory import process_memory_snapshot
+
+            mem = process_memory_snapshot()
+            if mem:
+                stats_json["process_memory"] = mem
+            stats_json["image_runtime"] = acct_svc.get_image_candidate_runtime_stats()
         except Exception:
             pass
         if format == "json":

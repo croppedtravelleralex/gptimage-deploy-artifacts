@@ -1,0 +1,111 @@
+{
+  "capture_kind": "BASELINE-pre-slotledger",
+  "stamp": "20260725T072257Z",
+  "generated_at": "2026-07-25T07:22:57.943053+00:00",
+  "source": "static_docs_26",
+  "base_url": "http://127.0.0.1:8000",
+  "panda_reachable": false,
+  "comparison": {
+    "version": null,
+    "rss_mb": 104,
+    "image_inflight_count": 3,
+    "ready_candidate_count": 6,
+    "dispatchable_candidate_count": 6,
+    "preflight_backoff_count": 0,
+    "schedulable": 16,
+    "text_queue_depth": 0,
+    "image_queue_depth": 0,
+    "pipeline_in_flight": null,
+    "ps_active": null,
+    "ps_queued": null,
+    "ss_active": null,
+    "ss_queued": null,
+    "upload_queued": null,
+    "download_queued": null,
+    "image_global_concurrency_limit": null,
+    "image_global_limit_reached": null
+  },
+  "health": {
+    "status": "static",
+    "healthy": null,
+    "version": null,
+    "accounts": {
+      "total": 19,
+      "image_schedulable": 16,
+      "unique_egress": 19,
+      "schedulable": 16,
+      "ready_candidate_count": 6,
+      "dispatchable_candidate_count": 6,
+      "preflight_backoff_count": 0,
+      "image_inflight_count": 3,
+      "note": "humanlike image_next_ok_ts gap after conc10"
+    },
+    "process_memory": {
+      "rss_mb": 104
+    },
+    "image_runtime": {
+      "schedulable": 16,
+      "ready_candidate_count": 6,
+      "dispatchable_candidate_count": 6,
+      "preflight_backoff_count": 0,
+      "image_inflight_count": 3,
+      "note": "humanlike image_next_ok_ts gap after conc10"
+    },
+    "workload": {
+      "text_queue_depth": 0,
+      "image_queue_depth": 0
+    }
+  },
+  "pipeline_snapshot": null,
+  "static_reference": {
+    "doc": "docs/26-slot-lifecycle-rust-roadmap.md",
+    "rss_mb": {
+      "after_restart": 104,
+      "post_conc10_evict_compact": 259,
+      "post_conc10_pre_fix": 443
+    },
+    "conc10_refs": {
+      "PROD-conc10-20260724T150152Z": {
+        "ok": 10,
+        "total": 10,
+        "note": "reference pass"
+      },
+      "PROD-conc10-20260725T023900Z": {
+        "ok": 10,
+        "total": 10,
+        "note": "reference pass"
+      },
+      "PROD-conc10-20260725T040240Z": {
+        "ok": 4,
+        "total": 10,
+        "note": "post inflight-leak fix"
+      },
+      "PROD-conc10-20260725T034701Z": {
+        "ok": 0,
+        "total": 10,
+        "note": "image_inflight=10 leak"
+      },
+      "PROD-conc10-20260725T033622Z": {
+        "ok": 6,
+        "total": 10,
+        "note": "shared egress"
+      }
+    },
+    "dispatchable_snapshot": {
+      "schedulable": 16,
+      "ready_candidate_count": 6,
+      "dispatchable_candidate_count": 6,
+      "preflight_backoff_count": 0,
+      "image_inflight_count": 3,
+      "note": "humanlike image_next_ok_ts gap after conc10"
+    },
+    "pool": {
+      "total": 19,
+      "image_schedulable": 16,
+      "unique_egress": 19
+    }
+  },
+  "local_process_memory": null,
+  "health_fetch": null,
+  "pipeline_fetch": null
+}

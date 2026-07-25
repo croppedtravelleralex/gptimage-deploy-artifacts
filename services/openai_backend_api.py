@@ -837,16 +837,23 @@ class OpenAIBackendAPI:
     def _get_conversation_init(self) -> Dict[str, Any]:
         path = "/backend-api/conversation/init"
         last_response: Any = None
+        use_light = False
+        payload = {
+            "gizmo_id": None,
+            "requested_default_model": None,
+            "conversation_id": None,
+            "timezone_offset_min": -480,
+        }
         for attempt in range(1, 4):
+            headers = (
+                self._me_light_headers(path, {"Content-Type": "application/json"})
+                if use_light
+                else self._headers(path, {"Content-Type": "application/json"})
+            )
             response = self.session.post(
                 self.base_url + path,
-                headers=self._headers(path, {"Content-Type": "application/json"}),
-                json={
-                    "gizmo_id": None,
-                    "requested_default_model": None,
-                    "conversation_id": None,
-                    "timezone_offset_min": -480,
-                },
+                headers=headers,
+                json=payload,
                 timeout=20,
             )
             last_response = response
@@ -856,6 +863,7 @@ class OpenAIBackendAPI:
                 self._raise_on_error(response, path)
             if not self._looks_like_cf_edge_response(response.status_code, response.text or ""):
                 self._raise_on_error(response, path)
+            use_light = True
             if attempt < 3:
                 time.sleep(0.35 * attempt)
         assert last_response is not None
@@ -1540,6 +1548,35 @@ class OpenAIBackendAPI:
 
     def _upload_image(self, image: str, file_name: str = "image.png") -> Dict[str, Any]:
         """上传一张 base64 图片，返回底层文件元数据。"""
+        last_exc: BaseException | None = None
+        max_attempts = 5
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self._upload_image_once(image, file_name)
+            except UpstreamHTTPError as exc:
+                last_exc = exc
+                code = int(getattr(exc, "status_code", 0) or 0)
+                body = str(getattr(exc, "body", "") or getattr(exc, "message", "") or "").lower()
+                retryable = code in {500, 502, 503, 504, 408}
+                if code == 503 and ("serverbusy" in body or "ingress is over" in body):
+                    retryable = True
+                if retryable and attempt < max_attempts:
+                    time.sleep(min(30.0, 3.0 * (2 ** (attempt - 1))))
+                    continue
+                raise
+            except Exception as exc:
+                last_exc = exc
+                text = str(exc).lower()
+                if attempt < 3 and ("timeout" in text or "timed out" in text):
+                    time.sleep(2.0 * attempt)
+                    continue
+                raise
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("image_upload_failed")
+
+    def _upload_image_once(self, image: str, file_name: str = "image.png") -> Dict[str, Any]:
+        """Single attempt to upload a base64 image."""
         data = self._decode_image_base64(image)
         if (
                 image
@@ -3338,6 +3375,16 @@ class OpenAIBackendAPI:
         self._add_unique(file_ids, initial_file_ids or [])
         self._add_unique(sediment_ids, initial_sediment_ids or [])
         has_initial_ids = bool(file_ids or sediment_ids)
+        sediment_fast = bool(
+            config.image_sediment_fast_poll_enabled
+            and sediment_ids
+            and not file_ids
+        )
+        settle_secs = float(config.image_settle_secs_sediment if sediment_fast else config.image_settle_secs)
+        check_before_hit = False if sediment_fast else bool(config.image_check_before_hit_enabled)
+        settle_enabled = bool(config.image_settle_enabled) and not (
+            sediment_fast and float(config.image_settle_secs_sediment) <= 0
+        )
         # 勿用 initial ids 预填 last_hit_key：否则「SSE 刚给出 file_id」会在首次 poll
         # 就被当成已确认，estuary 尚未就绪时下载会 404 File link not found。
         last_hit_key: tuple[tuple[str, ...], tuple[str, ...]] | None = None
@@ -3355,8 +3402,8 @@ class OpenAIBackendAPI:
         def _remaining() -> float:
             return budget.remaining_wall()
 
-        if has_initial_ids and config.image_settle_enabled:
-            settle_for = min(config.image_settle_secs, max(0.0, _remaining()))
+        if has_initial_ids and settle_enabled:
+            settle_for = min(settle_secs, max(0.0, _remaining()))
             if settle_for > 0:
                 _cancel_aware_sleep(settle_for)
         elif initial_wait > 0:
@@ -3365,9 +3412,21 @@ class OpenAIBackendAPI:
             if sleep_for > 0:
                 _cancel_aware_sleep(sleep_for)
 
-        def _retry_sleep(reason: str, status_code: int | None, error: str | None, retry_after: int | None) -> bool:
+        def _retry_sleep(
+            reason: str,
+            status_code: int | None,
+            error: str | None,
+            retry_after: int | None,
+            *,
+            base_secs: float | None = None,
+        ) -> bool:
             # retry_after=0 means "retry immediately" — must not be coerced via falsy check.
-            base = retry_after if retry_after is not None else min(2 ** min(budget.attempt, 4), 16)
+            if base_secs is not None:
+                base = float(base_secs)
+            elif retry_after is not None:
+                base = retry_after
+            else:
+                base = min(2 ** min(budget.attempt, 4), 16)
             backoff = base + random.uniform(0, 0.5)
             remaining = _remaining()
             if remaining <= 0:
@@ -3414,18 +3473,30 @@ class OpenAIBackendAPI:
                 "error": str(exc)[:240],
                 "poll_budget": budget.snapshot(),
             })
-            if cf_streak >= cf_abort_streak:
-                abort = UpstreamHTTPError(
-                    f"image_poll/{source}",
-                    403,
-                    (
-                        "cloudflare_or_edge_html_block: image poll aborted after "
-                        f"{cf_streak} consecutive CF edge blocks (source={source})."
-                    ),
-                )
-                setattr(abort, "conversation_id", conversation_id or "")
-                setattr(abort, "cf_abort", True)
-                raise abort from exc
+
+        def _raise_poll_cf_abort(source: str) -> None:
+            if cf_streak < cf_abort_streak:
+                return
+            abort = UpstreamHTTPError(
+                f"image_poll/{source}",
+                403,
+                (
+                    "cloudflare_or_edge_html_block: image poll aborted after "
+                    f"{cf_streak} consecutive CF edge blocks (source={source})."
+                ),
+            )
+            setattr(abort, "conversation_id", conversation_id or "")
+            setattr(abort, "cf_abort", True)
+            raise abort
+
+        def _cf_retry_sleep(status_code: int | None, error: str | None) -> bool:
+            return _retry_sleep(
+                "cf_edge",
+                status_code,
+                error,
+                None,
+                base_secs=float(config.image_poll_cf_retry_backoff_secs),
+            )
 
         def _note_upstream_429(source: str) -> None:
             nonlocal upstream_429_streak
@@ -3487,6 +3558,12 @@ class OpenAIBackendAPI:
                         raise token_error from exc
                     if self._is_cf_edge_block(exc):
                         _note_poll_cf("tasks", exc)
+                        if _cf_retry_sleep(getattr(exc, "status_code", None), str(exc)):
+                            if cf_streak >= cf_abort_streak:
+                                _raise_poll_cf_abort("tasks")
+                            continue
+                        _raise_poll_cf_abort("tasks")
+                        break
                     elif isinstance(exc, UpstreamHTTPError) and int(exc.status_code or 0) == 429:
                         _note_upstream_429("tasks")
                         if _retry_sleep("upstream_status", 429, str(exc), getattr(exc, "retry_after", None)):
@@ -3518,8 +3595,11 @@ class OpenAIBackendAPI:
                     and "cloudflare_or_edge_html_block" in str(exc).lower()
                 ):
                     _note_poll_cf("conversation", exc)
-                    if _retry_sleep("cf_edge", exc.status_code, str(exc), None):
+                    if _cf_retry_sleep(exc.status_code, str(exc)):
+                        if cf_streak >= cf_abort_streak:
+                            _raise_poll_cf_abort("conversation")
                         continue
+                    _raise_poll_cf_abort("conversation")
                     break
                 if exc.status_code == 429:
                     _note_upstream_429("conversation")
@@ -3538,8 +3618,11 @@ class OpenAIBackendAPI:
             except Exception as exc:
                 if self._is_cf_edge_block(exc):
                     _note_poll_cf("conversation", exc)
-                    if _retry_sleep("cf_edge", None, str(exc), None):
+                    if _cf_retry_sleep(None, str(exc)):
+                        if cf_streak >= cf_abort_streak:
+                            _raise_poll_cf_abort("conversation")
                         continue
+                    _raise_poll_cf_abort("conversation")
                     break
                 raise
 
@@ -3577,26 +3660,28 @@ class OpenAIBackendAPI:
                 "poll_budget": budget.snapshot(),
             })
             if file_ids or sediment_ids:
-                if not config.image_check_before_hit_enabled:
+                if not check_before_hit:
                     # 先check再hit 机制关闭：直接返回首次发现的 file_ids
                     logger.info({"event": "image_poll_hit_no_settle", "conversation_id": conversation_id,
-                                 "file_ids": file_ids, "sediment_ids": sediment_ids})
+                                 "file_ids": file_ids, "sediment_ids": sediment_ids,
+                                 "sediment_fast": sediment_fast})
                     return file_ids, sediment_ids
                 hit_key = (tuple(file_ids), tuple(sediment_ids))
                 if last_hit_key == hit_key:
                     logger.info({"event": "image_poll_hit", "conversation_id": conversation_id, "file_ids": file_ids,
-                                 "sediment_ids": sediment_ids})
+                                 "sediment_ids": sediment_ids, "sediment_fast": sediment_fast})
                     return file_ids, sediment_ids
                 last_hit_key = hit_key
-                if not config.image_settle_enabled:
+                if not settle_enabled:
                     # 二次确认机制关闭：直接返回首次发现的 file_ids
                     logger.info({"event": "image_poll_hit_settle_disabled", "conversation_id": conversation_id,
-                                 "file_ids": file_ids, "sediment_ids": sediment_ids})
+                                 "file_ids": file_ids, "sediment_ids": sediment_ids,
+                                 "sediment_fast": sediment_fast})
                     return file_ids, sediment_ids
                 logger.info({"event": "image_poll_hit_pending_settle", "conversation_id": conversation_id,
                              "file_ids": file_ids, "sediment_ids": sediment_ids,
-                             "settle_secs": config.image_settle_secs})
-                wait = min(config.image_settle_secs, max(0.0, _remaining()))
+                             "settle_secs": settle_secs, "sediment_fast": sediment_fast})
+                wait = min(settle_secs, max(0.0, _remaining()))
                 if wait > 0:
                     _cancel_aware_sleep(wait)
                     continue
@@ -3826,6 +3911,28 @@ class OpenAIBackendAPI:
         timeout = poll_timeout_secs if poll_timeout_secs is not None else config.image_poll_timeout_secs
         if sse_image_gen_ms is None:
             sse_image_gen_ms = getattr(self, "_last_image_sse_gen_ms", None)
+        if (
+            poll
+            and conversation_id
+            and sediment_ids
+            and not file_ids
+            and config.image_sediment_fast_poll_enabled
+        ):
+            settle = float(config.image_settle_secs_sediment)
+            if settle > 0:
+                time.sleep(min(settle, 2.0))
+            try:
+                urls = self._resolve_image_urls(conversation_id, file_ids, sediment_ids)
+            except Exception:
+                urls = []
+            if urls:
+                logger.info({
+                    "event": "image_resolve_sediment_fast_direct",
+                    "conversation_id": conversation_id,
+                    "sediment_ids": sediment_ids,
+                    "url_count": len(urls),
+                })
+                return urls
         # 当 check-before-hit 和 settle 均已关闭，且 SSE 已给出 file_ids 时，
         # 跳过轮询直接解析 URL，省去 initial_wait + 轮询耗时。
         if poll and conversation_id and (file_ids or sediment_ids):
@@ -4458,10 +4565,37 @@ class OpenAIBackendAPI:
 
         CF/边缘 403 时最多重试 2 次（短退避），避免对话 UI 长时间空挂。
         """
+        try:
+            from services.config import config as _cfg
+
+            settings = _cfg.get_image_pipeline_settings()
+            if bool(settings.get("pre_ticket_pool_enabled")) and self.access_token:
+                from services.image_pipeline.pre_ticket_pool import pre_ticket_pool
+
+                cached = pre_ticket_pool.get(self.access_token)
+                if cached is not None and cached.requirements is not None:
+                    return cached.requirements
+        except Exception:
+            pass
+
         last_exc: BaseException | None = None
         for attempt in range(1, 4):
             try:
-                return self._get_chat_requirements_once()
+                requirements = self._get_chat_requirements_once()
+                try:
+                    from services.config import config as _cfg
+
+                    settings = _cfg.get_image_pipeline_settings()
+                    if bool(settings.get("pre_ticket_pool_enabled")) and self.access_token:
+                        from services.image_pipeline.pre_ticket_pool import PreTicketBundle, pre_ticket_pool
+
+                        pre_ticket_pool.put(
+                            self.access_token,
+                            PreTicketBundle(requirements=requirements, turnstile_solved=bool(requirements.turnstile_token)),
+                        )
+                except Exception:
+                    pass
+                return requirements
             except UpstreamHTTPError as exc:
                 last_exc = exc
                 status = int(getattr(exc, "status_code", 0) or 0)

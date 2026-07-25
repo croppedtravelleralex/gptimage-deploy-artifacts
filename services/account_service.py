@@ -119,6 +119,37 @@ class AccountService:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)
 
+    OBSERVE_IMPORT_REFRESH_GRACE_SEC = 420
+
+    @classmethod
+    def observe_import_refresh_grace_seconds(cls) -> int:
+        return cls.OBSERVE_IMPORT_REFRESH_GRACE_SEC
+
+    @classmethod
+    def _observe_refresh_after(cls, account: dict, *, now: datetime | None = None) -> datetime | None:
+        if not isinstance(account, dict):
+            return None
+        explicit = cls._parse_time(account.get("panda_observe_refresh_after"))
+        if explicit is not None:
+            return explicit
+        receive_state = str(account.get("panda_receive_state") or "").strip().lower()
+        if receive_state != "identity_isolated":
+            return None
+        imported = cls._parse_time(account.get("panda_imported_at"))
+        if imported is None:
+            return None
+        return imported + timedelta(seconds=cls.observe_import_refresh_grace_seconds())
+
+    @classmethod
+    def _observe_import_refresh_grace_active(cls, account: dict, *, now: datetime | None = None) -> bool:
+        if not isinstance(account, dict):
+            return False
+        after = cls._observe_refresh_after(account, now=now)
+        if after is None:
+            return False
+        current = now or datetime.now(timezone.utc)
+        return current < after
+
     @classmethod
     def _day_key(cls, value: object) -> str | None:
         parsed = cls._parse_time(value)
@@ -239,7 +270,7 @@ class AccountService:
             return False
         if account.get("status") in {"禁用", "限流", "异常"}:
             return False
-        if bool(account.get("image_soft_capped")):
+        if bool(account.get("image_soft_capped")) and not AccountService._scheduler_unrestricted():
             restore_at = AccountService._parse_time(account.get("restore_at") or account.get("image_gen_window_reset_at"))
             if restore_at is None:
                 return False
@@ -252,11 +283,77 @@ class AccountService:
         if AccountService._is_true_unlimited_image_account(account):
             return True
         if bool(account.get("image_quota_unknown")):
-            return True
+            return False
         if int(account.get("quota") or 0) > 0:
             return True
         # restore_at 已过但本地仍是 0：允许进候选，取号时懒刷新上游
         return AccountService._quota_window_due_for_lazy_refresh(account)
+
+    @classmethod
+    def _has_confirmed_image_quota(cls, account: dict) -> bool:
+        """账面已确认有生图额度：非 unknown，且 quota>0 / 无限额 / 懒刷新窗口已到。"""
+        if not isinstance(account, dict):
+            return False
+        if account.get("status") != "正常":
+            return False
+        if cls._is_true_unlimited_image_account(account):
+            return True
+        if bool(account.get("image_quota_unknown")):
+            return False
+        if int(account.get("quota") or 0) > 0:
+            return True
+        return cls._quota_window_due_for_lazy_refresh(account)
+
+    def _image_quota_freshness_required(self) -> bool:
+        if config.image_require_recent_quota_refresh:
+            return True
+        try:
+            pipe = config.get_image_pipeline_settings()
+            if not pipe.get("enabled"):
+                return False
+            return bool(pipe.get("require_quota_freshness", True))
+        except Exception:
+            return False
+
+    def image_quota_state(self, account: dict) -> str:
+        """UI/运维用额度状态：unlimited/unknown/ready/unverified/stale/blocked/refresh_pending/exhausted."""
+        if not isinstance(account, dict):
+            return "exhausted"
+        if self._is_true_unlimited_image_account(account):
+            return "unlimited"
+        if bool(account.get("image_quota_unknown")):
+            return "unknown"
+        quota = int(account.get("quota") or 0)
+        if self._is_image_account_schedulable(account) and quota > 0:
+            refreshed_at = self._image_quota_refresh_time(account)
+            if refreshed_at is None:
+                return "unverified"
+            if self._image_quota_freshness_required() and not self._is_recent_image_quota(account):
+                return "stale"
+            return "ready"
+        if quota > 0:
+            return "blocked"
+        if self._quota_window_due_for_lazy_refresh(account):
+            return "refresh_pending"
+        return "exhausted"
+
+    def available_image_quota_for_account(self, account: dict) -> int:
+        """单账号当前可参与生图调度的账面额度（0=不可用，-1=无限额）。"""
+        if not isinstance(account, dict):
+            return 0
+        if self._is_true_unlimited_image_account(account):
+            return -1
+        if not self._is_image_account_schedulable(account):
+            return 0
+        if not self._has_confirmed_image_quota(account):
+            return 0
+        quota = int(account.get("quota") or 0)
+        if quota <= 0:
+            return 0
+        refreshed_at = self._image_quota_refresh_time(account)
+        if refreshed_at is not None and self._image_quota_freshness_required() and not self._is_recent_image_quota(account):
+            return 0
+        return quota
 
     @staticmethod
     def _lazy_refresh_jitter_seconds(account: dict) -> float:
@@ -302,7 +399,16 @@ class AccountService:
             return False
         return datetime.now(timezone.utc) >= eligible_at
 
+    @staticmethod
+    def _scheduler_unrestricted() -> bool:
+        try:
+            return bool(config.get_scheduler_settings().get("unrestricted"))
+        except Exception:
+            return False
+
     def _is_image_interval_ready(self, account: dict) -> bool:
+        if self._scheduler_unrestricted():
+            return True
         settings = config.get_scheduler_settings()
         if not settings.get("enabled"):
             return True
@@ -336,6 +442,8 @@ class AccountService:
         return time.time() >= next_ok_ts
 
     def _cohort_paused(self, account: dict) -> bool:
+        if self._scheduler_unrestricted():
+            return False
         settings = config.get_scheduler_settings()
         if not settings.get("enabled"):
             return False
@@ -395,7 +503,7 @@ class AccountService:
         account["image_gen_window_reset_at"] = state.reset_at
         account["image_soft_band"] = state.soft_band
         account["image_soft_used_ratio"] = state.used_ratio
-        if settings.get("enabled") and state.soft_capped:
+        if settings.get("enabled") and state.soft_capped and not self._scheduler_unrestricted():
             # 软熔断只用 flag，禁止改 status=限流（否则 restore 后仍被 status 门禁卡死）
             account["image_soft_capped"] = True
             if state.reset_at:
@@ -530,6 +638,32 @@ class AccountService:
         except (TypeError, ValueError):
             return 1
 
+    def _is_warmup_dispatch_blocked(self, account: dict | None) -> bool:
+        try:
+            from services.account_warmup_service import account_warmup_service
+
+            email = str((account or {}).get("email") or "").strip().lower()
+            return bool(email) and account_warmup_service.is_dispatch_blocked(email)
+        except Exception:
+            return False
+
+    def _order_tokens_warmup_hot_first(self, tokens: list[str]) -> list[str]:
+        try:
+            from services.account_warmup_service import account_warmup_service
+
+            hot = {str(e).strip().lower() for e in account_warmup_service.hot_emails()}
+        except Exception:
+            return tokens
+        if not hot:
+            return tokens
+        hot_tokens: list[str] = []
+        cold_tokens: list[str] = []
+        for token in tokens:
+            account = self.get_account(token) or {}
+            email = str(account.get("email") or "").strip().lower()
+            (hot_tokens if email in hot else cold_tokens).append(token)
+        return hot_tokens + cold_tokens if hot_tokens else tokens
+
     def _account_binding_hash(self, account: dict | None) -> str:
         from services.account_identity import proxy_binding_hash
 
@@ -547,6 +681,31 @@ class AccountService:
             if self._account_binding_hash(account) == binding:
                 total += int(count or 0)
         return total
+
+    def _image_slot_available_locked(
+            self,
+            token: str,
+            *,
+            skip_global_limit: bool = False,
+    ) -> bool:
+        """单 token 是否还能再占一路生图在途（账号并发 + binding + 全局闸门）。"""
+        if not token:
+            return False
+        max_concurrency = max(1, int(config.image_account_concurrency or 1))
+        binding_limit = self._image_binding_inflight_max()
+        current = int(self._image_inflight.get(token, 0))
+        if current >= max_concurrency:
+            return False
+        account = self._accounts.get(token) or {}
+        binding = self._account_binding_hash(account)
+        if binding and self._binding_image_inflight_locked(binding) >= binding_limit:
+            return False
+        if not skip_global_limit:
+            ready_count = len(self._list_ready_candidate_tokens())
+            global_limit = self._effective_image_global_concurrency(ready_count)
+            if global_limit > 0 and self._total_image_inflight_locked() >= global_limit:
+                return False
+        return True
 
     def _count_active_binding_peers(
         self,
@@ -594,6 +753,47 @@ class AccountService:
         peers = self._count_active_binding_peers(binding)
         return peers > self._proxy_binding_max_accounts()
 
+    def _account_egress_key(self, account: dict | None) -> str:
+        item = account or {}
+        return str(item.get("proxy_egress_ip") or item.get("proxy_egress_hash") or "").strip()
+
+    def _count_active_egress_peers(
+        self,
+        egress_key: str,
+        *,
+        exclude_token: str = "",
+    ) -> int:
+        key = str(egress_key or "").strip()
+        if not key:
+            return 0
+        exclude = str(exclude_token or "").strip()
+        peers = 0
+        for token, item in self._accounts.items():
+            if exclude and token == exclude:
+                continue
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status") or "")
+            if status in {"禁用", "限流", "异常"}:
+                continue
+            if str(item.get("outlook_recovery_state") or "").strip().lower() == "terminal":
+                continue
+            receive = str(item.get("panda_receive_state") or "").strip().lower()
+            if receive in {"identity_isolated", "rejected"}:
+                continue
+            other = self._account_egress_key(item)
+            if other == key:
+                peers += 1
+        return peers
+
+    def _active_proxy_egress_duplicate(self, account: dict) -> bool:
+        if not isinstance(account, dict):
+            return True
+        egress = self._account_egress_key(account)
+        if not egress:
+            return False
+        return self._count_active_egress_peers(egress) > self._proxy_binding_max_accounts()
+
     def _enforce_shared_binding_isolation(self, account: dict, access_token: str) -> dict:
         """同 binding 已达承载上限时，禁止新号静默进调度池：强制 identity_isolated。"""
         from services.account_identity import proxy_binding_hash
@@ -639,13 +839,22 @@ class AccountService:
     def _is_image_account_schedulable(self, account: dict) -> bool:
         if not self._is_image_account_available(account):
             return False
+        if not self._has_confirmed_image_quota(account):
+            return False
         if self._has_image_account_failure_evidence(account):
             return False
         if self._requires_panda_receive_verification(account):
             return False
-        if config.image_require_recent_quota_refresh and not self._is_recent_image_quota(account):
+        if self._image_quota_freshness_required():
+            refreshed_at = self._image_quota_refresh_time(account)
+            if refreshed_at is not None and not self._is_recent_image_quota(account):
+                if not self._quota_window_due_for_lazy_refresh(account):
+                    return False
+        elif config.image_require_recent_quota_refresh and not self._is_recent_image_quota(account):
             return False
         if self._active_proxy_binding_duplicate(account):
+            return False
+        if self._active_proxy_egress_duplicate(account):
             return False
         return True
 
@@ -756,6 +965,10 @@ class AccountService:
     def _can_skip_image_preflight(self, account: dict | None) -> bool:
         """短窗口内复用最近配额刷新结果，降低生图取号探活与写盘频率。"""
         if not isinstance(account, dict) or not self._is_image_account_schedulable(account):
+            return False
+        if not self._has_confirmed_image_quota(account):
+            return False
+        if self._image_quota_freshness_required() and not self._is_recent_image_quota(account):
             return False
         interval = float(config.image_preflight_min_interval_sec or 0.0)
         if interval <= 0:
@@ -970,6 +1183,7 @@ class AccountService:
         normalized["panda_synced_at"] = normalized.get("panda_synced_at") or None
         normalized["panda_receive_state"] = str(normalized.get("panda_receive_state") or "").strip() or None
         normalized["panda_imported_at"] = normalized.get("panda_imported_at") or None
+        normalized["panda_observe_refresh_after"] = normalized.get("panda_observe_refresh_after") or None
         normalized["panda_verified_at"] = normalized.get("panda_verified_at") or None
         normalized["panda_rejected_at"] = normalized.get("panda_rejected_at") or None
         normalized["panda_verify_last_error"] = normalized.get("panda_verify_last_error") or None
@@ -1224,6 +1438,8 @@ class AccountService:
             if not account:
                 return access_token
             active_token = str(account.get("access_token") or resolved_token or access_token)
+            if not force and self._observe_import_refresh_grace_active(account):
+                return active_token
             if not self._token_needs_refresh(active_token, force=force):
                 return active_token
             refresh_token = str(account.get("refresh_token") or "").strip()
@@ -1745,16 +1961,25 @@ class AccountService:
         excluded = set(excluded_tokens or set())
         recent_candidates: list[tuple[tuple, str]] = []
         fallback_candidates: list[tuple[tuple, str]] = []
+        hot_emails: set[str] = set()
+        try:
+            from services.account_warmup_service import account_warmup_service
+
+            hot_emails = {str(e).strip().lower() for e in account_warmup_service.hot_emails()}
+        except Exception:
+            hot_emails = set()
         with self._lock:
             accounts = [dict(item) for item in self._accounts.values()]
             for item in accounts:
                 token = str(item.get("access_token") or "")
+                email_key = str(item.get("email") or "").strip().lower()
+                if config.dispatch_hot_only and hot_emails and email_key not in hot_emails:
+                    continue
                 if (
-                        self._is_image_account_available(item)
+                        self._is_image_account_schedulable(item)
                         and self._is_image_interval_ready(item)
                         and not self._cohort_paused(item)
-                        and not self._has_image_account_failure_evidence(item)
-                        and not self._requires_panda_receive_verification(item)
+                        and not self._is_warmup_dispatch_blocked(item)
                         and self._account_matches_plan_type(item, plan_type)
                         and self._account_matches_any_plan_type(item, plan_types)
                         and self._account_matches_source_type(item, source_type)
@@ -1772,7 +1997,15 @@ class AccountService:
             else fallback_candidates
         )
         candidates.sort()
-        return [token for _sort_key, token in candidates]
+        tokens = [token for _sort_key, token in candidates]
+        try:
+            if config.get_image_pipeline_settings().get("enabled"):
+                from services.image_pipeline.aci_ranker import sort_tokens_by_aci
+
+                tokens = sort_tokens_by_aci(lambda token: self.get_account(token) or {}, tokens)
+        except Exception:
+            pass
+        return tokens
 
     def _list_available_candidate_tokens(
             self,
@@ -1793,7 +2026,7 @@ class AccountService:
                 if binding and self._binding_image_inflight_locked(binding) >= binding_limit:
                     continue
                 available.append(token)
-            return available
+            return self._order_tokens_warmup_hot_first(available)
 
     def _total_image_inflight_locked(self) -> int:
         return sum(max(0, int(value or 0)) for value in self._image_inflight.values())
@@ -1806,7 +2039,8 @@ class AccountService:
     ) -> dict[str, int | float | bool]:
         """返回生图取号运行态候选面，避免 health 只暴露静态 quota 水位。
 
-        - ready_candidate_count：静态可调度且未处于 preflight backoff 的候选数。
+        - ready_candidate_count：通过 schedulable 闸门且未处于 preflight backoff 的候选数。
+        - schedulable_candidate_count：与 ready 对齐（ready 池已按 schedulable 构建）。
         - available_candidate_count：ready 里未达到单账号并发上限的候选数。
         - dispatchable_candidate_count：再扣除全局并发闸门后，当前真正可派发的候选数。
         """
@@ -1847,6 +2081,7 @@ class AccountService:
         return {
             "preflight_backoff_count": preflight_backoff_count,
             "ready_candidate_count": len(ready_tokens),
+            "schedulable_candidate_count": len(ready_tokens),
             "available_candidate_count": available_candidate_count,
             "dispatchable_candidate_count": 0 if global_limit_reached else available_candidate_count,
             "image_inflight_count": image_inflight_count,
@@ -1878,6 +2113,7 @@ class AccountService:
             "excluded_by_quota": 0,
             "excluded_by_quota_freshness": 0,
             "excluded_by_dup_binding": 0,
+            "excluded_by_dup_egress": 0,
             "excluded_by_interval": 0,
             "excluded_by_backoff": 0,
             "excluded_by_inflight": 0,
@@ -1919,6 +2155,11 @@ class AccountService:
                     buckets["excluded_by_quota"] += 1
                     primary = primary or "quota"
                     _sample("excluded_by_quota", account)
+            elif self._image_quota_freshness_required() and not self._is_recent_image_quota(account):
+                if self._image_quota_refresh_time(account) is not None:
+                    buckets["excluded_by_quota_freshness"] += 1
+                    primary = primary or "quota_freshness"
+                    _sample("excluded_by_quota_freshness", account)
             elif config.image_require_recent_quota_refresh and not self._is_recent_image_quota(account):
                 buckets["excluded_by_quota_freshness"] += 1
                 primary = primary or "quota_freshness"
@@ -1927,6 +2168,10 @@ class AccountService:
                 buckets["excluded_by_dup_binding"] += 1
                 primary = primary or "dup_binding"
                 _sample("excluded_by_dup_binding", account)
+            if self._active_proxy_egress_duplicate(account):
+                buckets["excluded_by_dup_egress"] += 1
+                primary = primary or "dup_egress"
+                _sample("excluded_by_dup_egress", account)
 
             schedulable = self._is_image_account_schedulable(account)
             if schedulable:
@@ -2022,6 +2267,7 @@ class AccountService:
             plan_types: set[str] | tuple[str, ...] | None = None,
             skip_global_limit: bool = False,
             preferred_email: str = "",
+            excluded_tokens: set[str] | None = None,
     ) -> str:
         """从候选池中获取一个可用的图片生图 token。
 
@@ -2042,18 +2288,31 @@ class AccountService:
                         continue
                     prefer_token = token
                     break
-            # Sticky 不可用时降级到号池自动调度，避免对话页硬失败。
+            # Sticky：有 preferred 时先等该号 slot，避免 conc 场景抢错号再重试。
             if prefer_token:
                 acquired = False
+                queue_started_at = time.monotonic()
+                queue_timeout = float(config.image_global_queue_timeout_secs or 0.0)
                 with self._image_slot_condition:
-                    current = int(self._image_inflight.get(prefer_token, 0))
-                    limit = max(1, int(getattr(config, "image_account_concurrency", 1) or 1))
-                    global_limit = max(1, int(getattr(config, "image_global_concurrency", 1) or 1))
-                    if not skip_global_limit and sum(int(v) for v in self._image_inflight.values()) >= global_limit:
-                        raise RuntimeError("image global concurrency limit reached")
-                    if current < limit:
-                        self._image_inflight[prefer_token] = current + 1
-                        acquired = True
+                    while not acquired:
+                        if self._image_slot_available_locked(prefer_token, skip_global_limit=skip_global_limit):
+                            self._image_inflight[prefer_token] = int(self._image_inflight.get(prefer_token, 0)) + 1
+                            acquired = True
+                            break
+                        if not skip_global_limit:
+                            global_limit = self._effective_image_global_concurrency(
+                                len(self._list_ready_candidate_tokens())
+                            )
+                            if global_limit > 0 and self._total_image_inflight_locked() >= global_limit:
+                                if queue_timeout <= 0 or time.monotonic() - queue_started_at >= queue_timeout:
+                                    raise RuntimeError("image global concurrency limit reached")
+                                self._image_slot_condition.wait(timeout=min(1.0, queue_timeout))
+                                continue
+                        if queue_timeout <= 0:
+                            break
+                        if time.monotonic() - queue_started_at >= queue_timeout:
+                            break
+                        self._image_slot_condition.wait(timeout=min(1.0, queue_timeout))
                 if acquired:
                     try:
                         from services.account_workload_policy_service import account_workload_policy_service
@@ -2093,7 +2352,7 @@ class AccountService:
             plan_types=plan_types,
         ))
         max_attempts = min(max(1, int(config.image_token_max_attempts or 20)), max(1, candidate_count))
-        attempted_tokens: set[str] = set()
+        attempted_tokens: set[str] = set(excluded_tokens or set())
         try:
             for _attempt in range(max_attempts):
                 access_token = self._acquire_next_candidate_token(
@@ -2121,6 +2380,7 @@ class AccountService:
                 if (
                         self._can_skip_image_preflight(local_account)
                         and not self._quota_window_due_for_lazy_refresh(local_account or {})
+                        and self._is_image_account_schedulable(local_account or {})
                         and self._account_matches_plan_type(local_account or {}, plan_type)
                         and self._account_matches_any_plan_type(local_account or {}, plan_types)
                         and self._account_matches_source_type(local_account or {}, source_type)
@@ -2586,12 +2846,49 @@ class AccountService:
                 account["text_next_ok_at"] = _iso_utc(text_next if text_next > 0 else None)
                 account["text_next_ok_in_sec"] = _secs_until(text_next if text_next > 0 else None)
 
+                account["image_schedulable"] = self._is_image_account_schedulable(account)
+                account["image_quota_state"] = self.image_quota_state(account)
+                account["available_image_quota"] = self.available_image_quota_for_account(account)
+
                 result.append(account)
             return result
 
     def get_total_image_inflight(self) -> int:
         with self._lock:
             return self._total_image_inflight_locked()
+
+    def reconcile_inflight(
+        self,
+        *,
+        expected_by_token: dict[str, int],
+        force: bool = False,
+    ) -> dict[str, object]:
+        """Compare memory ``_image_inflight`` vs tasks actually holding account slots."""
+        drift: dict[str, dict[str, int]] = {}
+        corrected = 0
+        with self._image_slot_condition:
+            reported = {k: int(v or 0) for k, v in self._image_inflight.items()}
+            all_tokens = set(reported) | set(expected_by_token)
+            for token in all_tokens:
+                memory = int(reported.get(token, 0))
+                expected = int(expected_by_token.get(token, 0))
+                if memory != expected:
+                    drift[token[:12] + "..."] = {"memory": memory, "expected": expected}
+                    if force and memory > expected:
+                        if expected <= 0:
+                            self._image_inflight.pop(token, None)
+                        else:
+                            self._image_inflight[token] = expected
+                        corrected += 1
+            total_memory = self._total_image_inflight_locked()
+            total_expected = sum(max(0, int(v)) for v in expected_by_token.values())
+        return {
+            "drift_count": len(drift),
+            "drift": drift,
+            "total_memory": total_memory,
+            "total_expected": total_expected,
+            "corrected": corrected,
+        }
 
     def list_limited_tokens(self) -> list[str]:
         with self._lock:
@@ -3258,6 +3555,10 @@ class AccountService:
         if not access_token:
             raise ValueError("access_token is required")
 
+        _resolved_token, cached = self._get_account_for_token(access_token)
+        if cached and self._observe_import_refresh_grace_active(cached):
+            return dict(cached)
+
         active_token = self.refresh_access_token(access_token, event=f"{event}:preflight") or access_token
         try:
             from services.openai_backend_api import InvalidAccessTokenError, OpenAIBackendAPI
@@ -3680,10 +3981,21 @@ class AccountService:
             if self._is_image_account_available(a) and not self._is_recent_image_quota(a)
         )
         verified_total_quota = sum(
-            max(0, int(a.get("quota") or 0))
+            max(0, self.available_image_quota_for_account(a))
             for a in items
-            if self._is_image_account_schedulable(a) and self._is_recent_image_quota(a)
+            if self.available_image_quota_for_account(a) > 0
         )
+        available_image_quota = verified_total_quota
+        latest_quota_refresh_at: str | None = None
+        for a in items:
+            if not self._is_image_account_schedulable(a):
+                continue
+            ts = self._image_quota_refresh_time(a)
+            if ts is None:
+                continue
+            iso = ts.isoformat()
+            if latest_quota_refresh_at is None or iso > latest_quota_refresh_at:
+                latest_quota_refresh_at = iso
         total_success = sum(int(a.get("success") or 0) for a in items)
         total_fail = sum(int(a.get("fail") or 0) for a in items)
         by_type = {}
@@ -3723,6 +4035,8 @@ class AccountService:
             "verified_quota_count": verified_quota_count,
             "stale_quota_count": stale_quota_count,
             "verified_total_quota": verified_total_quota,
+            "available_image_quota": available_image_quota,
+            "latest_quota_refresh_at": latest_quota_refresh_at,
             **runtime_candidate_stats,
             "total_success": total_success,
             "total_fail": total_fail,

@@ -1,14 +1,61 @@
 # 改进池
 
-最后校准：2026-07-23
+最后校准：2026-07-25
 
 原则：只保留当前仍有工程价值的项；已完成和历史流水不放在这里，详见 `docs/logs/2026/2026-07.md` 与 `docs/archive/`。
+
+## 当前主线（2026-07-25 起）
+
+### SLOT-RUST Layer 1 — SlotLedger + sS 75s 超时【P0 · 进行中】
+
+- **真相源**：[`26-slot-lifecycle-rust-roadmap.md`](./26-slot-lifecycle-rust-roadmap.md) §4–§5、[`27-pipeline-watchdog-monitoring-matrix.md`](./27-pipeline-watchdog-monitoring-matrix.md)
+- **已完成（2026-07-25）**：
+  1. Rust `SlotLedger` FSM + watchdog FFI；Python `slot_ledger.py` fallback。
+  2. sS 75s 墙钟：`ss_stage_wall_timeout_secs` + `assert_ss_wall_ok`。
+  3. `pipeline_watchdog` + `reconcile_inflight()` + `/health` 扩展。
+  4. `pre_ticket_pool` TTL 缓存 requirements。
+  5. 基线脚本 + `BASELINE-pre-slotledger-*`。
+- **待办**：
+  1. Linux `.so` artifact 部署 Panda；FFI 全面持账。
+  2. `failure_retry_enabled` / `failure_retry_max` API+UI。
+  3. Layer 1 完成后 conc10 复测 + `BASELINE-post-slotledger-*` 横评。
+
+### SLOT-RUST Layer 2 — 账号/基础设施 Rust【P2 · 号池扩大后】
+
+- **触发**：号池 **N>50** 或 `image_global_concurrency>20` 或 account_queue 占比持续 >10%。
+- **范围**：`account_service` CRUD/缓存、CF 探活编排、proxy 绑定 — **非当前 sprint**。
+- **不做**：一夜全量 Rust conversation/SSE。
+
+### IMG-STABLE 稳住出图【P0 · 运维观察】
+
+- **状态**：可观测性 sprint 已收尾；转入 **稳住出图** 阶段。
+- **真相源**：根目录 [`plan.md`](../plan.md)（STAB 执行清单）；详情 [`archive/plans/24-image-stability-plan-detail.md`](./archive/plans/24-image-stability-plan-detail.md)
+- **SLO**：单账号 serial5/conc10 历史 10/10；**2026-07-25 回归 4/10**（CF 出口，换绑后待复测）；inflight 泄漏已修。
+- **本周 P0**：STAB-A1/A2（公平复测+超时）、STAB-B1/B4/B5（CF 探活、binding 并发、暖号池）。
+- **已锁定不做**：真 Chrome 开票、浏览器生图数据面、FlareSolverr 生图根方案、大规模协议挖矿。
+- **Camoufox**：注册/重登 + SDK 漂移补 HAR；非生产生图栈。
+- **验收关闭**：见 `24` §5（IMG-STABLE v1）。
+
+## 上一主线（2026-07-24，已收尾）
+
+### IMG-OBS 生图可观测性与三路径对比【已关闭可观测性；对比 ~80%】
+
+- **状态**：后端+日志 UI **已部署 Panda**；VERIFY-001 pass；pure_http 5/5 + ticket_pool 3/5 首份对比报告已出。
+- **真相源**：[`docs/23-image-observability-and-benchmark-todo.md`](./23-image-observability-and-benchmark-todo.md)
+- **已完成（摘要）**：
+  1. call log 阶段耗时 + token/t/s + traffic；成功路径单条合并；去掉 LoggedCall 双写。
+  2. 日志页 DurationCell / 去重 / 200 页 / Token·流量。
+  3. VERIFY-001：`verify-001-20260724T083730Z.json`
+  4. BENCH-001～003：`R-image-path-benchmark-20260724.md`
+- **待办（P1）**：**BENCH-004** browser 对照；ticket_pool 公平复测（号闲后单独 serial5，超时对齐 540s）。
+- **架构**：真 Chrome 出票 **不纳入主线**（见 `22` §9、`06` 架构结论表）。
+- **验收**：见 `23` §验收标准。
 
 ## 当前主线（2026-07-22 起优先）
 
 ### PROTO-PURE-HTTP 严格纯 HTTP 生图（Sentinel / Turnstile）【P0 · 正式链路验收中】
 
-- **状态**：**P4-7 已落地 + 串行 5 通过**（`qaflowakjewai6ps@proton.me` 5/5，证据 `captures/spa/O-*`）；并发 4 待跑。观测/流水线待办 → **IMG-SCHED-021**。
+- **状态**：**P4-7 已落地**；串行 5 **5/5**；单账号 conc10 **30/30**（`acceptance-90s-picture_v2-20260723`）；多账号轮询 conc10 **4/10**（`acceptance-90s-multiacct-20260723`，冷号突发 CF @ init，非链路回退）。观测/流水线 → **IMG-SCHED-021**。
 - **详细清单（已做/未做勾选）**：[`docs/20-pure-http-image-sentinel-todo.md`](./20-pure-http-image-sentinel-todo.md)（**真相源**）。
 - **依据**：`captures/spa/G-image-gen-not-triggered-20260721.md`、`field-diff-picture_v2-live-vs-bench.json`、现网 HAR `spa-image-20260721T144019Z.har`；`12`「生图不触发 image_gen」。
 - **要做（按序）**：
@@ -17,13 +64,26 @@
   3. **P0 / 脱敏时间线**：保存 `arrival_ms`、`author/name/recipient`、`content_type`、`event/type/status`；禁止保存 token、cookie 或完整敏感正文。
   4. **P0 / 结果分类**：新增 `tool_args_as_text`、`late_image_gen_after_gate`、`no_image_gen_quiet_stream`，不再把所有失败压成 `no_image_gen`。
   5. **P0 / CF 分层**：拆分 `home_403_soft_fail`、`requirements_cf403`、`start_cf403`、`tasks_cf403`、`propagated_cf`；修正文档和 M 证据中“无任何 CF403”的误导口径。
-  6. **P1 / 诊断监听**：45 秒仍判 gate fail；同一 SSE 流可继续只读监听至 **90 秒**；**验收 gate 已放宽至 65 秒**（第 2 轮 64.5s 触发生图可过线）。
+  6. **P1 / 诊断监听**：gate fail 后同一 SSE 流可继续只读监听至 **90s+**；**验收 gate 临时放宽至 90s**（2026-07-23：`qaflowakjewai6ps` 在 65s gate 下 `image_gen` 68–74s，与 `/v1/images` ~72s 成功不一致；先以 90s 过验收，**上游 SSE 触发延迟优化**见 backlog **PROTO-UPSTREAM-LATENCY**）。
   7. **P4-6 / CF 节点预扫**：5 并发 Webshare 轻量探测（home+requirements），记录各节点 CF403；编排见 `scripts/spa_image_panda_acceptance.py`。
   8. 保留新 IP 绑定；观测代码已落地，可在 Panda 重跑串行 5 / cf_scan5 / 并发 4。
   9. 长期降低 `/tasks` 轮询暴露面，保持 conversation poll 恢复与连续 2 次 CF abort 边界。
 - **已完成（摘要）**：G 诊断；Turnstile VM；strict auto-tool；CF/poll abort；正式发布；生产单单元；旧 IP 串行门禁止损；同账号/同 fp/同 shape 新旧 IP A/B；新 IP 生产换绑与串行 `4/5` 止损。证据 `captures/spa/{J,K,L,M}-*.json`。
 - **非目标 / 禁止**：浏览器作数据面或暖机拿 Turnstile；宣称协议绕过 CF；Panda build/scp 当正式发布；空 Turnstile 软降级回生产。
 - **验收**：见 `20` §4（纯 HTTP + 非空 Turnstile + 有 `image_gen` + 出图 + Panda 串行/并发）。
+
+### PROTO-UPSTREAM-LATENCY 上游 SSE 触发生图延迟优化【P1 · 待办】
+
+- **状态**：**待办**（2026-07-23 验收暴露：同账号 `qaflowakjewai6ps@proton.me` / `92.113.246.176`，`spa_tool` 首次 `image_gen` ~74s、`picture_v2` ~68s，均超 65s gate；`/v1/images` 同环境 ~72s 可成功）。
+- **现象**：SSE 建连后前几百 ms 仅有元数据/`tool_recipient`，随后 **60–70s 空窗**，再出现 `title_generation` + `image_gen`；非 CF403，requirements/prepare 正常。
+- **目标**：将 **p50 `sse_image_gen_ms` 压到 ≤45s**（长期），验收 gate 可从 90s 收回 65s。
+- **要做**：
+  1. 按协议路径（`picture_v2` vs `spa_tool`）对比 `sse_event_timeline`，定位空窗发生在上游哪一阶段（排队/模型路由/工具调度）。
+  2. 与生产 `/v1/images`、pipeline `phase_timings` 对齐，确认是否可跳过冗余 prepare/文本 preamble。
+  3. 账号/IP 维度：慢账号是否与高 CF IP 共现；是否需要换绑 vs 纯上游抖动。
+  4. 监控：在 Ops/health 增加 `image_gen_ttft_p50/p95`（从 conversation start 到首个 `image_gen`）。
+- **证据**：`captures/spa/acceptance-20260723T065722Z.json`、`acceptance-picture_v2-20260723T070500Z/`。
+- **非目标**：单纯放宽 gate 当作优化；用浏览器暖机换延迟。
 
 ### PROTO-REFACTOR 按逆向结果改造生产路径
 
@@ -99,12 +159,16 @@
 
 ### RUST-001 Rust 网关热路径重写（后续）
 
-- **状态**：待办；**独立新项目** `../gptimage-gateway-rs`（施工 `plan.md`；本仓 `14` 仅为索引）。
+- **状态**：Phase A+ 已接线；**R0 Python 开票+生图 2026-07-23 验证通过**（`22` §6）。
 - **前置**：STORE-004 / LOG-ROT（`15`）完成后再开 MVP 实打上游。
 - **路线**：MVP 最小生文/生图 → Panda 隔离端口测通（`self=0`）→ 全量（选号/admission + **RCA/运维指标**）。
 - **永久非目标**：注册机；FlareSolverr/全局 clearance（生产保持 `clearance.enabled=false`）。
 - **收益预期**：见 `13`（含 helper 保守列）；端到端生图不以变快为 KPI。
 - **红线**：禁止 Panda `cargo build`；estuary Bearer；禁生产 `8012` 未立项切流。
+
+### GO-SPIKE-001（已搁置 → Rust）
+
+- **状态**：**搁置**（2026-07-23 用户确认用 Rust）；见 `22` §4x 归档。
 
 ---
 
@@ -209,6 +273,15 @@
   2. 超过确认窗的「正常+invalid」纳入 `is_outlook_auto_recovery_candidate`。
   3. `test_outlook_auto_recovery_loop` 覆盖确认窗内/窗外行为。
 - **验收**：部署后不再出现长期 `schedulable=0` 且恢复 `candidate_count=0`、同时仍有陈旧 invalid 的状态。
+
+### IMG-SCHED-022 双槽流水线 pS(10) + sS(10)【P1 · 设计 v2.3】
+
+- **状态**：**待办**（设计见 `21` §8、§11、**§12 吸收 Orchestrator v2**）。
+- **双轨**：Sync Orchestrator（request-scoped，`/v1/images`）；Async Job（持久化，`/api/image-tasks` + `retry_phase_cursor`）。
+- **核心改造**：废除「全程 per_user_running 占槽」；分阶段 `AccountProvider`；五段 `*_queue_ms`。
+- **API**：`prompt_enhance`（默认 false）、`prompt_enhance_locale`、`multi_image_mode`（fast/diverse）。
+- **异号**：首选异号 + 小池回退；**禁止**任务级永久 exclude（§12.4）。
+- **验收**：§8.8 + §11.8 + conc10 P50/P95；假 queue 消除（`ss_queue_ms` 与总墙钟可解释）。
 
 ### IMG-SCHED-021 生图多阶段流水线与前端提交 P-C【P1 · 设计已记录】
 
