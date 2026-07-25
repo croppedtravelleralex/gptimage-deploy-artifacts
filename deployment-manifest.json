@@ -1,5 +1,5 @@
 {
-  "release": "slotledger-layer1-20260725",
+  "release": "cf-eligibility-20260725",
   "files": {
     "api/ai.py": "a1130692f67c4664b628aaaf0fba2508a894f53864c6d01fa1bdd6e7581bf554",
     "services/image_pipeline/schedule_trace.py": "e9b406f15e6fcf0c0e08cb235a4f5bba549ce54f666b4077e298b72fd642e7b8",
@@ -13,16 +13,21 @@
     "services/image_pipeline/orchestrator.py": "1dd5bef93a0b85daf4bbb269813759df12bf89a6528eb1ca9cc9b5a8e2343bf8",
     "services/image_task_service.py": "4972e487ec8946f71692fcbb8b239985bff065cbb7707a952b53f7211a5e0baa",
     "services/image_sync_adapter.py": "dcc6b50298eff8e5f07d50c759a20f2cb36905035e94d2007d8e794aeb36499a",
-    "services/account_service.py": "68e2cb9388b6e573ab15eeeeaa23ef507ffae394ed9d87a5d5b2c1e431033456",
+    "services/account_service.py": "403f6ef8b54fa196b80cbe4476bb73f61c76c7ab385f01147f9301f158612a30",
     "services/protocol/conversation.py": "50889a604869362f27dad90cc60bb401f93d448ed4fa532d03d6bfd9a752590d",
     "services/openai_backend_api.py": "279a66aab129b5849cd946ab61f9608d41a1f50f999f80cb7d5adb8895b803a2",
-    "services/config.py": "7dcd9837becae96f998565f8de05f9b7af4d807a8eaae5f84deb8315ba4ce117",
+    "services/config.py": "37bb068ff932c2780f562178a4c7bbcbaaa8c65a43ae313050ae60f4ce512ad3",
     "services/storage/database_storage.py": "f6907c8d162f234a5bda8c3bac5c8dda779e9aca6060e7e2fbb8ee89818b119f",
+    "services/proxy_cf_eligibility.py": "d4e1ed040d4baa7666188c7bc290e62ad5b108c7b01885f8003c239641d68e65",
+    "services/proxy_cf_failover.py": "fe43415b571f4d4e6c358008e6a26b25fd2f9a1fc704bb3a7c5741d5b3f0e767",
+    "services/proxy_cf_probe.py": "02b60c0644676badbd3fe99c389ad7ab921d9dd3138ae27394e43dc571527c54",
+    "services/proxy_quarantine.py": "9b617906bcc34e73c77708637b440c6a62ca7c6b58862d0c48b35701c3854408",
     "api/system.py": "dfa20c488ffae1e66fc6645ad69b2c6aa7dec01d5394e84f998b4a08d48d6b32",
     "utils/process_memory.py": "e4ae96e0bea48453cbb443d95d72aaa1ca92c721f642408b29ba85e2cb031964",
     "native/libimage_schedule_trace.so": "cf5ade7a75f87763b104c5fbcda45ee3acd8df22dedd6ddb7b4d30042649740c",
     "native/libimage_schedule_core.so": "72274bca24fa340db380a84943d0f4be73930b09f500d793d0852d9f865d60e7",
-    "deploy_panda_schedule_core.sh": "c346b410b601b4fdfbe75d18bb763d050422c873f3da3177280f5af9e47e301b",
-    "README.md": "bf502bb0f6b48e96e428c3a6517395ffc1e0435e58986f799b2cd167567fb358"
+    "scripts/_tmp_stamp_accounts_cf_ok.py": "db7119eddd01c65829a28901289bd5c4c7da29f80097fb3d889082acc32a777b",
+    "deploy_panda_schedule_core.sh": "3e2c62d14ef305d4a3d5806f9650abf405caa162627d32abe6c1d48a309c61ce",
+    "README.md": "9493f10864a37dd2433e6d0d9c4331f8476d37e6b376ba1a04ff28524b86ab0d"
   }
 }

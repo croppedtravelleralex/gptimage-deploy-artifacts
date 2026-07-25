@@ -27,8 +27,16 @@ PY_FILES=(
   services/openai_backend_api.py
   services/config.py
   services/storage/database_storage.py
+  services/proxy_cf_eligibility.py
+  services/proxy_cf_failover.py
+  services/proxy_cf_probe.py
+  services/proxy_quarantine.py
   api/system.py
   utils/process_memory.py
+)
+
+SCRIPT_FILES=(
+  scripts/_tmp_stamp_accounts_cf_ok.py
 )
 
 NATIVE_LIBS=(
@@ -97,6 +105,11 @@ printf '%s\n' "$EXPECTED_COMMIT" > "$BACKUP/artifact-commit.txt"
 echo "BACKUP=$BACKUP"
 
 for rel in "${PY_FILES[@]}"; do
+  mkdir -p "$ROOT/$(dirname "$rel")"
+  install -m 0644 "$ARTIFACT_ROOT/$rel" "$ROOT/$rel.new-$TS"
+  mv "$ROOT/$rel.new-$TS" "$ROOT/$rel"
+done
+for rel in "${SCRIPT_FILES[@]}"; do
   mkdir -p "$ROOT/$(dirname "$rel")"
   install -m 0644 "$ARTIFACT_ROOT/$rel" "$ROOT/$rel.new-$TS"
   mv "$ROOT/$rel.new-$TS" "$ROOT/$rel"

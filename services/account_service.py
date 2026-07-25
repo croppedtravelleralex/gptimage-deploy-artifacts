@@ -856,6 +856,15 @@ class AccountService:
             return False
         if self._active_proxy_egress_duplicate(account):
             return False
+        proxy = str(account.get("proxy") or "").strip()
+        if proxy:
+            try:
+                from services.proxy_cf_eligibility import is_proxy_cf_ok_for_image, require_cf_ok_for_image
+
+                if require_cf_ok_for_image() and not is_proxy_cf_ok_for_image(proxy, account=account):
+                    return False
+            except Exception:
+                return False
         return True
 
     @staticmethod
@@ -3352,6 +3361,10 @@ class AccountService:
                 account = dict(account)
                 account["cf_daily"] = []
                 account["egress_daily"] = []
+                account["proxy_cf_ok"] = False
+                account["proxy_cf_ok_at"] = 0
+                account["proxy_cf_probe_endpoint"] = ""
+                account["proxy_cf_classification"] = ""
                 account = self._normalize_account(account)
                 if account is None:
                     return None

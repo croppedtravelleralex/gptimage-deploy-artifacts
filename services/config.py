@@ -891,6 +891,11 @@ DEFAULT_WEBSHARE_CF_SCAN_SETTINGS: dict[str, object] = {
     "timezone": "Asia/Singapore",
     "startup_delay_sec": 120,
     "probe_timeout_sec": 45.0,
+    # Only CF-passing Webshare nodes may carry image traffic / be assigned.
+    "require_cf_ok_for_image": True,
+    "probe_on_assign": True,
+    "scan_stale_sec": 86400,
+    "block_unscanned_for_schedule": True,
 }
 
 DEFAULT_ACCOUNT_WARMUP_SETTINGS: dict[str, object] = {
@@ -1202,6 +1207,22 @@ def _normalize_webshare_cf_scan_settings(value: object) -> dict[str, object]:
         "probe_timeout_sec": max(
             10.0,
             float(source.get("probe_timeout_sec", DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["probe_timeout_sec"]) or 45.0),
+        ),
+        "require_cf_ok_for_image": _normalize_bool(
+            source.get("require_cf_ok_for_image"),
+            bool(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["require_cf_ok_for_image"]),
+        ),
+        "probe_on_assign": _normalize_bool(
+            source.get("probe_on_assign"),
+            bool(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["probe_on_assign"]),
+        ),
+        "scan_stale_sec": max(
+            300.0,
+            float(source.get("scan_stale_sec", DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["scan_stale_sec"]) or 86400),
+        ),
+        "block_unscanned_for_schedule": _normalize_bool(
+            source.get("block_unscanned_for_schedule"),
+            bool(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["block_unscanned_for_schedule"]),
         ),
     }
 
