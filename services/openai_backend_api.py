@@ -4565,10 +4565,37 @@ class OpenAIBackendAPI:
 
         CF/边缘 403 时最多重试 2 次（短退避），避免对话 UI 长时间空挂。
         """
+        try:
+            from services.config import config as _cfg
+
+            settings = _cfg.get_image_pipeline_settings()
+            if bool(settings.get("pre_ticket_pool_enabled")) and self.access_token:
+                from services.image_pipeline.pre_ticket_pool import pre_ticket_pool
+
+                cached = pre_ticket_pool.get(self.access_token)
+                if cached is not None and cached.requirements is not None:
+                    return cached.requirements
+        except Exception:
+            pass
+
         last_exc: BaseException | None = None
         for attempt in range(1, 4):
             try:
-                return self._get_chat_requirements_once()
+                requirements = self._get_chat_requirements_once()
+                try:
+                    from services.config import config as _cfg
+
+                    settings = _cfg.get_image_pipeline_settings()
+                    if bool(settings.get("pre_ticket_pool_enabled")) and self.access_token:
+                        from services.image_pipeline.pre_ticket_pool import PreTicketBundle, pre_ticket_pool
+
+                        pre_ticket_pool.put(
+                            self.access_token,
+                            PreTicketBundle(requirements=requirements, turnstile_solved=bool(requirements.turnstile_token)),
+                        )
+                except Exception:
+                    pass
+                return requirements
             except UpstreamHTTPError as exc:
                 last_exc = exc
                 status = int(getattr(exc, "status_code", 0) or 0)

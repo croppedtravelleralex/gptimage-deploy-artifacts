@@ -11,6 +11,7 @@ from services.image_pipeline.pools import PipelinePools
 from services.image_pipeline.prompt import normalize_multi_image_mode, ps_rounds_for_request, should_need_ps
 from services.image_pipeline.ready_buffer import ready_buffer_tracker
 from services.image_pipeline import schedule_trace
+from services.image_pipeline.slot_ledger import slot_ledger
 from services.image_pipeline.types import MultiImageMode, PhaseTimingsMs, PipelinePhase, PipelineRunState, RetryPhaseCursor
 
 
@@ -161,9 +162,34 @@ class PipelineRun:
         self._sse_stream_recorded = False
         self._account_access_token = ""
         self._account_slot_released_after_sse = False
+        self._account_ledger_registered = False
+
+    def _account_ledger_holder(self) -> str:
+        return f"{self.state.task_key}:account"
 
     def bind_account_token(self, access_token: str) -> None:
         self._account_access_token = str(access_token or "").strip()
+        if self._account_access_token and not self._account_ledger_registered:
+            slot_ledger.try_acquire_account(
+                self._account_ledger_holder(),
+                self._account_access_token,
+                deadline_secs=config.image_ss_stage_wall_timeout_secs,
+            )
+            self._account_ledger_registered = True
+
+    def _release_account_ledger(self) -> None:
+        if not self._account_ledger_registered:
+            return
+        slot_ledger.release_account(self._account_ledger_holder())
+        self._account_ledger_registered = False
+
+    def assert_ss_wall_ok(self, *, image_index: int) -> None:
+        started = self._ss_started_at.get(image_index)
+        if started is None:
+            return
+        limit = config.image_ss_stage_wall_timeout_secs
+        if time.monotonic() - started > limit:
+            raise TimeoutError(f"sS stage wall timeout ({limit:.0f}s)")
 
     def _release_account_slot_after_sse(self) -> None:
         if self._account_slot_released_after_sse or not self._account_access_token:
@@ -174,6 +200,7 @@ class PipelineRun:
 
         account_service.release_image_slot(self._account_access_token)
         self._account_slot_released_after_sse = True
+        self._release_account_ledger()
 
     @property
     def task_key(self) -> str:
@@ -238,6 +265,7 @@ class PipelineRun:
         release_slot = self._ss_holders.get(holder, self.state.ss_slot)
         if release_slot is not None and release_slot >= 0:
             schedule_trace.emit("ss_slot_released", int(release_slot))
+            slot_ledger.release_ss(holder)
             self._pools.ss.release(release_slot, holder)
             self._ss_holders.pop(holder, None)
             self._ss_released_indices.add(image_index)
@@ -305,6 +333,8 @@ class PipelineRun:
             )
         self.state.phase = PipelinePhase.QUEUE_SS
         holder = self._holder(f"ss-{image_index}")
+        ss_deadline = config.image_ss_stage_wall_timeout_secs
+        slot_ledger.try_acquire_ss(holder, deadline_secs=ss_deadline)
         slot, queue_ms = self._pools.ss.acquire(holder)
         if schedule_trace.enabled():
             snap = self._pools.ss.snapshot()
@@ -328,6 +358,7 @@ class PipelineRun:
         if release_slot is None or release_slot < 0:
             return
         schedule_trace.emit("ss_slot_released", int(release_slot))
+        slot_ledger.release_ss(holder)
         self._pools.ss.release(release_slot, holder)
         self._ss_holders.pop(holder, None)
         if self.state.ss_slot == release_slot:

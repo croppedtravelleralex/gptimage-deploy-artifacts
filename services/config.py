@@ -95,6 +95,9 @@ DEFAULT_IMAGE_PIPELINE = {
     "schedule_trace_enabled": True,
     "account_lease_prewarm_enabled": True,
     "release_account_after_sse": True,
+    "ss_stage_wall_timeout_secs": 75,
+    "pre_ticket_ttl_secs": 120,
+    "pre_ticket_pool_enabled": True,
 }
 
 DEFAULT_IMAGE_REFERENCE_ASSETS = {
@@ -470,6 +473,20 @@ def _normalize_image_pipeline_settings(value: object) -> dict[str, object]:
         "release_account_after_sse": _normalize_bool(
             source.get("release_account_after_sse"),
             bool(DEFAULT_IMAGE_PIPELINE["release_account_after_sse"]),
+        ),
+        "ss_stage_wall_timeout_secs": _normalize_positive_int(
+            source.get("ss_stage_wall_timeout_secs"),
+            int(DEFAULT_IMAGE_PIPELINE["ss_stage_wall_timeout_secs"]),
+            5,
+        ),
+        "pre_ticket_ttl_secs": _normalize_positive_int(
+            source.get("pre_ticket_ttl_secs"),
+            int(DEFAULT_IMAGE_PIPELINE["pre_ticket_ttl_secs"]),
+            30,
+        ),
+        "pre_ticket_pool_enabled": _normalize_bool(
+            source.get("pre_ticket_pool_enabled"),
+            bool(DEFAULT_IMAGE_PIPELINE["pre_ticket_pool_enabled"]),
         ),
     }
 
@@ -1472,6 +1489,15 @@ class ConfigStore:
             return None
         try:
             return max(5.0, float(raw))
+        except (TypeError, ValueError):
+            return 75.0
+
+    @property
+    def image_ss_stage_wall_timeout_secs(self) -> float:
+        """Wall clock from acquire_ss until stream end; default 75s."""
+        try:
+            settings = self.get_image_pipeline_settings()
+            return max(5.0, float(settings.get("ss_stage_wall_timeout_secs") or 75))
         except (TypeError, ValueError):
             return 75.0
 

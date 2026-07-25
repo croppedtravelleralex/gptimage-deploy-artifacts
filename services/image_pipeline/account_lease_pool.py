@@ -23,8 +23,8 @@ class AccountLeasePool:
     ``image_inflight`` until a worker actually acquires for sS.
     """
 
-    HINT_TTL_SECS = 45.0
-    MAX_HINTS = 15
+    HINT_TTL_SECS = 60.0
+    MAX_HINTS = 20
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -83,6 +83,36 @@ class AccountLeasePool:
                 return False
             self._hints.appendleft(_EmailHint(email=prefer, created_ts=time.time()))
             return True
+
+    def seed_queued_preferences(self, tasks: dict[str, object]) -> int:
+        """Seed hints for all queued preferred emails (burst conc submit)."""
+        if not self._enabled():
+            return 0
+        preferred: list[str] = []
+        for task in tasks.values():
+            if not isinstance(task, dict):
+                continue
+            if str(task.get("status") or "") != "queued":
+                continue
+            payload = task.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            email = str(payload.get("preferred_account_email") or "").strip().lower()
+            if email:
+                preferred.append(email)
+        seeded = 0
+        with self._lock:
+            self._trim_stale_locked()
+            known = self._known_emails_locked()
+            for email in preferred:
+                if email in known:
+                    continue
+                if len(self._hints) >= self.MAX_HINTS:
+                    break
+                self._hints.appendleft(_EmailHint(email=email, created_ts=time.time()))
+                known.add(email)
+                seeded += 1
+        return seeded
 
     def maintain(self, *, max_acquire: int = 10) -> int:
         if not self._enabled():

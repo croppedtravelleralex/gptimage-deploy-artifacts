@@ -379,12 +379,16 @@ def create_router(app_version: str) -> APIRouter:
             from services.config import config as cfg
             from services.image_task_service import image_task_service
             from services.text_task_queue import text_task_queue
+            from services.image_pipeline.pipeline_watchdog import pipeline_watchdog_service
+            from services.image_pipeline.pre_ticket_pool import pre_ticket_pool
 
             stats_json["workload"] = {
                 **cfg.get_workload_settings(),
                 "text_queue_depth": text_task_queue.depth(),
                 "image_queue_depth": int(getattr(image_task_service, "queue_depth", lambda: 0)()),
             }
+            stats_json["pipeline_watchdog"] = pipeline_watchdog_service.tick(force_release_expired=False)
+            stats_json["pre_ticket_pool"] = pre_ticket_pool.snapshot()
         except Exception:
             pass
         try:

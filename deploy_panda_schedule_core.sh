@@ -14,11 +14,15 @@ PY_FILES=(
   services/image_pipeline/schedule_trace.py
   services/image_pipeline/schedule_trace_model.py
   services/image_pipeline/schedule_core.py
+  services/image_pipeline/slot_ledger.py
+  services/image_pipeline/pipeline_watchdog.py
+  services/image_pipeline/pre_ticket_pool.py
   services/image_pipeline/account_lease_pool.py
   services/image_pipeline/account_provider.py
   services/image_pipeline/orchestrator.py
   services/image_task_service.py
   services/image_sync_adapter.py
+  services/account_service.py
   services/protocol/conversation.py
   services/openai_backend_api.py
   services/config.py

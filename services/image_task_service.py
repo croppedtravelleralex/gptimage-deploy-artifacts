@@ -269,7 +269,7 @@ def _compact_task_memory(task: dict[str, Any]) -> None:
             task.pop(heavy_key, None)
 
 
-TERMINAL_MEMORY_RETENTION_SECS = 300.0
+TERMINAL_MEMORY_RETENTION_SECS = 90.0
 
 
 def _public_task(task: dict[str, Any]) -> dict[str, Any]:
@@ -964,17 +964,18 @@ class ImageTaskService:
             preferred = ""
             if isinstance(payload, dict):
                 preferred = str(payload.get("preferred_account_email") or "").strip()
-            if preferred:
-                try:
-                    from services.image_pipeline.account_lease_pool import account_lease_pool
+            try:
+                from services.image_pipeline.account_lease_pool import account_lease_pool
 
+                if preferred:
                     account_lease_pool.seed_hint(preferred)
-                    queued = sum(
-                        1 for item in self._tasks.values() if item.get("status") == TASK_STATUS_QUEUED
-                    )
-                    account_lease_pool.maintain(max_acquire=min(12, max(3, queued + 2)))
-                except Exception:
-                    pass
+                queued = sum(
+                    1 for item in self._tasks.values() if item.get("status") == TASK_STATUS_QUEUED
+                )
+                account_lease_pool.seed_queued_preferences(self._tasks)
+                account_lease_pool.maintain(max_acquire=min(16, max(4, queued + 3)))
+            except Exception:
+                pass
             if schedule_trace.enabled():
                 schedule_trace.begin(key, preferred)
             task = {
@@ -1138,16 +1139,22 @@ class ImageTaskService:
             return burst
         return base
 
+    def _warm_account_lease_pool_locked(self) -> None:
+        if not image_pipeline_scheduler.enabled():
+            return
+        try:
+            from services.image_pipeline.account_lease_pool import account_lease_pool
+
+            queued = sum(1 for item in self._tasks.values() if item.get("status") == TASK_STATUS_QUEUED)
+            account_lease_pool.seed_queued_preferences(self._tasks)
+            account_lease_pool.maintain(max_acquire=min(16, max(4, queued + 3)))
+        except Exception:
+            pass
+
     def _next_submit_task_locked(self) -> tuple[str, str, dict[str, Any], dict[str, object], str] | None:
         if self._deadlock_guard_tripped_locked():
             return None
-        if image_pipeline_scheduler.enabled():
-            try:
-                from services.image_pipeline.account_lease_pool import account_lease_pool
-
-                account_lease_pool.maintain()
-            except Exception:
-                pass
+        self._warm_account_lease_pool_locked()
         try:
             interval_ms = self._effective_submit_interval_ms()
         except Exception:
@@ -1204,12 +1211,7 @@ class ImageTaskService:
                         if 0 < remaining < wait_secs:
                             wait_secs = remaining
                     if image_pipeline_scheduler.enabled():
-                        try:
-                            from services.image_pipeline.account_lease_pool import account_lease_pool
-
-                            account_lease_pool.maintain()
-                        except Exception:
-                            pass
+                        self._warm_account_lease_pool_locked()
                     self._condition.wait(timeout=max(0.05, wait_secs))
                     continue
             key, mode, payload, identity, model = run_args
@@ -1250,12 +1252,7 @@ class ImageTaskService:
         released_access_tokens: set[str] = set()
         pipeline_run = None
         if image_pipeline_scheduler.enabled():
-            try:
-                from services.image_pipeline.account_lease_pool import account_lease_pool
-
-                account_lease_pool.maintain()
-            except Exception:
-                pass
+            self._warm_account_lease_pool_locked()
             try:
                 pipeline_run = image_pipeline_scheduler.begin_run(task_key=key, mode=mode, payload=payload)
             except ImagePoolStarvedError as exc:
@@ -1369,6 +1366,23 @@ class ImageTaskService:
         if isinstance(payload, dict):
             return request_text(payload.get("prompt"))
         return ""
+
+    def _leased_tokens_for_release(
+        self,
+        *,
+        leased_access_tokens: set[str],
+        outcome: dict[str, Any],
+        pipeline_run: object | None,
+    ) -> set[str]:
+        tokens = {str(t).strip() for t in leased_access_tokens if str(t).strip()}
+        resume = _clean(outcome.get("access_token"))
+        if resume:
+            tokens.add(resume)
+        if pipeline_run is not None:
+            bound = _clean(getattr(pipeline_run, "_account_access_token", ""))
+            if bound:
+                tokens.add(bound)
+        return tokens
 
     def _run_task_body(
         self,
@@ -1511,7 +1525,11 @@ class ImageTaskService:
                 payload_for_run = outcome.get("payload_for_run") if isinstance(outcome.get("payload_for_run"), dict) else payload
                 conversation_id = _clean(outcome.get("conversation_id"))
                 resume_access_token = _clean(outcome.get("access_token"))
-                leased_tokens = set(leased_access_tokens)
+                leased_tokens = self._leased_tokens_for_release(
+                    leased_access_tokens=leased_access_tokens,
+                    outcome=outcome,
+                    pipeline_run=pipeline_run,
+                )
 
             if conversation_id:
                 error_message = (
@@ -1560,6 +1578,11 @@ class ImageTaskService:
 
             error_message = f"image task hard timeout before upstream completion ({hard_timeout_secs:.1f}s); no conversation_id captured"
             released_count = 0
+            leased_tokens = self._leased_tokens_for_release(
+                leased_access_tokens=leased_access_tokens,
+                outcome=outcome,
+                pipeline_run=pipeline_run,
+            )
             for leased_token in leased_tokens:
                 if not claim_release(leased_token):
                     continue

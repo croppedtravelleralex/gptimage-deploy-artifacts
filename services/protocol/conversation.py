@@ -1849,6 +1849,8 @@ def _generate_single_image(
                     token = lease.access_token
                     pipeline_run.mark_account_acquired()
                     pipeline_run.bind_account_token(token)
+                    if request.progress_callback:
+                        request.progress_callback({"step": "account_acquired", "access_token": token})
                     ss_slot, _ = pipeline_run.acquire_ss(image_index=index)
                 else:
                     token = account_service.get_available_access_token(
@@ -1858,8 +1860,8 @@ def _generate_single_image(
                         skip_global_limit=bool(request.queue_coordinated),
                         preferred_email=prefer,
                     )
-                if request.progress_callback:
-                    request.progress_callback({"step": "account_acquired", "access_token": token})
+                    if request.progress_callback:
+                        request.progress_callback({"step": "account_acquired", "access_token": token})
             except RuntimeError as exc:
                 if lease is not None:
                     lease.release()
@@ -1895,6 +1897,8 @@ def _generate_single_image(
                 stream_fn = stream_codex_image_outputs if is_codex_image_model(request.model) else stream_image_outputs
                 outputs: list[ImageOutput] = []
                 for output in stream_fn(backend, request, index, total):
+                    if pipeline_run is not None:
+                        pipeline_run.assert_ss_wall_ok(image_index=index)
                     if account_email and not output.account_email:
                         output.account_email = account_email
                     if output.kind == "message" and request.message_as_error:
