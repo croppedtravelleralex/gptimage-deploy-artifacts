@@ -24,7 +24,7 @@ class AccountLeasePool:
     """
 
     HINT_TTL_SECS = 45.0
-    MAX_HINTS = 3
+    MAX_HINTS = 10
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -50,10 +50,18 @@ class AccountLeasePool:
             accounts = account_service.list_accounts()
         except Exception:
             accounts = []
+        try:
+            from services.config import config
+
+            max_conc = max(1, int(config.image_account_concurrency or 1))
+        except Exception:
+            max_conc = 1
         for account in accounts:
             if not isinstance(account, dict):
                 continue
             if not account.get("image_schedulable"):
+                continue
+            if int(account.get("image_inflight") or 0) >= max_conc:
                 continue
             email = str(account.get("email") or "").strip().lower()
             if not email or email in exclude:
@@ -61,7 +69,7 @@ class AccountLeasePool:
             return email
         return ""
 
-    def maintain(self, *, max_acquire: int = 2) -> int:
+    def maintain(self, *, max_acquire: int = 6) -> int:
         if not self._enabled():
             return 0
         acquired = 0

@@ -250,6 +250,7 @@ class PipelineRun:
                 slot=release_slot,
                 active=False,
             )
+        self._release_account_slot_after_sse()
 
     def _holder(self, suffix: str) -> str:
         return f"{self.state.task_key}:{suffix}"

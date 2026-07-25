@@ -269,7 +269,7 @@ def _compact_task_memory(task: dict[str, Any]) -> None:
             task.pop(heavy_key, None)
 
 
-TERMINAL_MEMORY_RETENTION_SECS = 600.0
+TERMINAL_MEMORY_RETENTION_SECS = 300.0
 
 
 def _public_task(task: dict[str, Any]) -> dict[str, Any]:
@@ -778,8 +778,11 @@ class ImageTaskService:
         key = _task_key(owner, _clean(task_id))
         with self._lock:
             task = self._tasks.get(key)
-            if isinstance(task, dict):
-                _compact_task_memory(task)
+            if not isinstance(task, dict):
+                return
+            _compact_task_memory(task)
+            if _clean(task.get("status")) in TERMINAL_STATUSES:
+                self._tasks.pop(key, None)
 
     def queue_depth(self) -> int:
         with self._lock:
@@ -1127,6 +1130,13 @@ class ImageTaskService:
     def _next_submit_task_locked(self) -> tuple[str, str, dict[str, Any], dict[str, object], str] | None:
         if self._deadlock_guard_tripped_locked():
             return None
+        if image_pipeline_scheduler.enabled():
+            try:
+                from services.image_pipeline.account_lease_pool import account_lease_pool
+
+                account_lease_pool.maintain()
+            except Exception:
+                pass
         try:
             interval_ms = self._effective_submit_interval_ms()
         except Exception:
@@ -1182,6 +1192,13 @@ class ImageTaskService:
                         remaining = (interval_ms / 1000.0) - (time.time() - float(self._last_submit_start_ts))
                         if 0 < remaining < wait_secs:
                             wait_secs = remaining
+                    if image_pipeline_scheduler.enabled():
+                        try:
+                            from services.image_pipeline.account_lease_pool import account_lease_pool
+
+                            account_lease_pool.maintain()
+                        except Exception:
+                            pass
                     self._condition.wait(timeout=max(0.05, wait_secs))
                     continue
             key, mode, payload, identity, model = run_args
