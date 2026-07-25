@@ -61,7 +61,7 @@ DEFAULT_IMAGE_TASK_QUEUE = {
     "per_user_running_burst": 8,
     "burst_enabled": False,
     "burst_min_queued": 6,
-    "burst_min_dispatchable_candidates": 120,
+    "burst_min_dispatchable_candidates": 8,
     "burst_max_preflight_backoff": 0,
     "per_user_queue_max": 36,
     # 错峰启动，降低同 egress 突发 CF

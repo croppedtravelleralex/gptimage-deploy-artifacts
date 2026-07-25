@@ -710,6 +710,15 @@ class ImageTaskService:
             except Exception:
                 global_slots = 6
             per_user_slots = max(1, int(self._effective_per_user_running_max_locked()))
+            try:
+                if image_pipeline_scheduler.enabled():
+                    pipeline = config.get_image_pipeline_settings()
+                    per_user_slots = max(
+                        per_user_slots,
+                        int(pipeline.get("sse_slots") or global_slots),
+                    )
+            except Exception:
+                pass
             running_slots = max(1, min(global_slots, per_user_slots))
             ewma = float(self._success_duration_ewma_secs or _SUCCESS_DURATION_EWMA_INITIAL_SECS)
         if ahead <= 0:
