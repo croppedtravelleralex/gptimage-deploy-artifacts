@@ -964,6 +964,14 @@ class ImageTaskService:
             preferred = ""
             if isinstance(payload, dict):
                 preferred = str(payload.get("preferred_account_email") or "").strip()
+            if preferred:
+                try:
+                    from services.image_pipeline.account_lease_pool import account_lease_pool
+
+                    account_lease_pool.seed_hint(preferred)
+                    account_lease_pool.maintain()
+                except Exception:
+                    pass
             if schedule_trace.enabled():
                 schedule_trace.begin(key, preferred)
             task = {

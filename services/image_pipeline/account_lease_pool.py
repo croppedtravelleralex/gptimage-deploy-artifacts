@@ -24,7 +24,7 @@ class AccountLeasePool:
     """
 
     HINT_TTL_SECS = 45.0
-    MAX_HINTS = 10
+    MAX_HINTS = 15
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -69,7 +69,22 @@ class AccountLeasePool:
             return email
         return ""
 
-    def maintain(self, *, max_acquire: int = 6) -> int:
+    def seed_hint(self, email: str) -> bool:
+        """Reserve a preferred email in the hint queue (no slot consumption)."""
+        prefer = str(email or "").strip().lower()
+        if not prefer:
+            return False
+        with self._lock:
+            self._trim_stale_locked()
+            known = self._known_emails_locked()
+            if prefer in known:
+                return True
+            if len(self._hints) >= self.MAX_HINTS:
+                return False
+            self._hints.appendleft(_EmailHint(email=prefer, created_ts=time.time()))
+            return True
+
+    def maintain(self, *, max_acquire: int = 10) -> int:
         if not self._enabled():
             return 0
         acquired = 0

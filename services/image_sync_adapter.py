@@ -57,6 +57,15 @@ def build_openai_image_response(task: dict[str, Any], *, task_id: str | None = N
     raise ImageTaskWaitTimeoutError(str(task.get("id") or ""), task)
 
 
+def _preferred_account_email() -> str:
+    try:
+        from services.request_account_context import get_preferred_account_email
+
+        return str(get_preferred_account_email() or "").strip()
+    except Exception:
+        return ""
+
+
 def run_generation_sync(
     identity: dict[str, object],
     *,
@@ -67,8 +76,10 @@ def run_generation_sync(
     response_format: str,
     base_url: str,
     n: int = 1,
+    preferred_account_email: str = "",
 ) -> dict[str, Any]:
     task_id = new_client_task_id()
+    prefer = str(preferred_account_email or _preferred_account_email() or "").strip()
     image_task_service.submit_generation(
         identity,
         client_task_id=task_id,
@@ -79,6 +90,7 @@ def run_generation_sync(
         response_format=response_format,
         base_url=base_url,
         n=n,
+        preferred_account_email=prefer,
     )
     task = image_task_service.wait_for_result(
         identity,
@@ -105,8 +117,10 @@ def run_edit_sync(
     image_asset_ids: list[str] | None = None,
     mask_asset_ids: list[str] | None = None,
     n: int = 1,
+    preferred_account_email: str = "",
 ) -> dict[str, Any]:
     task_id = new_client_task_id()
+    prefer = str(preferred_account_email or _preferred_account_email() or "").strip()
     image_task_service.submit_edit(
         identity,
         client_task_id=task_id,

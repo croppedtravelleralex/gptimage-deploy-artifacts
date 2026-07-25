@@ -476,6 +476,9 @@ def create_router() -> APIRouter:
         set_preferred_account_email(x_preferred_account_email)
         payload = body.model_dump(mode="python")
         payload["base_url"] = resolve_image_base_url(request)
+        from services.request_account_context import get_preferred_account_email
+
+        preferred_email = get_preferred_account_email()
         prompt, prompt_async, prompt_task_id = _parse_panda_prompt_tunnel(body.prompt)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=prompt)
         if body.panda_task_id or prompt_task_id:
@@ -507,6 +510,7 @@ def create_router() -> APIRouter:
             "response_format": body.response_format,
             "base_url": payload["base_url"],
             "n": body.n,
+            "preferred_account_email": preferred_email,
         }
         return await _run_image_sync_or_auto_async_call(
             call,
