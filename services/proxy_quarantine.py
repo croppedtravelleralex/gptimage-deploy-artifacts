@@ -171,3 +171,34 @@ def mark_gpt_unavailable(
         _CACHE = None
         _CACHE_MTIME_NS = None
         return payload
+
+
+def clear_gpt_unavailable(proxy: object, path: Path | None = None) -> bool:
+    """Remove endpoint from quarantine after a successful CF re-probe."""
+    target = path or _default_path()
+    endpoint = proxy_endpoint_key(proxy).lower()
+    if not endpoint or not target.is_file():
+        return False
+    with _LOCK:
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        endpoints = [str(x).strip() for x in (payload.get("endpoints") or []) if str(x).strip()]
+        kept = [e for e in endpoints if e.lower() != endpoint and e.split(":", 1)[0].lower() != endpoint.split(":", 1)[0]]
+        if len(kept) == len(endpoints):
+            return False
+        notes = payload.get("notes") if isinstance(payload.get("notes"), dict) else {}
+        notes.pop(endpoint, None)
+        host = endpoint.split(":", 1)[0]
+        for key in list(notes.keys()):
+            if str(key).split(":", 1)[0].lower() == host:
+                notes.pop(key, None)
+        payload = {"endpoints": kept, "notes": notes}
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        global _CACHE, _CACHE_MTIME_NS
+        _CACHE = None
+        _CACHE_MTIME_NS = None
+        return True

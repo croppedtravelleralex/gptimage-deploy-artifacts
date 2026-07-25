@@ -11,7 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from services.account_service import account_service
-from services.proxy_cf_eligibility import assert_proxy_cf_ok_for_image, cf_probe_account_fields
+from services.proxy_cf_eligibility import cf_probe_account_fields
+from services.proxy_cf_probe import probe_proxy_cf
+from services.proxy_quarantine import clear_gpt_unavailable, mark_gpt_unavailable
 
 
 def main() -> int:
@@ -32,11 +34,13 @@ def main() -> int:
             row["skipped"] = True
             rows.append(row)
             continue
-        try:
-            probe = assert_proxy_cf_ok_for_image(proxy, probe_timeout=args.timeout)
-            row["cf_ok"] = True
-            row["classification"] = probe.get("cf_classification")
+        probe = probe_proxy_cf(proxy, timeout=args.timeout)
+        row["cf_ok"] = bool(probe.get("ok"))
+        row["classification"] = probe.get("cf_classification")
+        row["requirements_status"] = probe.get("requirements_status")
+        if probe.get("ok"):
             ok_count += 1
+            clear_gpt_unavailable(proxy)
             if args.apply:
                 fields = cf_probe_account_fields(proxy, probe)
                 account_service.update_account_identity(
@@ -45,9 +49,13 @@ def main() -> int:
                     reason="cf_ok_stamp",
                     quiet=True,
                 )
-        except RuntimeError as exc:
-            row["cf_ok"] = False
-            row["error"] = str(exc)[:200]
+        else:
+            mark_gpt_unavailable(
+                proxy,
+                reason=str(probe.get("cf_classification") or "cf403"),
+                former_account=email,
+            )
+            row["error"] = str(probe.get("error") or probe.get("cf_classification") or "cf_probe_failed")[:200]
         rows.append(row)
 
     print(json.dumps({"ok": ok_count, "total": len(rows), "apply": args.apply, "rows": rows}, ensure_ascii=False, indent=2))
