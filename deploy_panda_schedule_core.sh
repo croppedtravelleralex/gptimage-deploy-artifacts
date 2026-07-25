@@ -72,8 +72,10 @@ PY
 
 mkdir -p "$BACKUP/services/image_pipeline" "$BACKUP/services/protocol" "$BACKUP/native"
 for rel in "${PY_FILES[@]}"; do
-  mkdir -p "$BACKUP/$(dirname "$rel")"
-  cp -a "$ROOT/$rel" "$BACKUP/$rel"
+  if [ -f "$ROOT/$rel" ]; then
+    mkdir -p "$BACKUP/$(dirname "$rel")"
+    cp -a "$ROOT/$rel" "$BACKUP/$rel"
+  fi
 done
 for name in "${NATIVE_LIBS[@]}"; do
   if [ -f "$ROOT/native/$name" ]; then
@@ -86,6 +88,7 @@ printf '%s\n' "$EXPECTED_COMMIT" > "$BACKUP/artifact-commit.txt"
 echo "BACKUP=$BACKUP"
 
 for rel in "${PY_FILES[@]}"; do
+  mkdir -p "$ROOT/$(dirname "$rel")"
   install -m 0644 "$ARTIFACT_ROOT/$rel" "$ROOT/$rel.new-$TS"
   mv "$ROOT/$rel.new-$TS" "$ROOT/$rel"
 done
