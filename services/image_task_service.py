@@ -2121,7 +2121,6 @@ class ImageTaskService:
             if _clean(task.get("status")) in TERMINAL_STATUSES:
                 self._cancel_events.pop(key, None)
                 self._apply_terminal_timing_fields(task)
-                _compact_task_memory(task)
             self._save_task_locked(key)
             self._condition.notify_all()
 
@@ -2345,14 +2344,19 @@ class ImageTaskService:
             retention_days = 30
         cutoff = time.time() - retention_days * 86400
         memory_cutoff = time.time() - TERMINAL_MEMORY_RETENTION_SECS
-        removed_keys = []
+        removed_keys: list[str] = []
+        memory_evict_keys: list[str] = []
         for key, task in list(self._tasks.items()):
             status = task.get("status")
             updated_ts = float(task.get("updated_ts") or _timestamp(task.get("updated_at")) or 0.0)
             if status in TERMINAL_STATUSES and updated_ts < cutoff:
                 removed_keys.append(key)
             elif status in TERMINAL_STATUSES and updated_ts < memory_cutoff:
-                removed_keys.append(key)
+                memory_evict_keys.append(key)
+        for key in memory_evict_keys:
+            task = self._tasks.pop(key, None)
+            if task is not None:
+                _compact_task_memory(task)
         for key in removed_keys:
             self._tasks.pop(key, None)
             self._save_task_locked(key)
