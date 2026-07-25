@@ -969,7 +969,10 @@ class ImageTaskService:
                     from services.image_pipeline.account_lease_pool import account_lease_pool
 
                     account_lease_pool.seed_hint(preferred)
-                    account_lease_pool.maintain()
+                    queued = sum(
+                        1 for item in self._tasks.values() if item.get("status") == TASK_STATUS_QUEUED
+                    )
+                    account_lease_pool.maintain(max_acquire=min(12, max(3, queued + 2)))
                 except Exception:
                     pass
             if schedule_trace.enabled():
@@ -2119,6 +2122,12 @@ class ImageTaskService:
             log_service.add(LOG_TYPE_CALL, f"{summary_prefix}{suffix}", detail)
         except Exception:
             pass
+        if task_key:
+            with self._lock:
+                mem_task = self._tasks.get(task_key)
+                if isinstance(mem_task, dict) and _clean(mem_task.get("status")) in TERMINAL_STATUSES:
+                    _compact_task_memory(mem_task)
+                    self._tasks.pop(task_key, None)
 
     def _apply_terminal_timing_fields(self, task: dict[str, Any], *, finished_ts: float | None = None) -> None:
         """任务进入终态时补齐墙钟/排队/执行分段，供 API 与 call log 排查。"""
