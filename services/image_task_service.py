@@ -2132,7 +2132,6 @@ class ImageTaskService:
             if _clean(task.get("status")) in TERMINAL_STATUSES:
                 self._cancel_events.pop(key, None)
                 self._apply_terminal_timing_fields(task)
-                _compact_task_memory(task)
             self._save_task_locked(key)
             self._condition.notify_all()
 

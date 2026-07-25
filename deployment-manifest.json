@@ -8,7 +8,7 @@
     "services/image_pipeline/account_lease_pool.py": "17eda59cf8dcc541ec7db687850f56bc928b15d58b124d9244da3c2fcd4706c2",
     "services/image_pipeline/account_provider.py": "f795d16a2858c43d22e8dbda196d6811c88f345960a7ec5b98783c4f0454756a",
     "services/image_pipeline/orchestrator.py": "4eb2b751c5db0750ed70ad4a7441079f27e1e48775d74be6a0cb893f77d70723",
-    "services/image_task_service.py": "b48e68ca10ec7617064d413088edc62bcb0d66a25d109daa83ed3d67c213d6f6",
+    "services/image_task_service.py": "360eccad604f2fe9434218b90bb25c4b7eb085688d208e41773633bbf8276394",
     "services/protocol/conversation.py": "8a0844f69e97455b7f575cc02b179dc21304c699cbfaa8927099ddf96d466247",
     "services/openai_backend_api.py": "15b4739fd6bade09d817cc031cb3580a8e381ff358eeefec89a8414ea29e5c3d",
     "services/config.py": "d7b0e3e4a0009d75ef0b5abf76e39cfb30c1d9240bfdd7ff0d6257cc0a198627",
