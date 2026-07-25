@@ -8,7 +8,8 @@
     "services/image_pipeline/account_lease_pool.py": "17eda59cf8dcc541ec7db687850f56bc928b15d58b124d9244da3c2fcd4706c2",
     "services/image_pipeline/account_provider.py": "f795d16a2858c43d22e8dbda196d6811c88f345960a7ec5b98783c4f0454756a",
     "services/image_pipeline/orchestrator.py": "4eb2b751c5db0750ed70ad4a7441079f27e1e48775d74be6a0cb893f77d70723",
-    "services/image_task_service.py": "360eccad604f2fe9434218b90bb25c4b7eb085688d208e41773633bbf8276394",
+    "services/image_task_service.py": "0608eeb1d29b60455f7dfb1390c33a4032d8f3b1e85f69766f2f86d88a40f048",
+    "services/image_sync_adapter.py": "36aed0d9190aff45c56552e5dd64f4f04656e294933a79fbe1766c92edeacb75",
     "services/protocol/conversation.py": "8a0844f69e97455b7f575cc02b179dc21304c699cbfaa8927099ddf96d466247",
     "services/openai_backend_api.py": "15b4739fd6bade09d817cc031cb3580a8e381ff358eeefec89a8414ea29e5c3d",
     "services/config.py": "d7b0e3e4a0009d75ef0b5abf76e39cfb30c1d9240bfdd7ff0d6257cc0a198627",
@@ -17,7 +18,7 @@
     "utils/process_memory.py": "e4ae96e0bea48453cbb443d95d72aaa1ca92c721f642408b29ba85e2cb031964",
     "native/libimage_schedule_trace.so": "cf5ade7a75f87763b104c5fbcda45ee3acd8df22dedd6ddb7b4d30042649740c",
     "native/libimage_schedule_core.so": "a407acfcb562a7e66b1d54b2363a437ce72f6a782b59bab4babb24f1c711f756",
-    "deploy_panda_schedule_core.sh": "97397e653ff2a5156bb868b7b48ab00c72d8ce915828e55c5f2bffb5ced0e0a6",
+    "deploy_panda_schedule_core.sh": "5ce4f1de6ca6c294f7e50744b4bfde25dede4b8a9f6f886d2f221d9ddcbc81cb",
     "README.md": "0be06e819433d8167cbc728cb55d379c9b81383b3a607209dc8c91211cd8ea5e"
   }
 }

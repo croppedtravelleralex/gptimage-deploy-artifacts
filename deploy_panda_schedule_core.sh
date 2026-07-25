@@ -18,6 +18,7 @@ PY_FILES=(
   services/image_pipeline/account_provider.py
   services/image_pipeline/orchestrator.py
   services/image_task_service.py
+  services/image_sync_adapter.py
   services/protocol/conversation.py
   services/openai_backend_api.py
   services/config.py

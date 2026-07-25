@@ -772,6 +772,15 @@ class ImageTaskService:
                     raise ImageTaskWaitTimeoutError(task_id, _public_task(task))
                 self._condition.wait(timeout=min(poll_interval, max(0.05, remaining)))
 
+    def compact_task_heavy_fields(self, identity: dict[str, object], task_id: str) -> None:
+        """Drop in-memory b64 blobs after sync client has read the result."""
+        owner = _owner_id(identity)
+        key = _task_key(owner, _clean(task_id))
+        with self._lock:
+            task = self._tasks.get(key)
+            if isinstance(task, dict):
+                _compact_task_memory(task)
+
     def queue_depth(self) -> int:
         with self._lock:
             return sum(1 for task in self._tasks.values() if task.get("status") == TASK_STATUS_QUEUED)
