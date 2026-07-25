@@ -1,6 +1,6 @@
-# gptimage-deploy-artifacts — nurture / heatmap overlay
+# gptimage-deploy-artifacts — schedule core optimization
 
-Release: nurture-heatmap-20260723
+Release: schedule-core-optimization-20260725
 
 ## Deploy on Panda
 
@@ -8,14 +8,12 @@ Release: nurture-heatmap-20260723
 git clone https://github.com/croppedtravelleralex/gptimage-deploy-artifacts.git /tmp/gptimage-deploy-artifacts
 cd /tmp/gptimage-deploy-artifacts
 COMMIT=$(git rev-parse HEAD)
-bash deploy_panda_nurture.sh "$COMMIT"
+bash deploy_panda_schedule_core.sh "$COMMIT"
 ```
 
-## Files
+## Contents
 
-- `services/ip_nurture_schedule.py` — 30 SG 7×12 presets
-- `services/text_nurture_service.py` — turns_per_session + per-account daily cap
-- `services/config.py`, `account_service.py`, `risk_dashboard_service.py`, `api/ops.py`
-- `web_dist.tgz` — accounts IP group + CF 7 lights UI
+- Python: schedule_trace, schedule_core, account_lease_pool, orchestrator, image_task_service, conversation, config
+- Native: `native/libimage_schedule_trace.so`, `native/libimage_schedule_core.so` (built locally via Docker, not on Panda)
 
 Wipe this repo after successful deploy per convention.
