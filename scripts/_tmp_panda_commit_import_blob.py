@@ -69,9 +69,11 @@ def main(argv: list[str] | None = None) -> int:
 
     account_service.reload_from_storage()
     old_token = ""
+    old_account: dict = {}
     for item in account_service.list_accounts():
         if str(item.get("email") or "").strip().lower() == email:
             old_token = str(item.get("access_token") or "").strip()
+            old_account = dict(item)
             break
     if not old_token:
         raise SystemExit(f"old account not found for {email}")
@@ -82,6 +84,9 @@ def main(argv: list[str] | None = None) -> int:
     staged = dict(blob)
     staged.setdefault("status", "异常")
     staged.setdefault("quota", 0)
+    # Relogin 替换 token 时保留原号池创建时间，避免 UI 显示为“今天新注册”。
+    if old_account.get("created_at"):
+        staged["created_at"] = old_account.get("created_at")
     staged["panda_receive_state"] = "incoming"
     staged["panda_sync_state"] = "incoming"
     staged["panda_imported_at"] = now

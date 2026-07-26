@@ -111,6 +111,36 @@ class OutlookCamoufoxStableRegisterTests(unittest.TestCase):
         self.assertEqual(tokens["refresh_token"], "")
         page.context.cookies.assert_not_called()
 
+    def test_validate_chain_egress_matches_sticky_direct_mode(self) -> None:
+        sticky = "http://user:pass@92.113.231.203:7288"
+        ok, detail = stable.validate_chain_egress_matches_sticky(
+            sticky_proxy=sticky,
+            browser_proxy=sticky,
+            probe={"ip": "1.2.3.4"},
+        )
+        self.assertTrue(ok)
+        self.assertEqual(detail["reason"], "direct_webshare")
+
+    def test_validate_chain_egress_matches_sticky_chain_ok(self) -> None:
+        sticky = "http://user:pass@92.113.231.203:7288"
+        ok, detail = stable.validate_chain_egress_matches_sticky(
+            sticky_proxy=sticky,
+            browser_proxy="http://127.0.0.1:18443",
+            probe={"ip": "92.113.231.203"},
+        )
+        self.assertTrue(ok)
+        self.assertEqual(detail["reason"], "chain_egress_match")
+
+    def test_validate_chain_egress_matches_sticky_chain_rejects_mismatch(self) -> None:
+        sticky = "http://user:pass@92.113.231.203:7288"
+        ok, detail = stable.validate_chain_egress_matches_sticky(
+            sticky_proxy=sticky,
+            browser_proxy="http://127.0.0.1:18443",
+            probe={"ip": "82.29.223.120"},
+        )
+        self.assertFalse(ok)
+        self.assertEqual(detail["reason"], "chain_egress_mismatch")
+
     def test_main_keeps_sticky_proxy_separate_from_browser_chain(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

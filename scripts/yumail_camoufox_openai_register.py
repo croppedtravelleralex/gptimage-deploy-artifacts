@@ -177,6 +177,7 @@ def _click_continue(page: Any) -> None:
         "Продовжити",  # UA
         "Продолжить",  # RU
         "Continuar",
+        "Continuer",
         "Weiter",
         "Suivant",
         "Avanti",
@@ -239,6 +240,9 @@ def _switch_to_otp_signup(page: Any) -> None:
         r"código de un solo uso",
         r"einmaligen Code",
         r"code à usage unique",
+        r"S'inscrire avec un code",
+        r"inscrire avec un code",
+        r"utiliser un code",
         r"kóddal",
         r"кодом",
         r"коду",
@@ -444,23 +448,42 @@ def _fill_otp(page: Any, mailbox: dict[str, Any], mail: dict[str, Any], boundary
     except Exception as exc:
         raise RuntimeError(f"otp_page_dead_before_fill: {exc}") from exc
     # 填码：优先真实按键（触发 React）；DOM 赋值作兜底
-    otp_box = page.locator(
-        'input[autocomplete="one-time-code"]:visible, input[name="code"]:visible, input[inputmode="numeric"]:visible'
-    )
-    inputs = page.locator("input:visible")
-    filled = False
-    if otp_box.count() > 0:
-        target = otp_box.first
-        maxlen = target.get_attribute("maxlength") or ""
+    targets: list[Any] = []
+    for candidate in (
+        page.get_by_label(re.compile(r"^code$|验证码|verification code", re.I)),
+        page.get_by_role("textbox", name=re.compile(r"code|验证码", re.I)),
+        page.locator(
+            'input[autocomplete="one-time-code"]:visible, input[name="code"]:visible, '
+            'input[inputmode="numeric"]:visible, input[aria-label*="Code" i]:visible'
+        ),
+        page.locator("input:visible"),
+    ):
         try:
-            if maxlen == "1" and otp_box.count() >= 6:
+            if candidate.count() > 0:
+                targets.append(candidate.first)
+                break
+        except Exception:
+            continue
+    filled = False
+    if targets:
+        target = targets[0]
+        otp_cells = page.locator(
+            'input[autocomplete="one-time-code"]:visible, input[name="code"]:visible, input[inputmode="numeric"]:visible'
+        )
+        maxlen = ""
+        try:
+            maxlen = target.get_attribute("maxlength") or ""
+        except Exception:
+            pass
+        try:
+            if maxlen == "1" and otp_cells.count() >= 6:
                 for i, digit in enumerate(code[:6]):
-                    cell = otp_box.nth(i)
+                    cell = otp_cells.nth(i)
                     cell.click(force=True, timeout=5000)
                     cell.press_sequentially(digit, delay=50)
                 filled = True
             else:
-                target.click(force=True, timeout=5000)
+                target.click(force=True, timeout=8000)
                 try:
                     target.fill("")
                 except Exception:
@@ -478,17 +501,18 @@ def _fill_otp(page: Any, mailbox: dict[str, Any], mail: dict[str, Any], boundary
                     setter.call(el, v);
                     el.dispatchEvent(new Event('input', { bubbles: true }));
                     el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
                 }""",
                 code,
             )
             filled = True
-    elif inputs.count() > 0:
-        inputs.first.click()
-        inputs.first.press_sequentially(code, delay=40)
-        filled = True
     if not filled:
         raise RuntimeError("otp_input_missing")
     _log("otp_filled", digits=len(code))
+    try:
+        page.keyboard.press("Enter")
+    except Exception:
+        pass
 
     # 多数页面填满 6 位会自动跳转
     try:
@@ -510,9 +534,17 @@ def _fill_otp(page: Any, mailbox: dict[str, Any], mail: dict[str, Any], boundary
         except Exception as click_exc:
             _log("otp_continue_click_warn", error=str(click_exc)[:160])
             try:
-                page.locator('button[type="submit"]:visible, button:has-text("Continue"):visible, button:has-text("Verify"):visible').first.click(timeout=5000)
+                page.locator(
+                    'button[type="submit"]:visible, button:has-text("Continue"):visible, '
+                    'button:has-text("Verify"):visible, button:has-text("Continuer"):visible'
+                ).first.click(timeout=5000)
             except Exception:
-                pass
+                try:
+                    page.locator("button:visible").filter(has_text=re.compile(r"continue|continuer|verify", re.I)).first.evaluate(
+                        "el => el.click()"
+                    )
+                except Exception:
+                    pass
         try:
             page.wait_for_function(
                 "() => !(location.pathname || '').includes('email-verification')",
@@ -541,7 +573,11 @@ def _fill_about_you(page: Any, email: str) -> None:
     _assert_not_cf_blocked(page)
     page.wait_for_timeout(1000)
     name = _signup_name(email)
-    name_input = page.locator('input[name="name"]:visible, input[autocomplete="name"]:visible, input[placeholder*="name" i]:visible')
+    name_input = page.get_by_label(re.compile(r"full name|name|姓名", re.I))
+    if name_input.count() == 0:
+        name_input = page.locator(
+            'input[name="name"]:visible, input[autocomplete="name"]:visible, input[placeholder*="name" i]:visible'
+        )
     if name_input.count() > 0:
         try:
             name_input.first.click(force=True, timeout=5000)
@@ -550,7 +586,9 @@ def _fill_about_you(page: Any, email: str) -> None:
         name_input.first.fill(name, force=True)
         page.wait_for_timeout(300)
 
-    age = page.locator('input[name="age"]:visible')
+    age = page.get_by_label(re.compile(r"^age$|年龄", re.I))
+    if age.count() == 0:
+        age = page.locator('input[name="age"]:visible')
     if age.count() > 0:
         # React Aria label 会挡住普通 click
         try:
@@ -646,6 +684,16 @@ def _fill_about_you(page: Any, email: str) -> None:
                     break
                 except Exception:
                     continue
+        if not clicked:
+            loose = page.locator("button:visible").filter(
+                has_text=re.compile(r"finish creating account|create account|完成创建|finish", re.I)
+            )
+            if loose.count() > 0:
+                try:
+                    loose.first.evaluate("el => el.click()")
+                    clicked = True
+                except Exception:
+                    pass
         if not clicked:
             raise RuntimeError(f"finish_account_button_missing {_page_error_snippet(page)}")
         try:

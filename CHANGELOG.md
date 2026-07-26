@@ -2,13 +2,30 @@
 
 ## Unreleased
 
-+ [运维/恢复] 2026-07-23：Outlook `token invalidated` 双号（`charlietim7490` / `barnettregina91891`）本机 Camoufox relogin + `_tmp_panda_commit_import_blob.py` 恢复为 `verified_ready`；提交后须 `reload-from-storage` 刷新 8012 内存（已写入 `commit` 脚本与 `16`）。
++ [审计/溯源] 2026-07-26（夜）：`docs/29-prod-provenance-audit-20260726.md` —— AUDIT-28 已上线 Panda 且**运行时确认生效**（watchdog 独立线程 + `force_release_expired=true`、`ss` 池计数恢复、`cpu_budget_source=cgroup_v2`），但 ① 28 个文件**悬在 index**、HEAD 停在快照分支（一次 `git reset --hard` 即静默回滚）；② **19 个文件不在任何 commit 里**（16 个与本地未提交工作树相同、`domain_intel.py` 505 行本地不存在、`yumail_otp.py` prod 落后于已提交修复）；③ 上线后**零生图流量验证**。新发现活体缺陷：`resolve_binding_matrix` hash fallback 撞到无周末档预设 → **17/19 账号 `slot_allowed=False`**（A1-6 未修完）。推翻三条错误结论（抽样外推、CRLF 证据、`grep -ci error` 计数），详见 `29` §6。
++ [修复/CF] 2026-07-26：`proxy_cf_eligibility` — 账号 `proxy_cf_ok` 缓存优先于 `cf403_scan` 批量隔离；`webshare_cf_scan` `auto_quarantine` 跳过已绑定 endpoint；恢复脚本 `_tmp_recover_cf_quarantine.py`。
++ [运维/换绑] 2026-07-25：9 个 `cf_fail` 号换绑至 CF-ok 空闲节点，**单 IP 2 号**（`proxy_binding_max_accounts=2`）；`_tmp_rebind_cf_fail_shared_ip.py`；证据 `captures/spa/T-cf-fail-rebind-shared-ip-20260725.json`。
++ [文档] 2026-07-24（晚）：`PROD-latency-phase-breakdown` §8 阶段 FAQ（task/account 并发、sS 排队、poll_resolve、wall_clock）。
++ [验收] 2026-07-24（晚）：同步 API **conc10 10/10**（`PROD-conc10-20260724T150152Z`）；占墙钟比 vs serial10：sS +8.6%、task_queue +9.7%，SSE 仍 ~78%。
++ [验收] 2026-07-24（晚）：同步 API **serial10 10/10**（`PROD-serial10-20260724T143921Z`）；阶段分解：sS排队 0%、SSE 79%、取号 6%。
++ [修复/前端] 2026-07-24：日志页 **200 条/页** 与 10 条/页统一表格布局（移除错误虚拟行分支）；阶段 hint 纠正 sS 排队 vs ready_buffer 背压口径。
++ [修复/换绑] 2026-07-24：`panda_rebind_unique_proxies.py` 按 **binding + egress IP** 连通分量去重，换绑时实测 egress；修复 6 号同挂 `92.113.246.215`；reload 后 `image_schedulable=17`。
++ [调度] 2026-07-24：`account_service` 增加 `_active_proxy_egress_duplicate`；`schedulable-breakdown` 增 `excluded_by_dup_egress`。
++ [性能/前端] 2026-07-24：`/image` `/logs` `/settings` 路由懒加载（`image-workbench` / `logs-content` / `settings-content`）。
++ [运维/可观测] 2026-07-24：号池【刷新】`reload-from-storage`；调用日志时区 `Asia/Shanghai`；生产 serial5+conc10 阶段分解（`PROD-latency-20260724`）；Panda `sse_slots=10` 显式配置。
++ [产出/观察] 2026-07-24（晚间）：`0716` index **20/22** → `issacandrew7405` / `frasierandy4672`，Webshare `82.21.231.115` / `92.113.231.193`（Panda live `probe_proxy_cf`）；Panda `identity_isolated` + 420s 导入 grace，`total=21`。index 18/19 凭据/会话弃用。证据 `data/runlogs/outlook-camoufox-stable-20260724-batch2/`。
++ [修复/运维] 2026-07-24：观察导入 **420s grace**（跳过远程 refresh）；删 `gibsonarthur3532` 并隔离 `82.29.223.33`；`web_dist` 观察态额度显示修复部署 Panda。
++ [产出/观察] 2026-07-24（上午）：`0716` index **16/17** → `gibsonarthur3532` / `ivorbrown70573`，Webshare `82.29.223.33` / `82.21.231.74`（Panda live `probe_proxy_cf`）；Panda `identity_isolated`，`total=20`。证据 `data/runlogs/outlook-camoufox-stable-20260724-batch1/`。
++ [运维] 2026-07-24：`haroldsunny44941` 重登失败（`account_deactivated`），已删号并将 `82.29.223.120:7934` 隔离。证据 `data/runlogs/outlook-recovery-20260724/`。
++ [修复] 2026-07-23：Camoufox 注册 OTP/about-you 多语言 UI（`get_by_label` 填码、`Finish creating account` 兜底、密码页 OTP 链缺失 fallback、`locale=en-US`）。
++ [产出/观察] 2026-07-23（下午）：`0716` index **5/12** → `enricoalfred9264` / `emberevan8683`，Webshare `82.21.231.132` / `82.21.231.233`（Panda live `probe_proxy_cf` 选 IP）；Panda `identity_isolated`。证据 `data/runlogs/outlook-camoufox-stable-20260723-batch2/`。
++ [运维] 2026-07-23：`charlietim7490` OpenAI `account_deactivated` 无法恢复，已删号并将 `92.113.246.215:5800` 标 `cf403` 隔离；`commit` relogin 保留原 `created_at`。
 + [产出/观察] 2026-07-23：从 `0716-4000_015.txt` index 3/4 注册 2 个 Outlook 新号（Webshare `45.39.75.27` / `92.113.231.203`），Panda `identity_isolated` 观察；新增 `_tmp_panda_import_observe_blob.py`（观察态仅 `/me` 验 token）。证据 `data/runlogs/outlook-camoufox-stable-20260723/`。
 + [修复] 2026-07-23：**额度本地扣减**——`mark_image_result` 成功时同步递减 `limits_progress.image_gen.remaining`，避免 `_normalize_account` 用陈旧 remaining 覆盖本地 quota（bench/验收多轮后仍显示 23 的根因）。`remaining<0` 标 `image_quota_unknown`；`fetch_remote_info` 写 `last_quota_refresh_at`。
 + [修复] 2026-07-23：**poll 429 熔断**——连续 3 次上游 429 快失败 + cooldown/换出口；`image_poll_initial_wait` 默认 20s，SSE 极早结束升至 25s；SSE `complete_predicate` 仅 `sediment://`/file_id 结束。
 + [修复] 2026-07-23：**代理池探测**——`run_cf_probe` 有 token 时走完整 requirements（prepare+finalize）；`ok` 不再因 home 403 单独判死。
 + [验收] 2026-07-23：`qaflowakjewai6ps@proton.me` 串行 **5/5**（65s gate，出口 `92.113.246.176`）。证据 `docs/captures/spa/O-panda-serial5-quota-account-postfix-20260723.md`。
-+ [设计] 2026-07-23：生图调度记录 `docs/21-image-scheduling-and-pipeline.md`——前端提交 P-C、分阶段耗时（后端量/React 展示）、多阶段流水线与 IMG-012 对齐。
++ [设计] 2026-07-23：`21` §8 v2.2——双槽 pS/sS 产品确认、ACI v1、WFQ sync、开关目录 §9、框架路线图 §10。
 + [修复/诊断] 2026-07-22：P4-D1～D5 观测修复落地——SSE 行先解析再判 45s gate；脱敏 `sse_event_timeline`；失败三分 + CF 五层；gate fail 后同流只读至 **90s**（`late_image_gen_after_gate`）。新增 `scripts/spa_bench_sse.py`、`spa_acceptance_gates.py`、`spa_image_panda_acceptance.py`（含 **cf_scan5** 五节点并发预扫与串行5→并发4 门禁）。本地单测 `test_spa_bench_sse_and_gates.py` 11 passed。
 + [文档] 2026-07-22：Rust 重写进度同步——`plan.md` / `14` / `02` / `06` / `README` 指向 `gptimage-gateway-rs/plan.md`（Phase A 已接线 `:8013`+`:19001`；A→E 路线；CF403 归 `17`）。
 + [文档/诊断纠正] 2026-07-22：新 IP 串行续验并非“完全无 CF403”：首页 `home_soft_fail status=403` 为 `4/4`，但 requirements/prepare/start 未传播 CF，前三轮 `/tasks` 无 CF，第四轮未进入 poll。第 4 轮 SSE 收到 13 chunks、约 8 KiB 和类似生图参数 JSON，45 秒内无明确 `image_gen`；发现 bench 在解析行前检查 deadline 的边界假阴性风险。下一步先做脱敏事件时间线、工具/CF 分类和 45→60 秒同流只读诊断，完成前不补第 5 轮、不启动并发 4。

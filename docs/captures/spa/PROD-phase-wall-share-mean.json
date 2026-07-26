@@ -1,0 +1,176 @@
+[
+  {
+    "tag": "PROD-serial10-20260724T165739Z",
+    "n": 10,
+    "wall_mean_ms": 51677.8,
+    "shares": [
+      {
+        "key": "task_queue_ms",
+        "label": "任务排队",
+        "mean_ms": 17.7,
+        "pct": 0.03
+      },
+      {
+        "key": "admit_queue_ms",
+        "label": "准入排队",
+        "mean_ms": 0.0,
+        "pct": 0.0
+      },
+      {
+        "key": "upload_queue_ms",
+        "label": "上传排队",
+        "mean_ms": 0.0,
+        "pct": 0.0
+      },
+      {
+        "key": "ps_queue_ms",
+        "label": "pS排队",
+        "mean_ms": 0.0,
+        "pct": 0.0
+      },
+      {
+        "key": "account_queue_ms",
+        "label": "取号",
+        "mean_ms": 3457.9,
+        "pct": 6.69
+      },
+      {
+        "key": "ss_queue_ms",
+        "label": "sS排队",
+        "mean_ms": 0.0,
+        "pct": 0.0
+      },
+      {
+        "key": "download_queue_ms",
+        "label": "下载排队",
+        "mean_ms": 0.0,
+        "pct": 0.0
+      },
+      {
+        "key": "upload_ms",
+        "label": "上传",
+        "mean_ms": 0.0,
+        "pct": 0.0
+      },
+      {
+        "key": "ps_ms",
+        "label": "pS执行",
+        "mean_ms": 0.0,
+        "pct": 0.0
+      },
+      {
+        "key": "ss_ms",
+        "label": "sS总段",
+        "mean_ms": 41974.9,
+        "pct": 81.22
+      },
+      {
+        "key": "sse_stream_ms",
+        "label": "开票+SSE",
+        "mean_ms": 39870.9,
+        "pct": 77.15
+      },
+      {
+        "key": "poll_resolve_ms",
+        "label": "轮询收图",
+        "mean_ms": 7121.0,
+        "pct": 13.78
+      },
+      {
+        "key": "download_ms",
+        "label": "下载",
+        "mean_ms": 894.7,
+        "pct": 1.73
+      }
+    ],
+    "accounted_pct": 180.6,
+    "unaccounted_pct": -80.6
+  },
+  {
+    "tag": "PROD-conc10-20260725T005309Z",
+    "n": 10,
+    "wall_mean_ms": 52693.9,
+    "shares": [
+      {
+        "key": "task_queue_ms",
+        "label": "任务排队",
+        "mean_ms": 5618.9,
+        "pct": 10.66
+      },
+      {
+        "key": "admit_queue_ms",
+        "label": "准入排队",
+        "mean_ms": 0.0,
+        "pct": 0.0
+      },
+      {
+        "key": "upload_queue_ms",
+        "label": "上传排队",
+        "mean_ms": 0.0,
+        "pct": 0.0
+      },
+      {
+        "key": "ps_queue_ms",
+        "label": "pS排队",
+        "mean_ms": 0.0,
+        "pct": 0.0
+      },
+      {
+        "key": "account_queue_ms",
+        "label": "取号",
+        "mean_ms": 12883.0,
+        "pct": 24.45
+      },
+      {
+        "key": "ss_queue_ms",
+        "label": "sS排队",
+        "mean_ms": 0.0,
+        "pct": 0.0
+      },
+      {
+        "key": "download_queue_ms",
+        "label": "下载排队",
+        "mean_ms": 0.0,
+        "pct": 0.0
+      },
+      {
+        "key": "upload_ms",
+        "label": "上传",
+        "mean_ms": 0.0,
+        "pct": 0.0
+      },
+      {
+        "key": "ps_ms",
+        "label": "pS执行",
+        "mean_ms": 0.0,
+        "pct": 0.0
+      },
+      {
+        "key": "ss_ms",
+        "label": "sS总段",
+        "mean_ms": 38573.3,
+        "pct": 73.2
+      },
+      {
+        "key": "sse_stream_ms",
+        "label": "开票+SSE",
+        "mean_ms": 25291.9,
+        "pct": 48.0
+      },
+      {
+        "key": "poll_resolve_ms",
+        "label": "轮询收图",
+        "mean_ms": 13281.7,
+        "pct": 25.21
+      },
+      {
+        "key": "download_ms",
+        "label": "下载",
+        "mean_ms": 1116.3,
+        "pct": 2.12
+      }
+    ],
+    "accounted_pct": 183.64,
+    "unaccounted_pct": -83.64
+  }
+]

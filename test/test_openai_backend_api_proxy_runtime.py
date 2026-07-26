@@ -251,6 +251,32 @@ class OpenAIBackendAPIProxyRuntimeTests(unittest.TestCase):
         self.assertTrue(api.session.saw_light)
         self.assertEqual(api.session.calls, 2)
 
+    def test_get_conversation_init_switches_to_light_headers_after_cf(self) -> None:
+        class OnceCfSession(FakeSession):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.calls = 0
+                self.saw_light = False
+
+            def post(self, *args, **kwargs):
+                self.calls += 1
+                headers = dict(kwargs.get("headers") or {})
+                if "Sec-Ch-Ua" not in headers and "OAI-Device-Id" in headers:
+                    self.saw_light = True
+                    return FakeResponse(200, {"limits_progress": [], "default_model_slug": "auto"})
+                return FakeResponse(403, "<html>Just a moment</html>")
+
+        with patch.object(openai_backend_api, "account_service", FakeAccountService()), patch.object(
+            openai_backend_api.requests, "Session", OnceCfSession
+        ), patch.object(openai_backend_api.time, "sleep", return_value=None), patch.object(
+            openai_backend_api, "proxy_settings", FakeProxySettings()
+        ):
+            api = OpenAIBackendAPI("access-token")
+            payload = api._get_conversation_init()
+        self.assertEqual(payload.get("default_model_slug"), "auto")
+        self.assertTrue(api.session.saw_light)
+        self.assertEqual(api.session.calls, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

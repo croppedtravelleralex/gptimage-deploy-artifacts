@@ -55,19 +55,25 @@ def get_image_response(relative_path: str) -> FileResponse | Response:
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "*",
+        "Cache-Control": "public, max-age=86400",
     }
     if image_storage_service.has_local(relative_path):
         return FileResponse(_safe_image_path(relative_path), headers=headers)
     return Response(content=image_storage_service.get_bytes(relative_path), media_type="image/png", headers=headers)
 
 
-def _thumbnail_path(relative_path: str) -> Path:
+def _thumbnail_path(relative_path: str, *, ext: str = "webp") -> Path:
     rel = _safe_relative_path(relative_path)
-    return config.image_thumbnails_dir / f"{rel}.png"
+    return config.image_thumbnails_dir / f"{rel}.{ext}"
+
+
+def _legacy_thumbnail_path(relative_path: str) -> Path:
+    return _thumbnail_path(relative_path, ext="png")
 
 
 def thumbnail_url(base_url: str, relative_path: str) -> str:
-    return f"{base_url.rstrip('/')}/image-thumbnails/{_safe_relative_path(relative_path)}"
+    rel = _safe_relative_path(relative_path)
+    return f"{base_url.rstrip('/')}/image-thumbnails/{rel}.webp"
 
 
 def _image_dimensions(path: Path) -> tuple[int, int] | None:
@@ -79,7 +85,8 @@ def _image_dimensions(path: Path) -> tuple[int, int] | None:
 
 
 def ensure_thumbnail(relative_path: str) -> Path:
-    target = _thumbnail_path(relative_path)
+    target = _thumbnail_path(relative_path, ext="webp")
+    legacy = _legacy_thumbnail_path(relative_path)
     source_mtime = 0.0
     source: Path | None = None
     if image_storage_service.has_local(relative_path):
@@ -87,6 +94,8 @@ def ensure_thumbnail(relative_path: str) -> Path:
         source_mtime = source.stat().st_mtime
     if target.exists() and (not source_mtime or target.stat().st_mtime >= source_mtime):
         return target
+    if legacy.exists() and (not source_mtime or legacy.stat().st_mtime >= source_mtime):
+        return legacy
 
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -96,7 +105,9 @@ def ensure_thumbnail(relative_path: str) -> Path:
             if image.mode not in {"RGB", "RGBA"}:
                 image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
             image.thumbnail(THUMBNAIL_SIZE, Image.Resampling.LANCZOS)
-            image.save(target, format="PNG", optimize=True)
+            if image.mode == "RGBA":
+                image = image.convert("RGB")
+            image.save(target, format="WEBP", quality=82, method=6)
     except HTTPException:
         raise
     except Exception as exc:
@@ -105,12 +116,20 @@ def ensure_thumbnail(relative_path: str) -> Path:
 
 
 def get_thumbnail_response(relative_path: str) -> FileResponse:
+    rel = str(relative_path or "").strip()
+    if rel.endswith(".webp"):
+        rel = rel[:-5]
+    elif rel.endswith(".png"):
+        rel = rel[:-4]
     headers = {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "*",
+        "Cache-Control": "public, max-age=86400",
     }
-    return FileResponse(ensure_thumbnail(relative_path), headers=headers)
+    thumb = ensure_thumbnail(rel)
+    media = "image/webp" if thumb.suffix.lower() == ".webp" else "image/png"
+    return FileResponse(thumb, media_type=media, headers=headers)
 
 
 def get_image_download_response(relative_path: str) -> FileResponse:
@@ -135,6 +154,15 @@ def get_image_download_response(relative_path: str) -> FileResponse:
     )
 
 
+def _all_thumbnail_paths(relative_path: str) -> list[Path]:
+    rel = _safe_relative_path(relative_path)
+    return [
+        _thumbnail_path(relative_path, ext="webp"),
+        _legacy_thumbnail_path(relative_path),
+        config.image_thumbnails_dir / rel,
+    ]
+
+
 def cleanup_image_thumbnails() -> int:
     thumbnails_root = config.image_thumbnails_dir
     removed = 0
@@ -142,7 +170,12 @@ def cleanup_image_thumbnails() -> int:
         if not path.is_file():
             continue
         rel = path.relative_to(thumbnails_root).as_posix()
-        if not rel.endswith(".png") or not image_storage_service.exists(rel[:-4]):
+        stem = rel
+        for suffix in (".webp", ".png"):
+            if stem.endswith(suffix):
+                stem = stem[: -len(suffix)]
+                break
+        if not image_storage_service.exists(stem):
             path.unlink()
             removed += 1
     _cleanup_empty_dirs(thumbnails_root)
@@ -182,7 +215,7 @@ def delete_images(paths: list[str] | None = None, start_date: str = "", end_date
             continue
         if image_storage_service.delete(item):
             removed += 1
-        for thumbnail in (_thumbnail_path(item), config.image_thumbnails_dir / _safe_relative_path(item)):
+        for thumbnail in _all_thumbnail_paths(item):
             if thumbnail.is_file():
                 thumbnail.unlink()
         remove_tags(item)
@@ -295,7 +328,7 @@ def delete_to_target(target_free_mb: int, dry_run: bool = False) -> dict:
         size = p.stat().st_size
         if not dry_run:
             rel = p.relative_to(config.images_dir).as_posix()
-            for tp in (_thumbnail_path(rel), config.image_thumbnails_dir / _safe_relative_path(rel)):
+            for tp in _all_thumbnail_paths(rel):
                 if tp.is_file():
                     tp.unlink()
             remove_tags(rel)

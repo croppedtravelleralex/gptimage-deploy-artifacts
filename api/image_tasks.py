@@ -18,6 +18,11 @@ class ImageGenerationTaskRequest(BaseModel):
     model: str = "gpt-image-2"
     size: str | None = None
     quality: str = "auto"
+    n: int = Field(default=1, ge=1, le=4)
+    prompt_enhance: bool = False
+    prompt_enhance_locale: str = "en"
+    multi_image_mode: str = "fast"
+    preferred_account_email: str = ""
 
 
 class ResumePollRequest(BaseModel):
@@ -81,11 +86,13 @@ def create_router() -> APIRouter:
         body: ImageGenerationTaskRequest,
         request: Request,
         authorization: str | None = Header(default=None),
+        x_preferred_account_email: str | None = Header(default=None, alias="X-Preferred-Account-Email"),
     ):
         identity = require_identity(authorization)
         if _image_generation_paused():
             _raise_image_generation_paused()
         await filter_or_log(LoggedCall(identity, "/api/image-tasks/generations", body.model, "文生图任务", request_text=body.prompt), body.prompt)
+        preferred_email = str(x_preferred_account_email or body.preferred_account_email or "").strip()
         try:
             return await run_in_threadpool(
                 image_task_service.submit_generation,
@@ -96,6 +103,11 @@ def create_router() -> APIRouter:
                 size=body.size,
                 quality=body.quality,
                 base_url=resolve_image_base_url(request),
+                n=body.n,
+                prompt_enhance=body.prompt_enhance,
+                prompt_enhance_locale=body.prompt_enhance_locale,
+                multi_image_mode=body.multi_image_mode,
+                preferred_account_email=preferred_email,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc

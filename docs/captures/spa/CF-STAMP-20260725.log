@@ -1,0 +1,151 @@
+[storage] Initializing storage backend: sqlite
+[storage] Using database storage: sqlite:////app/data/accounts.db
+{
+  "ok": 10,
+  "total": 19,
+  "apply": true,
+  "rows": [
+    {
+      "email": "philliphicks336926@outlook.com",
+      "has_proxy": true,
+      "cf_ok": true,
+      "classification": "none",
+      "requirements_status": 200
+    },
+    {
+      "email": "qaflow0ytb7bbp0z@proton.me",
+      "has_proxy": true,
+      "cf_ok": true,
+      "classification": "none",
+      "requirements_status": 200
+    },
+    {
+      "email": "qaflowud630wbo2a@proton.me",
+      "has_proxy": true,
+      "cf_ok": true,
+      "classification": "none",
+      "requirements_status": 200
+    },
+    {
+      "email": "qaflowakjewai6ps@proton.me",
+      "has_proxy": true,
+      "cf_ok": false,
+      "classification": "cf403",
+      "requirements_status": 401,
+      "error": "cf403"
+    },
+    {
+      "email": "ivetterock54353@outlook.com",
+      "has_proxy": true,
+      "cf_ok": false,
+      "classification": "cf403",
+      "requirements_status": 401,
+      "error": "cf403"
+    },
+    {
+      "email": "qaflowfbdb3ovksr@proton.me",
+      "has_proxy": true,
+      "cf_ok": true,
+      "classification": "none",
+      "requirements_status": 200
+    },
+    {
+      "email": "barnettregina91891@outlook.com",
+      "has_proxy": true,
+      "cf_ok": false,
+      "classification": "cf403",
+      "requirements_status": 401,
+      "error": "cf403"
+    },
+    {
+      "email": "felicitypamela2673@outlook.com",
+      "has_proxy": true,
+      "cf_ok": true,
+      "classification": "none",
+      "requirements_status": 200
+    },
+    {
+      "email": "andersmia76491@outlook.com",
+      "has_proxy": true,
+      "cf_ok": false,
+      "classification": "cf403",
+      "requirements_status": 401,
+      "error": "cf403"
+    },
+    {
+      "email": "enricoalfred9264@outlook.com",
+      "has_proxy": true,
+      "cf_ok": false,
+      "classification": "cf403",
+      "requirements_status": 401,
+      "error": "cf403"
+    },
+    {
+      "email": "emberevan8683@outlook.com",
+      "has_proxy": true,
+      "cf_ok": true,
+      "classification": "none",
+      "requirements_status": 200
+    },
+    {
+      "email": "blakekyle5108@outlook.com",
+      "has_proxy": true,
+      "cf_ok": false,
+      "classification": "cf403",
+      "requirements_status": 401,
+      "error": "cf403"
+    },
+    {
+      "email": "qaflowxwy83tivv5@proton.me",
+      "has_proxy": true,
+      "cf_ok": true,
+      "classification": "none",
+      "requirements_status": 200
+    },
+    {
+      "email": "qaflowyi59i282fx@proton.me",
+      "has_proxy": true,
+      "cf_ok": false,
+      "classification": "cf403",
+      "requirements_status": 401,
+      "error": "cf403"
+    },
+    {
+      "email": "qaflowgq5wyuxhe9@proton.me",
+      "has_proxy": true,
+      "cf_ok": true,
+      "classification": "none",
+      "requirements_status": 200
+    },
+    {
+      "email": "qaflowwrg2ptcd05@proton.me",
+      "has_proxy": true,
+      "cf_ok": false,
+      "classification": "cf403",
+      "requirements_status": 401,
+      "error": "cf403"
+    },
+    {
+      "email": "ivorbrown70573@outlook.com",
+      "has_proxy": true,
+      "cf_ok": true,
+      "classification": "none",
+      "requirements_status": 200
+    },
+    {
+      "email": "qaflowxho1z6hynk@proton.me",
+      "has_proxy": true,
+      "cf_ok": false,
+      "classification": "cf403",
+      "requirements_status": 401,
+      "error": "cf403"
+    },
+    {
+      "email": "dreamachristine11594@outlook.com",
+      "has_proxy": true,
+      "cf_ok": true,
+      "classification": "none",
+      "requirements_status": 200
+    }
+  ]
+}

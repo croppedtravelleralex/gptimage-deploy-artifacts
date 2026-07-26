@@ -1,0 +1,317 @@
+{
+  "stamp": "20260724T143921Z",
+  "prompt_tag": "PROD-serial10-20260724T143921Z",
+  "account_email": "qaflowakjewai6ps@proton.me",
+  "runs_planned": 10,
+  "runs_executed": 10,
+  "ok_count": 10,
+  "pass": true,
+  "http_results": [
+    {
+      "run": 1,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 55385,
+      "b64_len": 3409452,
+      "error": null
+    },
+    {
+      "run": 2,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 88437,
+      "b64_len": 3392384,
+      "error": null
+    },
+    {
+      "run": 3,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 64888,
+      "b64_len": 3451688,
+      "error": null
+    },
+    {
+      "run": 4,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 53518,
+      "b64_len": 3395840,
+      "error": null
+    },
+    {
+      "run": 5,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 41435,
+      "b64_len": 3652452,
+      "error": null
+    },
+    {
+      "run": 6,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 51522,
+      "b64_len": 3362512,
+      "error": null
+    },
+    {
+      "run": 7,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 44618,
+      "b64_len": 3351116,
+      "error": null
+    },
+    {
+      "run": 8,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 90004,
+      "b64_len": 3764752,
+      "error": null
+    },
+    {
+      "run": 9,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 44841,
+      "b64_len": 3362244,
+      "error": null
+    },
+    {
+      "run": 10,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 53949,
+      "b64_len": 3649236,
+      "error": null
+    }
+  ],
+  "http_latency_ms": {
+    "n": 10,
+    "min_ms": 41435.0,
+    "p50_ms": 53518.0,
+    "p95_ms": 90004.0,
+    "max_ms": 90004.0,
+    "mean_ms": 58859.7
+  },
+  "phase_rows": [
+    {
+      "time": "2026-07-24 22:40:18",
+      "summary": "文生图调用完成",
+      "task_queue_ms": 10,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 3519,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 43164,
+      "poll_resolve_ms": 3560,
+      "download_ms": 750,
+      "wall_clock_ms": 55143,
+      "has_phase": true
+    },
+    {
+      "time": "2026-07-24 22:42:18",
+      "summary": "文生图调用完成",
+      "task_queue_ms": 10,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 3093,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 76610,
+      "poll_resolve_ms": 4065,
+      "download_ms": 1274,
+      "wall_clock_ms": 88249,
+      "has_phase": true
+    },
+    {
+      "time": "2026-07-24 22:43:55",
+      "summary": "文生图调用完成",
+      "task_queue_ms": 9,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 2450,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 52678,
+      "poll_resolve_ms": 5574,
+      "download_ms": 1446,
+      "wall_clock_ms": 64724,
+      "has_phase": true
+    },
+    {
+      "time": "2026-07-24 22:45:21",
+      "summary": "文生图调用完成",
+      "task_queue_ms": 8,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 1490,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 44183,
+      "poll_resolve_ms": 4851,
+      "download_ms": 1118,
+      "wall_clock_ms": 53235,
+      "has_phase": true
+    },
+    {
+      "time": "2026-07-24 22:46:35",
+      "summary": "文生图调用完成",
+      "task_queue_ms": 11,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 2544,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 30600,
+      "poll_resolve_ms": 4101,
+      "download_ms": 1327,
+      "wall_clock_ms": 41270,
+      "has_phase": true
+    },
+    {
+      "time": "2026-07-24 22:48:00",
+      "summary": "文生图调用完成",
+      "task_queue_ms": 10,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 3787,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 39009,
+      "poll_resolve_ms": 3654,
+      "download_ms": 955,
+      "wall_clock_ms": 51308,
+      "has_phase": true
+    },
+    {
+      "time": "2026-07-24 22:49:17",
+      "summary": "文生图调用完成",
+      "task_queue_ms": 8,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 2890,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 33190,
+      "poll_resolve_ms": 4685,
+      "download_ms": 595,
+      "wall_clock_ms": 44354,
+      "has_phase": true
+    },
+    {
+      "time": "2026-07-24 22:51:20",
+      "summary": "文生图调用完成",
+      "task_queue_ms": 12,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 6939,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 72310,
+      "poll_resolve_ms": 0,
+      "download_ms": 1213,
+      "wall_clock_ms": 89739,
+      "has_phase": true
+    },
+    {
+      "time": "2026-07-24 22:52:36",
+      "summary": "文生图调用完成",
+      "task_queue_ms": 10,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 6090,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 29206,
+      "poll_resolve_ms": 0,
+      "download_ms": 738,
+      "wall_clock_ms": 44675,
+      "has_phase": true
+    },
+    {
+      "time": "2026-07-24 22:54:03",
+      "summary": "文生图调用完成",
+      "task_queue_ms": 12,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 1616,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 42803,
+      "poll_resolve_ms": 6346,
+      "download_ms": 1288,
+      "wall_clock_ms": 53781,
+      "has_phase": true
+    }
+  ],
+  "phase_summary": {
+    "task_queue_ms": {
+      "n": 10,
+      "min_ms": 8,
+      "p50_ms": 10,
+      "p95_ms": 12,
+      "max_ms": 12,
+      "mean_ms": 10.0
+    },
+    "admit_queue_ms": {
+      "n": 10,
+      "min_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "max_ms": 0,
+      "mean_ms": 0.0
+    },
+    "ps_queue_ms": {
+      "n": 10,
+      "min_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "max_ms": 0,
+      "mean_ms": 0.0
+    },
+    "account_queue_ms": {
+      "n": 10,
+      "min_ms": 1490,
+      "p50_ms": 2890,
+      "p95_ms": 6939,
+      "max_ms": 6939,
+      "mean_ms": 3441.8
+    },
+    "ss_queue_ms": {
+      "n": 10,
+      "min_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "max_ms": 0,
+      "mean_ms": 0.0
+    },
+    "sse_stream_ms": {
+      "n": 10,
+      "min_ms": 29206,
+      "p50_ms": 42803,
+      "p95_ms": 76610,
+      "max_ms": 76610,
+      "mean_ms": 46375.3
+    },
+    "poll_resolve_ms": {
+      "n": 10,
+      "min_ms": 0,
+      "p50_ms": 4065,
+      "p95_ms": 6346,
+      "max_ms": 6346,
+      "mean_ms": 3683.6
+    },
+    "download_ms": {
+      "n": 10,
+      "min_ms": 595,
+      "p50_ms": 1118,
+      "p95_ms": 1446,
+      "max_ms": 1446,
+      "mean_ms": 1070.4
+    },
+    "wall_clock_ms": {
+      "n": 10,
+      "min_ms": 41270,
+      "p50_ms": 53235,
+      "p95_ms": 89739,
+      "max_ms": 89739,
+      "mean_ms": 58647.8
+    }
+  },
+  "generated_at": "2026-07-24T14:54:10.626777+00:00",
+  "phase_source": "api/logs call detail phase_timings_ms (account qaflowakjewai6ps@proton.me, last 10 completions 22:40-22:54 CST)"
+}

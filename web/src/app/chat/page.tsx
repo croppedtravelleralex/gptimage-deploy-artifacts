@@ -1,11 +1,17 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { LoaderCircle } from "lucide-react";
 
+import { PageLoadingSpinner } from "@/components/page-loading-spinner";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 
-import { ConversationWorkbench } from "./conversation-workbench";
 import { SkillStatusLight } from "./skill-status-panel";
+
+const ConversationWorkbench = dynamic(
+  () => import("./conversation-workbench").then((mod) => mod.ConversationWorkbench),
+  { loading: () => <PageLoadingSpinner label="加载对话工作台…" /> },
+);
 
 export default function ChatPage() {
   const { isCheckingAuth, session } = useAuthGuard(["admin"]);

@@ -1,7 +1,9 @@
 # 14 — Rust 重写索引（RUST-001）
 
-最后更新：2026-07-23  
-状态：**Phase A 已接线** + **鉴权/UI/简易后端** + **Phase B 契约层**；生图运行时默认关（`IMAGE_ENABLED=0`）
+最后更新：2026-07-25  
+状态：**Phase A 已接线** + **鉴权/UI/简易后端** + **Phase B 契约层** + **本仓 Layer 1 SlotLedger 待做**；生图运行时默认关（`IMAGE_ENABLED=0`）
+
+> **本仓槽位与释槽**：`image_inflight` / sS 槽均在 **Python**；Rust `.so` 仅 trace + dispatch gate。详见 [`26-slot-lifecycle-rust-roadmap.md`](26-slot-lifecycle-rust-roadmap.md)。
 
 ## 权威位置
 
@@ -28,7 +30,7 @@ CF403 / 出口：[`17-cf403-and-egress.md`](17-cf403-and-egress.md)（**号池�
 A    Rust 编排 + curl_cffi helper   ✅ 已接线 :8013
 A+   鉴权 + Web UI + 简易后端        ✅
 B    协议契约（fixtures/edits/estuary） ✅ 契约层；生图运行时 ⏸️
-C    选号 / inflight / admission
+C    选号 / inflight / admission          ← 与本仓 `26` Layer 1 SlotLedger 对齐
 D    RCA / llm_ops / error_class 对齐
 E    R2 生产 canary（另立项；公网仍 8012 直至立项）
 ```

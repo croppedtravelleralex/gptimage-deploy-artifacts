@@ -1,0 +1,85 @@
+{
+  "generated_at": "2026-07-24T12:37:22Z",
+  "local": {
+    "static_total_kb": 2113.4,
+    "static_files": 47,
+    "routes": {
+      "/": {
+        "html_kb": 13.3
+      },
+      "/404": {
+        "html_kb": 15.0
+      },
+      "/accounts": {
+        "html_kb": 16.2
+      },
+      "/chat": {
+        "html_kb": 14.5
+      },
+      "/debug": {
+        "html_kb": 14.3
+      },
+      "/image": {
+        "html_kb": 15.0
+      },
+      "/image-manager": {
+        "html_kb": 13.9
+      },
+      "/login": {
+        "html_kb": 14.2
+      },
+      "/logs": {
+        "html_kb": 15.2
+      },
+      "/ops": {
+        "html_kb": 13.8
+      },
+      "/register": {
+        "html_kb": 14.7
+      },
+      "/settings": {
+        "html_kb": 15.0
+      },
+      "/_not-found": {
+        "html_kb": 15.0
+      }
+    }
+  },
+  "production": [
+    {
+      "url": "https://gptimage.relai.asia/accounts/",
+      "ok": true,
+      "status": 200,
+      "ttfb_ms": 2884
+    },
+    {
+      "url": "https://gptimage.relai.asia/logs/",
+      "ok": true,
+      "status": 200,
+      "ttfb_ms": 2011
+    },
+    {
+      "url": "https://gptimage.relai.asia/chat/",
+      "ok": true,
+      "status": 200,
+      "ttfb_ms": 2929
+    },
+    {
+      "url": "https://gptimage.relai.asia/ops/",
+      "ok": true,
+      "status": 200,
+      "ttfb_ms": 1924
+    },
+    {
+      "url": "https://gptimage.relai.asia/image-manager/",
+      "ok": true,
+      "status": 200,
+      "ttfb_ms": 2017
+    },
+    {
+      "url": "https://gptimage.relai.asia/_next/static/chunks/",
+      "ok": false,
+      "error": "HTTP Error 404: Not Found"
+    }
+  ]
+}

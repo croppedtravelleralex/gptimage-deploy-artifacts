@@ -603,6 +603,9 @@ class AccountRefreshAllService:
                 if _is_terminal_outlook_recovery(account):
                     skipped += 1
                     continue
+                if AccountService._observe_import_refresh_grace_active(account):
+                    skipped += 1
+                    continue
                 tokens.append(token)
             if options.limit is not None:
                 skipped += max(0, len(tokens) - options.limit)
@@ -620,6 +623,9 @@ class AccountRefreshAllService:
                 skipped += 1
                 continue
             if _is_terminal_outlook_recovery(account):
+                skipped += 1
+                continue
+            if AccountService._observe_import_refresh_grace_active(account):
                 skipped += 1
                 continue
             status = str(account.get("status") or "正常").strip()

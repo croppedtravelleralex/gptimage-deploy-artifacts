@@ -765,21 +765,13 @@ class AccountService:
     def _image_binding_inflight_max(self) -> int:
         """同一 proxy_binding 上**同时活跃的账号数**上限，降低共享出口 CF 暴死。
 
-        A4-3 口径修正：本值原先被当作「同一 binding 的在途**请求**数」，而
-        `_binding_image_inflight_locked()` 把账号自己的在途也计进自己的 binding
-        总数。生产实测 19 号分布在 16 个 binding 上、**无空 binding**，闸门对所有
-        账号生效，于是 `image_binding_inflight_max = 1` 让单账号有效并发恒为 1，
-        `image_account_concurrency = 2` 永远吃不到（docs/28 §B5）。
-
-        现口径 = 「一个共享出口上同时暴露几个**身份**」，这正是 CF 关联风险的
-        载体；单身份自身的并发由 `image_account_concurrency` 负责。两者相乘才是
-        单出口的在途请求上限：
+        乘上 `image_account_concurrency` 得单出口的在途请求上限：
 
             per-egress in-flight ≤ image_binding_inflight_max × image_account_concurrency
 
         默认 1 × 2 = 2。运维若要把单出口在途压回 1，请把
         `image_account_concurrency` 设为 1，而不是压 `image_binding_inflight_max`
-        —— 后者管的是身份数，压它只会重新造出 A4-3。
+        —— 后者管的是身份数。
         """
         try:
             return max(1, int(getattr(config, "image_binding_inflight_max", 1) or 1))
@@ -878,15 +870,14 @@ class AccountService:
         if not token:
             return False
         max_concurrency = max(1, int(config.image_account_concurrency or 1))
-        binding_limit = self._image_binding_inflight_max()
+        binding_limit = self._image_binding_inflight_max() * max(1, getattr(config, "image_account_concurrency", 2))
         current = int(self._image_inflight.get(token, 0))
         if current >= max_concurrency:
             return False
         account = self._accounts.get(token) or {}
         binding = self._account_binding_hash(account)
-        # A4-3：按 binding 上的**账号席位数**判定，且排除自己 —— 否则账号自己的在途
-        # 会计进自己的 binding 总数，binding_max=1 时把 image_account_concurrency 锁死成 1。
-        if binding and self._binding_image_account_seats_locked(binding, exclude_token=token) >= binding_limit:
+        # per-binding 检查：binding 上所有 token 在途请求总数
+        if binding and self._binding_image_inflight_locked(binding) >= binding_limit:
             return False
         if not skip_global_limit:
             ready_count = len(self._list_ready_candidate_tokens())
@@ -1317,6 +1308,16 @@ class AccountService:
         normalized["email"] = normalized.get("email") or None
         normalized["user_id"] = normalized.get("user_id") or None
         normalized["proxy"] = str(normalized.get("proxy") or "").strip()
+        if not normalized["proxy"]:
+            from services.proxy_pool_service import ProxyTier, proxy_pool_service
+            if AccountService._is_image_account_available(normalized):
+                assigned = proxy_pool_service.assign_proxy(ProxyTier.RESIDENTIAL)
+                normalized["proxy_pool"] = "residential"
+            else:
+                assigned = proxy_pool_service.assign_proxy(ProxyTier.DATACENTER)
+                normalized["proxy_pool"] = "datacenter"
+            if assigned:
+                normalized["proxy"] = assigned
         source_type = normalized.get("source_type")
         if not source_type and str(normalized.get("export_type") or "").strip().lower() == "codex":
             source_type = "codex"

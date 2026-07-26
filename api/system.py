@@ -54,10 +54,12 @@ from services.image_service import (
     list_images,
     storage_stats,
 )
+from services.image_quota_refresh_service import image_quota_refresh_service
 from services.image_storage_service import ImageStorageError, image_storage_service
 from services.image_tags_service import delete_tag, get_all_tags, set_tags
 from services.log_service import log_service
 from services.proxy_service import proxy_settings, test_proxy
+from services.bandwidth_tracker import bandwidth_tracker
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -419,6 +421,8 @@ def create_router(app_version: str) -> APIRouter:
             # scraping /health cannot double-apply a correction.
             stats_json["pipeline_watchdog"] = pipeline_watchdog_service.tick()
             stats_json["pre_ticket_pool"] = pre_ticket_pool.snapshot()
+            stats_json["quota_refresh"] = image_quota_refresh_service.snapshot()
+            stats_json["bandwidth"] = bandwidth_tracker.snapshot()
         except Exception:
             pass
         try:

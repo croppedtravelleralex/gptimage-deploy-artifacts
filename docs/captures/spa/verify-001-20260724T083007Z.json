@@ -1,0 +1,110 @@
+{
+  "generated_at": "2026-07-24T08:31:15.718626+00:00",
+  "since": "2026-07-24 08:30:16",
+  "email": "qaflowakjewai6ps@proton.me",
+  "results": [
+    {
+      "tag": "c1",
+      "ok": true,
+      "http_code": 200,
+      "elapsed_secs": 36.69,
+      "b64_len": 1039296,
+      "error": null
+    },
+    {
+      "tag": "c2",
+      "ok": true,
+      "http_code": 200,
+      "elapsed_secs": 40.34,
+      "b64_len": 1044520,
+      "error": null
+    }
+  ],
+  "checks": {
+    "both_ok": true,
+    "call_log_rows": 4,
+    "unique_task_ids": 2,
+    "max_logs_per_task": 1,
+    "all_tasks_single_log": true,
+    "all_have_phase_chips": false,
+    "api_logs_limit_200_ok": true,
+    "api_logs_limit_200_count": 200
+  },
+  "logs": [
+    {
+      "time": "2026-07-24 08:31:04",
+      "summary": "文生图调用完成",
+      "task_id": null,
+      "status": "success",
+      "total_wall_ms": 40286,
+      "phase_timings_ms": {},
+      "completion_tokens": null,
+      "tokens_per_sec": null,
+      "upload_bytes": null,
+      "download_bytes": null
+    },
+    {
+      "time": "2026-07-24 08:31:04",
+      "summary": "文生图调用完成",
+      "task_id": "sync-pqaPU2ziZge5PaDqwmxPGA",
+      "status": "success",
+      "total_wall_ms": 40325,
+      "phase_timings_ms": {
+        "admit_queue_ms": 0,
+        "upload_queue_ms": 0,
+        "ps_queue_ms": 0,
+        "ss_queue_ms": 0,
+        "account_queue_ms": 2057,
+        "download_queue_ms": 0,
+        "upload_ms": 0,
+        "ps_ms": 0,
+        "ss_ms": 34499,
+        "sse_stream_ms": 24586,
+        "download_ms": 1172,
+        "wall_clock_ms": 40233
+      },
+      "completion_tokens": 1650,
+      "tokens_per_sec": 67.11,
+      "upload_bytes": null,
+      "download_bytes": null
+    },
+    {
+      "time": "2026-07-24 08:31:06",
+      "summary": "文生图调用完成",
+      "task_id": null,
+      "status": "success",
+      "total_wall_ms": 36646,
+      "phase_timings_ms": {},
+      "completion_tokens": null,
+      "tokens_per_sec": null,
+      "upload_bytes": null,
+      "download_bytes": null
+    },
+    {
+      "time": "2026-07-24 08:31:06",
+      "summary": "文生图调用完成",
+      "task_id": "sync-ydgVU-lNWPcXEpGHp2ZcLw",
+      "status": "success",
+      "total_wall_ms": 36690,
+      "phase_timings_ms": {
+        "admit_queue_ms": 0,
+        "upload_queue_ms": 0,
+        "ps_queue_ms": 0,
+        "ss_queue_ms": 0,
+        "account_queue_ms": 3588,
+        "download_queue_ms": 0,
+        "upload_ms": 0,
+        "ps_ms": 0,
+        "ss_ms": 3288,
+        "sse_stream_ms": 21927,
+        "download_ms": 1399,
+        "wall_clock_ms": 36594
+      },
+      "completion_tokens": 1650,
+      "tokens_per_sec": 75.25,
+      "upload_bytes": null,
+      "download_bytes": null
+    }
+  ],
+  "pass": false
+}

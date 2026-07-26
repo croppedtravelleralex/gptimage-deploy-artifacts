@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps } from "react";
+import dynamic from "next/dynamic";
 import {
   Ban,
   CheckCircle2,
@@ -26,12 +27,22 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { DateRangeControls, InteractiveLineChart } from "@/components/charts/InteractiveLineChart";
 import { BindingSgHeatmap, normalizeBindingWeights } from "@/components/accounts/BindingSgHeatmap";
 import { AccountUsageHeatstrip } from "@/components/accounts/AccountUsageHeatstrip";
 import { CfStatusLight, summarizeCfDay, type CfDayPoint } from "@/components/accounts/CfStatusLight";
 import { EgressDriftLights } from "@/components/accounts/EgressDriftLights";
 import { ScheduleCountdownIcons } from "@/components/accounts/ScheduleCountdownIcons";
+import {
+  accountImageQuotaState,
+  accountQuotaBadgeVariant,
+  formatAccountQuotaHint,
+  formatAccountQuotaValue,
+  formatPoolQuotaDetail,
+  formatPoolQuotaFromStats,
+  formatQuotaRefreshAge,
+  formatCompactNumber as formatCompact,
+  isUnlimitedImageQuotaAccount,
+} from "@/lib/image-quota";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -54,8 +65,8 @@ import {
 } from "@/components/ui/select";
 import {
   deleteAccounts,
-  fetchAccountActivityDaily,
   fetchAccounts,
+  reloadAccountsFromStorage,
   fetchAccountMaintenanceLoopStatus,
   fetchModels,
   fetchOutlookAccountRecoveryProgress,
@@ -71,7 +82,6 @@ import {
   startRefreshAllAccounts,
   stopRefreshAllAccounts,
   syncAccountsToPanda,
-  setAccountSoftBand,
   fetchAccountsUsageRecent,
   fetchIpNurtureBindings,
   fetchIpNurturePresets,
@@ -86,7 +96,6 @@ import {
   setAccountScheduling,
   setAccountsSchedulingBulk,
   type Account,
-  type AccountActivityDailyResponse,
   type AccountMaintenanceLoopStatus,
   type AccountRefreshAllStatus,
   type AccountRefreshResponse,
@@ -103,6 +112,14 @@ import {
 import { humanizeUpstreamError } from "@/lib/chat-format";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import { cn } from "@/lib/utils";
+
+const AccountsActivityPanels = dynamic(() => import("./accounts-activity-panels"), {
+  loading: () => (
+    <div className="flex min-h-[200px] items-center justify-center rounded-2xl border border-white/80 bg-white/90 text-sm text-stone-500">
+      加载账号流水…
+    </div>
+  ),
+});
 
 import { AccountImportDialog } from "./components/account-import-dialog";
 
@@ -158,15 +175,22 @@ const metricCards = [
   { key: "active", label: "正常账户", color: "text-emerald-600", icon: CheckCircle2 },
   {
     key: "schedulable",
-    label: "可调度",
+    label: "进调度",
     color: "text-emerald-700",
     icon: CheckCircle2,
-    title: "已打开「进调度」且状态为正常的账号数",
+    title: "已打开「进调度」且状态为正常的账号数（人工开关）",
+  },
+  {
+    key: "image_schedulable",
+    label: "生图可用",
+    color: "text-teal-700",
+    icon: Play,
+    title: "通过额度核对与生图门槛、当前可进入生图候选池的账号数",
   },
   { key: "limited", label: "限流账户", color: "text-orange-500", icon: CircleAlert },
   { key: "abnormal", label: "异常账户", color: "text-rose-500", icon: CircleOff },
   { key: "disabled", label: "禁用账户", color: "text-stone-500", icon: Ban },
-  { key: "quota", label: "剩余额度", color: "text-blue-500", icon: RefreshCw },
+  { key: "quota", label: "可用生图额度", color: "text-blue-500", icon: RefreshCw, title: "已核对且可参与生图调度的额度合计（非账面缓存总和）" },
 ] as const;
 
 type AccountStats = {
@@ -193,6 +217,10 @@ type AccountStats = {
   panda_verified_count?: number;
   panda_rejected_count?: number;
   schedulable?: number;
+  image_schedulable?: number;
+  available_image_quota?: number;
+  verified_total_quota?: number;
+  dispatchable_candidate_count?: number;
   tainted_count?: number;
 };
 
@@ -227,23 +255,12 @@ const outlookAutoRecoveryStateText: Record<string, string> = {
   paused: "已暂停",
 };
 
-function isUnlimitedImageQuotaAccount(account: Account) {
-  return String(account.type || "").trim().toLowerCase() === "pro" || String(account.type || "").trim().toLowerCase() === "prolite";
-}
-
 function imageQuotaUnknown(account: Account) {
   return Boolean(account.image_quota_unknown);
 }
 
 function isUnknownImageQuotaAccount(account: Account) {
   return imageQuotaUnknown(account) && !isUnlimitedImageQuotaAccount(account);
-}
-
-function formatCompact(value: number) {
-  if (value >= 1000) {
-    return `${(value / 1000).toFixed(1)}k`;
-  }
-  return String(value);
 }
 
 const EGRESS_STATUS_PRIORITY: Record<string, number> = {
@@ -405,17 +422,7 @@ function weightsForBinding(
   return normalizeBindingWeights(preset?.weights || []);
 }
 
-const TABLE_COLUMN_COUNT = 14;
-
-function formatQuota(account: Account) {
-  if (isUnlimitedImageQuotaAccount(account)) {
-    return "∞";
-  }
-  if (isUnknownImageQuotaAccount(account)) {
-    return "未知";
-  }
-  return String(Math.max(0, account.quota));
-}
+const TABLE_COLUMN_COUNT = 13;
 
 function formatRefreshAllState(state?: string) {
   const key = String(state || "idle");
@@ -525,6 +532,13 @@ function formatQuotaSummary(accounts: Account[]) {
   const availableAccounts = accounts.filter((account) => account.status === "正常");
   if (availableAccounts.some(isUnlimitedImageQuotaAccount)) {
     return "∞";
+  }
+  const availableSum = availableAccounts.reduce(
+    (sum, account) => sum + Math.max(0, Number(account.available_image_quota ?? 0)),
+    0,
+  );
+  if (availableSum > 0) {
+    return formatCompact(availableSum);
   }
   if (availableAccounts.some(isUnknownImageQuotaAccount)) {
     return "未知";
@@ -700,8 +714,6 @@ function AccountsPageContent() {
   const [isBulkScheduling, setIsBulkScheduling] = useState(false);
   const [usageByEmail, setUsageByEmail] = useState<AccountUsageRecentResponse["by_email"]>({});
   const [usageDates, setUsageDates] = useState<string[]>([]);
-  const [softBandDrafts, setSoftBandDrafts] = useState<Record<string, string>>({});
-  const [softBandBusy, setSoftBandBusy] = useState<Set<string>>(new Set());
   const [accountViewMode, setAccountViewMode] = useState<"flat" | "grouped">("flat");
   const [nurturePresets, setNurturePresets] = useState<IpNurturePreset[]>([]);
   const [nurtureBindings, setNurtureBindings] = useState<Record<string, IpNurtureBinding>>({});
@@ -720,9 +732,7 @@ function AccountsPageContent() {
   const [pandaSyncSettings, setPandaSyncSettings] = useState<PandaSyncPublicSettings | null>(null);
   const [isTogglingPandaSync, setIsTogglingPandaSync] = useState(false);
   const [lastPandaSyncResult, setLastPandaSyncResult] = useState<PandaAccountSyncResponse | null>(null);
-  const [accountActivity, setAccountActivity] = useState<AccountActivityDailyResponse | null>(null);
-  const [activityFrom, setActivityFrom] = useState("");
-  const [activityTo, setActivityTo] = useState("");
+  const [activityRefreshToken, setActivityRefreshToken] = useState(0);
   const [isTogglingMaintenance, setIsTogglingMaintenance] = useState(false);
   const [isTogglingOutlookAutoRecovery, setIsTogglingOutlookAutoRecovery] = useState(false);
   const [progress, setProgress] = useState<{
@@ -750,12 +760,12 @@ function AccountsPageContent() {
     { key: "created_at", dir: "desc" },
   ]);
 
-  const loadAccounts = async (silent = false) => {
+  const loadAccounts = async (silent = false, options: { bustCache?: boolean } = {}) => {
     if (!silent) {
       setIsLoading(true);
     }
     try {
-      const data = await fetchAccounts({ limit: accountListLimit });
+      const data = await fetchAccounts({ limit: accountListLimit, bustCache: options.bustCache });
       setAccounts(data.items);
       setAccountTotal(typeof data.total === "number" ? data.total : data.items.length);
       setAccountStats(data.stats ?? null);
@@ -777,8 +787,29 @@ function AccountsPageContent() {
       .catch(() => null);
   };
 
+  const handlePageRefresh = async () => {
+    setIsLoading(true);
+    try {
+      await reloadAccountsFromStorage();
+      await loadAccounts(true, { bustCache: true });
+      setPage(1);
+      await Promise.all([
+        loadRefreshAllStatus(),
+        loadIpNurtureData(),
+      ]);
+      setActivityRefreshToken((n) => n + 1);
+      toast.success("号池数据已刷新");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "刷新失败";
+      toast.error(message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const refreshAccountPage = async () => {
-    await loadAccounts(true);
+    await reloadAccountsFromStorage().catch(() => null);
+    await loadAccounts(true, { bustCache: true });
     setPage(1);
   };
 
@@ -846,15 +877,10 @@ function AccountsPageContent() {
       void loadOutlookAutoRecoveryStatus();
       void loadPandaSyncSettings();
     }, 50);
-    const activityTimer = window.setTimeout(() => {
-      void loadAccountActivity();
-      void loadIpNurtureData();
-    }, 400);
 
     // 清理进度条定时器
     return () => {
       window.clearTimeout(timer);
-      window.clearTimeout(activityTimer);
       if (progressRef.current) clearInterval(progressRef.current);
       if (refreshAllPollRef.current) clearInterval(refreshAllPollRef.current);
       if (maintenancePollRef.current) clearInterval(maintenancePollRef.current);
@@ -863,6 +889,14 @@ function AccountsPageContent() {
     };
   }, []);
 
+  useEffect(() => {
+    if (accountViewMode !== "grouped") {
+      return;
+    }
+    void loadIpNurtureData();
+  }, [accountViewMode]);
+
+  const isUploadSyncNode = Boolean(pandaSyncSettings?.base_url?.trim());
   const refreshAllActive = Boolean(refreshAllStatus?.state === "running" || refreshAllStatus?.state === "paused" || refreshAllStatus?.state === "stopping");
 
   const loadRefreshAllStatus = async () => {
@@ -924,21 +958,6 @@ function AccountsPageContent() {
       const data = await fetchPandaSyncSettings();
       setPandaSyncSettings(data.panda_sync);
       return data.panda_sync;
-    } catch {
-      return null;
-    }
-  };
-
-  const loadAccountActivity = async () => {
-    try {
-      const data = await fetchAccountActivityDaily(30);
-      setAccountActivity(data);
-      const items = data.items || [];
-      if (items.length) {
-        setActivityFrom(items[Math.max(0, items.length - 14)].date);
-        setActivityTo(items[items.length - 1].date);
-      }
-      return data;
     } catch {
       return null;
     }
@@ -1187,8 +1206,6 @@ function AccountsPageContent() {
 
   const summary = useMemo(() => {
     if (accountStats) {
-      const unlimitedQuotaCount = typeof accountStats.unlimited_quota_count === "number" ? accountStats.unlimited_quota_count : 0;
-      const unknownQuotaCount = typeof accountStats.unknown_quota_count === "number" ? accountStats.unknown_quota_count : 0;
       return {
         total: accountStats.total,
         active: accountStats.active,
@@ -1196,7 +1213,8 @@ function AccountsPageContent() {
         abnormal: accountStats.abnormal,
         disabled: accountStats.disabled,
         schedulable: typeof accountStats.schedulable === "number" ? accountStats.schedulable : 0,
-        quota: unlimitedQuotaCount > 0 ? "∞" : unknownQuotaCount > 0 ? "未知" : formatCompact(accountStats.total_quota),
+        image_schedulable: typeof accountStats.image_schedulable === "number" ? accountStats.image_schedulable : 0,
+        quota: formatPoolQuotaFromStats(accountStats),
       };
     }
     const total = accounts.length;
@@ -1205,45 +1223,11 @@ function AccountsPageContent() {
     const abnormal = accounts.filter((item) => item.status === "异常").length;
     const disabled = accounts.filter((item) => item.status === "禁用").length;
     const schedulable = accounts.filter((a) => isManualSchedulingEnabled(a) && a.status === "正常").length;
+    const imageSchedulable = accounts.filter((a) => a.image_schedulable).length;
     const quota = formatQuotaSummary(accounts);
 
-    return { total, active, limited, abnormal, disabled, schedulable, quota };
+    return { total, active, limited, abnormal, disabled, schedulable, image_schedulable: imageSchedulable, quota };
   }, [accountStats, accounts]);
-
-  const activityChart = useMemo(() => {
-    const all = accountActivity?.items ?? [];
-    const from = activityFrom || (all[0]?.date ?? "");
-    const to = activityTo || (all[all.length - 1]?.date ?? "");
-    const items = all.filter((item) => (!from || item.date >= from) && (!to || item.date <= to));
-    return {
-      items,
-      from: all[0]?.date ?? "",
-      to: all[all.length - 1]?.date ?? "",
-      rangeFrom: from,
-      rangeTo: to,
-      syncLabel: accountActivity?.sync_label ?? "上传",
-      series: [
-        { key: "registered", label: "注册/入库", color: "#10b981", values: items.map((i) => i.registered) },
-        { key: "uploaded", label: "上传", color: "#3b82f6", values: items.map((i) => i.uploaded) },
-        { key: "received", label: "接收", color: "#0ea5e9", values: items.map((i) => i.received) },
-        { key: "deleted", label: "删除", color: "#f43f5e", values: items.map((i) => i.deleted) },
-        { key: "images_api", label: "api生图", color: "#a855f7", values: items.map((i) => Number(i.images_api || 0)) },
-        { key: "images_chat", label: "对话生图", color: "#c026d3", values: items.map((i) => Number(i.images_chat || 0)) },
-        {
-          key: "dialogues_nurture",
-          label: "拟人对话",
-          color: "#f59e0b",
-          values: items.map((i) => Number(i.dialogues_nurture || 0)),
-        },
-        {
-          key: "dialogues_real",
-          label: "真实对话",
-          color: "#0284c7",
-          values: items.map((i) => Number(i.dialogues_real || 0)),
-        },
-      ],
-    };
-  }, [accountActivity, activityFrom, activityTo]);
 
   const accountTypeOptions = useMemo(
     () => [
@@ -1291,7 +1275,7 @@ function AccountsPageContent() {
     try {
       const data = await deleteAccounts(tokens);
       await refreshAccountPage();
-      await loadAccountActivity();
+      setActivityRefreshToken((n) => n + 1);
       setSelectedIds((prev) => prev.filter((id) => !tokens.includes(id)));
       toast.success(`删除 ${data.removed ?? 0} 个账户`);
     } catch (error) {
@@ -1309,7 +1293,7 @@ function AccountsPageContent() {
       setLastPandaSyncResult(data);
       const detail = compactToastMessage(formatPandaSyncDetails(data));
       await refreshAccountPage();
-      await loadAccountActivity();
+      setActivityRefreshToken((n) => n + 1);
       if (data.ok) {
         toast.success(detail ? `上传完成：${detail}` : "上传完成");
       } else {
@@ -1677,7 +1661,7 @@ function AccountsPageContent() {
           `刷新成功 ${data.refreshed} 个，失败 ${(data.errors ?? []).length} 个${firstError ? `，首个错误：${firstError}` : ""}`,
         );
       } else {
-      await loadAccountActivity();
+      setActivityRefreshToken((n) => n + 1);
       toast.success(`刷新成功 ${data.refreshed} 个账户${relogined > 0 ? `，已触发 ${relogined} 个账号重新登录` : ""}`);
       }
     } catch (error) {
@@ -1904,95 +1888,6 @@ function AccountsPageContent() {
     }));
   };
 
-  const softBandDisplayValue = (account: Account) => {
-    const token = account.access_token;
-    if (softBandDrafts[token] !== undefined) return softBandDrafts[token];
-    const override = account.image_soft_band_override;
-    const band = typeof override === "number" ? override : account.image_soft_band;
-    return typeof band === "number" ? String(Math.round(Number(band) * 100)) : "";
-  };
-
-  const commitSoftBand = async (account: Account) => {
-    const token = account.access_token;
-    const raw = softBandDrafts[token];
-    if (raw === undefined) return;
-    const trimmed = raw.trim();
-    const current =
-      typeof account.image_soft_band_override === "number"
-        ? Math.round(Number(account.image_soft_band_override) * 100)
-        : typeof account.image_soft_band === "number"
-          ? Math.round(Number(account.image_soft_band) * 100)
-          : null;
-    if (trimmed === "" && current === null) {
-      setSoftBandDrafts((prev) => {
-        const next = { ...prev };
-        delete next[token];
-        return next;
-      });
-      return;
-    }
-    if (trimmed === "") {
-      setSoftBandBusy((prev) => new Set(prev).add(token));
-      try {
-        const data = await setAccountSoftBand(token, null);
-        if (data.item) {
-          setAccounts((prev) => prev.map((item) => (item.access_token === token ? { ...item, ...data.item } : item)));
-        }
-        applySchedulingStats(data.stats ?? null);
-        toast.success("已恢复自动软限流%");
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "清除软限流失败");
-      } finally {
-        setSoftBandBusy((prev) => {
-          const next = new Set(prev);
-          next.delete(token);
-          return next;
-        });
-        setSoftBandDrafts((prev) => {
-          const next = { ...prev };
-          delete next[token];
-          return next;
-        });
-      }
-      return;
-    }
-    const percent = Number(trimmed);
-    if (!Number.isFinite(percent) || percent < 5 || percent > 99) {
-      toast.error("软限流%需在 5–99");
-      return;
-    }
-    if (current !== null && Math.round(percent) === current) {
-      setSoftBandDrafts((prev) => {
-        const next = { ...prev };
-        delete next[token];
-        return next;
-      });
-      return;
-    }
-    setSoftBandBusy((prev) => new Set(prev).add(token));
-    try {
-      const data = await setAccountSoftBand(token, Math.round(percent));
-      if (data.item) {
-        setAccounts((prev) => prev.map((item) => (item.access_token === token ? { ...item, ...data.item } : item)));
-      }
-      applySchedulingStats(data.stats ?? null);
-      toast.success(`软限流已设为 ${Math.round(percent)}%`);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "设置软限流失败");
-    } finally {
-      setSoftBandBusy((prev) => {
-        const next = new Set(prev);
-        next.delete(token);
-        return next;
-      });
-      setSoftBandDrafts((prev) => {
-        const next = { ...prev };
-        delete next[token];
-        return next;
-      });
-    }
-  };
-
   const handleToggleScheduling = async (account: Account) => {
     const token = account.access_token;
     const nextEnabled = !isManualSchedulingEnabled(account);
@@ -2064,7 +1959,7 @@ function AccountsPageContent() {
           <Button
             variant="outline"
             className="h-10 rounded-xl border-stone-200 bg-white/80 px-4 text-stone-700 hover:bg-white"
-            onClick={() => void loadAccounts()}
+            onClick={() => void handlePageRefresh()}
             disabled={isLoading || isRefreshing || isDeleting || isSyncingPanda}
           >
             <RefreshCw className={cn("size-4", isLoading ? "animate-spin" : "")} />
@@ -2136,7 +2031,7 @@ function AccountsPageContent() {
               {isStoppingRefreshAll || refreshAllStatus?.state === "stopping" ? "停止中" : "停止慢刷"}
             </Button>
           ) : null}
-          {activityChart.syncLabel !== "接收" ? (
+          {isUploadSyncNode ? (
             <>
               <Button
                 variant="outline"
@@ -2369,7 +2264,7 @@ function AccountsPageContent() {
       </Dialog>
 
       <section className="space-y-3">
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <div className="grid gap-2 md:gap-3 grid-cols-2 sm:grid-cols-4 xl:grid-cols-8">
           {metricCards.map((item) => {
             const Icon = item.icon;
             const value = (refreshSummary ?? summary)[item.key];
@@ -2377,14 +2272,20 @@ function AccountsPageContent() {
               <Card
                 key={item.key}
                 className="rounded-2xl border-white/80 bg-white/90 shadow-sm"
-                title={"title" in item ? item.title : undefined}
+                title={
+                  item.key === "quota" && accountStats
+                    ? formatPoolQuotaDetail(accountStats)
+                    : "title" in item
+                      ? item.title
+                      : undefined
+                }
               >
-                <CardContent className="p-4">
-                  <div className="mb-4 flex items-start justify-between">
-                    <span className="text-xs font-medium text-stone-400">{item.label}</span>
-                    <Icon className="size-4 text-stone-400" />
+                <CardContent className="p-3 xl:p-4">
+                  <div className="mb-2 flex items-start justify-between xl:mb-4">
+                    <span className="text-[11px] font-medium text-stone-400 xl:text-xs">{item.label}</span>
+                    <Icon className="size-3.5 text-stone-400 xl:size-4" />
                   </div>
-                  <div className={cn("text-[1.75rem] font-semibold tracking-tight", item.color)}>
+                  <div className={cn("text-xl font-semibold tracking-tight xl:text-[1.75rem]", item.color)}>
                     <span className={typeof value === "number" ? "" : "text-[1.1rem]"}>
                       {typeof value === "number" ? formatCompact(value) : value}
                     </span>
@@ -2394,67 +2295,7 @@ function AccountsPageContent() {
             );
           })}
         </div>
-        <div className="grid gap-3 lg:grid-cols-2">
-          <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
-            <CardContent className="p-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                <div className="text-sm font-medium text-stone-700">账号流水 · 注册/入库/接收/删除</div>
-                <DateRangeControls
-                  from={activityChart.rangeFrom}
-                  to={activityChart.rangeTo}
-                  min={activityChart.from}
-                  max={activityChart.to}
-                  onChange={(from, to) => {
-                    setActivityFrom(from);
-                    setActivityTo(to);
-                  }}
-                />
-              </div>
-              <InteractiveLineChart
-                dates={activityChart.items.map((i) => i.date)}
-                series={activityChart.series.filter((s) =>
-                  ["registered", "uploaded", "received", "deleted"].includes(s.key),
-                )}
-                yLabel="数量"
-                xLabel="日期"
-                sharedScale
-              />
-              <div className="mt-2 text-xs text-stone-500">
-                注册/入库 · 上传 · 接收 · 删除（窗口 {activityChart.items.length} 天
-                {activityChart.syncLabel ? ` · 本机角色偏「${activityChart.syncLabel}」` : ""}）
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
-            <CardContent className="p-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                <div className="text-sm font-medium text-stone-700">账号流水 · 生图对话</div>
-                <DateRangeControls
-                  from={activityChart.rangeFrom}
-                  to={activityChart.rangeTo}
-                  min={activityChart.from}
-                  max={activityChart.to}
-                  onChange={(from, to) => {
-                    setActivityFrom(from);
-                    setActivityTo(to);
-                  }}
-                />
-              </div>
-              <InteractiveLineChart
-                dates={activityChart.items.map((i) => i.date)}
-                series={activityChart.series.filter((s) =>
-                  ["images_api", "images_chat", "dialogues_nurture", "dialogues_real"].includes(s.key),
-                )}
-                yLabel="数量"
-                xLabel="日期"
-                sharedScale
-              />
-              <div className="mt-2 text-xs text-stone-500">
-                api生图 · 对话生图 · 拟人对话 · 真实对话（窗口 {activityChart.items.length} 天）
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        <AccountsActivityPanels refreshToken={activityRefreshToken} />
         <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
           <CardContent className="p-4">
             <div className="mb-3 text-sm font-medium text-stone-700">
@@ -2679,7 +2520,6 @@ function AccountsPageContent() {
                         调度 {sortIndicator("schedule")}
                       </button>
                     </th>
-                    <th className="w-20 px-2 py-2">软限流%</th>
                     <th className="w-28 px-2 py-2">记录</th>
                     <th className="w-40 px-2 py-2">
                       <button type="button" className="hover:text-stone-700" onClick={(e) => toggleSort("proxy", e.shiftKey)}>
@@ -2859,47 +2699,6 @@ function AccountsPageContent() {
                           })()}
                         </td>
                         <td className="px-4 py-3">
-                          <div className="flex items-center gap-1">
-                            <Input
-                              type="number"
-                              min={5}
-                              max={99}
-                              step={1}
-                              value={softBandDisplayValue(account)}
-                              disabled={softBandBusy.has(account.access_token)}
-                              onChange={(event) => {
-                                const token = account.access_token;
-                                const value = event.target.value;
-                                setSoftBandDrafts((prev) => ({ ...prev, [token]: value }));
-                              }}
-                              onBlur={() => void commitSoftBand(account)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                  event.currentTarget.blur();
-                                }
-                              }}
-                              className={cn(
-                                "h-8 w-14 rounded-lg border-stone-200 px-1.5 text-center text-xs",
-                                account.image_soft_capped ? "border-amber-400 bg-amber-50" : "",
-                              )}
-                              title={
-                                account.image_soft_capped
-                                  ? "当前已软熔断；可调阈值，清空后回车恢复自动"
-                                  : typeof account.image_soft_band_override === "number"
-                                    ? "手动覆盖中；清空后回车可恢复自动"
-                                    : "可手动输入 5–99；回车/失焦保存"
-                              }
-                            />
-                            <span className="text-[11px] text-stone-400">%</span>
-                            {typeof account.image_soft_band_override === "number" ? (
-                              <span className="text-[10px] text-amber-600">手</span>
-                            ) : null}
-                            {account.image_soft_capped ? (
-                              <span className="text-[10px] text-amber-700">熔</span>
-                            ) : null}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
                           <AccountUsageHeatstrip
                             days={
                               usageByEmail[String(account.email || "").trim().toLowerCase()] ||
@@ -2950,9 +2749,25 @@ function AccountsPageContent() {
                           })()}
                         </td>
                         <td className="px-4 py-3">
-                          <Badge variant="info" className="rounded-md">
-                            {formatQuota(account)}
-                          </Badge>
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className="shrink-0 text-[10px] text-stone-400"
+                              title={
+                                account.last_quota_refresh_at
+                                  ? `额度核对：${account.last_quota_refresh_at}`
+                                  : "尚未远程核对额度"
+                              }
+                            >
+                              {formatQuotaRefreshAge(account)}
+                            </span>
+                            <Badge
+                              variant={accountQuotaBadgeVariant(account)}
+                              className="rounded-md"
+                              title={formatAccountQuotaHint(account)}
+                            >
+                              {formatAccountQuotaValue(account)}
+                            </Badge>
+                          </div>
                         </td>
                         <td className="px-4 py-3 text-xs leading-5 text-stone-500">
                           {(() => {

@@ -21,15 +21,27 @@ STAGE_FILES = (
     "scripts/spa_acceptance_gates.py",
     "scripts/spa_image_load_test.py",
     "scripts/spa_image_panda_acceptance.py",
+    "scripts/_tmp_pipeline_conc10_acceptance.py",
     "scripts/_tmp_swap_and_probe_proxy.py",
     "scripts/_tmp_account_brief.py",
 )
 
+_PIPELINE_FILES = tuple(
+    f"services/image_pipeline/{path.name}"
+    for path in sorted((ROOT / "services" / "image_pipeline").glob("*.py"))
+)
+
 SERVICE_FILES = (
     "services/openai_backend_api.py",
+    "services/image_task_service.py",
     "services/protocol/conversation.py",
+    "services/protocol/openai_v1_image_generations.py",
+    "services/protocol/openai_v1_image_edit.py",
     "services/account_service.py",
     "services/config.py",
+    "api/image_tasks.py",
+    "api/ops.py",
+    *_PIPELINE_FILES,
 )
 
 
@@ -66,7 +78,12 @@ def _stage_files() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--phase", default="load", choices=["load", "cf_scan5", "serial5", "concurrent4", "full"])
+    ap.add_argument(
+        "--phase",
+        default="load",
+        choices=["load", "cf_scan5", "serial5", "concurrent4", "full", "pipeline_conc10"],
+    )
+    ap.add_argument("--conc10-count", type=int, default=10)
     ap.add_argument("--email", default="")
     ap.add_argument("--account-hash", default="")
     ap.add_argument("--account-email", default="")
@@ -93,7 +110,12 @@ def main() -> int:
         return 0
 
     out_dir = args.out_dir or f"{REMOTE_APP_DIR}/out"
-    if args.phase == "load":
+    if args.phase == "pipeline_conc10":
+        inner = (
+            f"/app/.venv/bin/python {REMOTE_APP_DIR}/_tmp_pipeline_conc10_acceptance.py "
+            f"--base http://127.0.0.1:80 --count {args.conc10_count} --out-dir {out_dir}"
+        )
+    elif args.phase == "load":
         sel = f"--account-hash {args.account_hash}" if args.account_hash else f"--email {args.email}"
         if not args.account_hash and not args.email:
             raise SystemExit("--account-hash or --email required for load phase")

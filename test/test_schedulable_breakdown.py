@@ -15,7 +15,7 @@ def _acct(**kwargs):
         "status": "正常",
         "quota": 10,
         "panda_receive_state": "verified_ready",
-        "last_quota_refresh_at": "2026-07-19T00:00:00+00:00",
+        "last_quota_refresh_at": "2999-01-01T00:00:00+00:00",
     }
     base.update(kwargs)
     return base
@@ -49,6 +49,7 @@ class SchedulableBreakdownTests(unittest.TestCase):
                 cfg.image_global_concurrency = 0
                 cfg.image_global_queue_timeout_secs = 0
                 cfg.get_scheduler_settings.return_value = {"enabled": False}
+                cfg.get_image_pipeline_settings.return_value = {"enabled": False}
                 breakdown = service.get_schedulable_breakdown()
             buckets = breakdown["buckets"]
             self.assertEqual(breakdown["total"], 4)

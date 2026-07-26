@@ -1,0 +1,35 @@
+{
+  "stamp": "CF-STAMP-20260725T164500Z",
+  "deploy_commit": "707f759d93d71e9d49e680ce7e929ba8e96bf9a1",
+  "release": "cf-eligibility-20260725",
+  "summary": {
+    "cf_ok": 10,
+    "cf_fail": 9,
+    "total": 19,
+    "apply": true
+  },
+  "cf_ok_emails": [
+    "philliphicks336926@outlook.com",
+    "qaflow0ytb7bbp0z@proton.me",
+    "qaflowud630wbo2a@proton.me",
+    "qaflowfbdb3ovksr@proton.me",
+    "felicitypamela2673@outlook.com",
+    "emberevan8683@outlook.com",
+    "qaflowxwy83tivv5@proton.me",
+    "qaflowgq5wyuxhe9@proton.me",
+    "ivorbrown70573@outlook.com",
+    "dreamachristine11594@outlook.com"
+  ],
+  "cf_fail_emails": [
+    "qaflowakjewai6ps@proton.me",
+    "ivetterock54353@outlook.com",
+    "barnettregina91891@outlook.com",
+    "andersmia76491@outlook.com",
+    "enricoalfred9264@outlook.com",
+    "blakekyle5108@outlook.com",
+    "qaflowyi59i282fx@proton.me",
+    "qaflowwrg2ptcd05@proton.me",
+    "qaflowxho1z6hynk@proton.me"
+  ],
+  "next_step": "对 cf_fail 9 号执行 CF 换绑: scripts/_tmp_rebind_cf_bad_accounts.py --apply"
+}

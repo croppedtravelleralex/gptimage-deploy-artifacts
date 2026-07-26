@@ -1,0 +1,32 @@
+{
+  "stamp": "SLOT-VERIFY-20260725T161200Z",
+  "deploy": {
+    "artifact_commit": "c4e7afcd0811dd7d73ae880da6843873e4b3cafb",
+    "release": "slotledger-layer1-20260725",
+    "backup": "/root/gptimage/backups/schedule-core-deploy-20260725-161051",
+    "healthy": true
+  },
+  "single_image": {
+    "http_code": 200,
+    "elapsed_ms": 52224,
+    "tag": "TRACE-VERIFY-1784967087",
+    "account_email": "qaflow0ytb7bbp0z@proton.me",
+    "schedule_trace_in_call_log": false,
+    "phase_timings_in_call_log": false
+  },
+  "post_run_health": {
+    "slot_ledger_backend": "rust",
+    "account_held": 0,
+    "ss_held": 0,
+    "forced_releases": 0,
+    "inflight_drift_count": 0,
+    "image_inflight_count": 0,
+    "dispatchable_candidate_count": 16,
+    "pre_ticket_cached_accounts": 2,
+    "rss_mb": 227.6
+  },
+  "notes": [
+    "Sync /v1/images path found call log row but schedule_trace not yet attached to detail",
+    "SlotLedger Rust FFI loaded; watchdog reconcile clean after single gen"
+  ]
+}

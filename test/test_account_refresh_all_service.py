@@ -187,9 +187,16 @@ class AccountRefreshAllServiceTests(unittest.TestCase):
                     "last_quota_refresh_at": "2999-01-01T00:00:00+00:00",
                 },
                 {
+                    # A2-4：原用例是 {status:限流, quota:0}，但那正是审计 §A3 的单向门本体
+                    # ——「硬额度归零」现在只打 image_soft_capped flag，status 会被
+                    # _heal_hard_quota_limited_status() 治回 正常，于是不再落进
+                    # is_problematic_status 分支。旧断言等于把 bug 写成了契约。
+                    # 这里换成**合法**的 限流（额度未知 ≠ 已确证耗尽，不参与自愈），
+                    # 保持本用例原意：问题状态账号即使刚刷新过也仍要进清理队列。
                     "access_token": "recent-limited-token",
                     "status": "限流",
                     "quota": 0,
+                    "image_quota_unknown": True,
                     "last_quota_refresh_at": "2999-01-01T00:00:00+00:00",
                 },
                 {

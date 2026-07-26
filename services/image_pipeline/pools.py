@@ -197,10 +197,14 @@ class PipelinePools:
     def snapshot(self) -> dict[str, Any]:
         with self._in_flight_lock:
             in_flight = self._in_flight
+        ps_snap = self.ps.snapshot()
+        ss_snap = self.ss.snapshot()
         return {
             "in_flight": in_flight,
-            "ps": self.ps.snapshot().to_dict(),
-            "ss": self.ss.snapshot().to_dict(),
+            "ps": ps_snap.to_dict(),
+            "ss": ss_snap.to_dict(),
+            "ps_queue_depth": ps_snap.queued,
+            "ss_queue_depth": ss_snap.queued,
             "upload": self.upload.snapshot().to_dict(),
             "download": self.download.snapshot().to_dict(),
         }

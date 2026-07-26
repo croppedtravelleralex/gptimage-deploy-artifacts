@@ -1,12 +1,32 @@
 # 改进池
 
-最后校准：2026-07-26
+最后校准：2026-07-26（夜）
 
 原则：只保留当前仍有工程价值的项；已完成和历史流水不放在这里，详见 `docs/logs/2026/2026-07.md` 与 `docs/archive/`。
+
+## PROV-29 溯源修复【P0 · 新开 2026-07-26 夜】
+
+真相源：[`29-prod-provenance-audit-20260726.md`](./29-prod-provenance-audit-20260726.md)
+
+**必须在任何新部署之前做完 P29-1**，否则新一轮 `git` 操作可能静默回滚 AUDIT-28。
+
+| ID | 事项 | 位置 | 审计项 |
+|----|------|------|--------|
+| P29-1 | Panda 上把 28 个 staged 文件落成 commit（纯本地 `git commit`，不推不重启） | `/root/gptimage` | `29` §2 |
+| P29-2 | 本地 22 个 commit + 16 个漂移文件提交并推送到**真正的源码远端**（`deploy/main` 只有 README，不是源码仓库） | 本地仓库 | `29` §3.1 |
+| P29-3 | `services/yumail_otp.py` 补发（已提交未上线，prod 缺西语 OTP 关键词） | `services/yumail_otp.py` | `29` §3.3 |
+| P29-4 | `services/register/domain_intel.py` 定性：补提交或删除（505 行孤儿死代码，本地不存在） | Panda 独有 | `29` §3.2 |
+| P29-5 | A1-6 补完：`resolve_binding_matrix` hash fallback 限定「含周末档」预设子集，或 `slot_allowed` 加连续全关降级放行 | `ip_nurture_schedule.py:270` | `29` §5 |
+| P29-6 | `.gitignore` 补 `web_dist*.tgz` / `web_dist.backup-*` / `.artifact-*/` / `.deploy-*/` / `crates/*/target/`；清理 36 个 backup 目录 | 仓库根 | `29` §8 |
+| P29-7 | 13 个 `scripts/_tmp_deploy_*.py` 的 `scp` 段改造为 git ref checkout（保留健康检查/备份/smoke 逻辑） | `scripts/` | `29` §11 |
+| P29-8 | `image_tasks.db` 397MB/0 行离线 VACUUM（磁盘已 79%） | Panda `data/` | `29` §4 |
+| P29-9 | 前端重构决策：提交上线 or 明确搁置（prod `web_dist` 停在 07-24） | `web/` | `29` §8 |
 
 ## AUDIT-28 调度/队列/槽位审计整治【P0 · 新开 2026-07-26】
 
 真相源：[`28-scheduling-queue-slot-audit-20260726.md`](./28-scheduling-queue-slot-audit-20260726.md)（Panda 生产代码只读审计，6 子代理分域 + 逐条复核）
+
+> **2026-07-26 夜补注**：批次 0–4 代码已上线 Panda 且运行时确认生效（`29` §1.1），但**零生图流量验证** —— B1/B2/B4/B9 仍只有静态确证 + 单测背书。conc10 复测是 THROUGHPUT-10 的前置。
 
 **执行纪律**：批次内按序做，跨批次不得跳。**批次 0 必须最先** —— 打开 watchdog 的 force 会同时引爆 `_PySlotLedger` 自死锁。每批次落地后跑 conc10 + `capture_performance_baseline.py` 再进下一批。
 

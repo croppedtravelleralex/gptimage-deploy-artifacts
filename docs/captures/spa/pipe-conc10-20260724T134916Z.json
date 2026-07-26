@@ -1,0 +1,898 @@
+{
+  "run_id": "pipe-conc10-20260724T134916Z",
+  "count": 10,
+  "dispatch_accounts": [
+    "andersmia76491@outlook.com",
+    "barnettregina91891@outlook.com",
+    "blakekyle5108@outlook.com",
+    "dreamachristine11594@outlook.com",
+    "emberevan8683@outlook.com",
+    "enricoalfred9264@outlook.com",
+    "felicitypamela2673@outlook.com",
+    "ivetterock54353@outlook.com",
+    "ivorbrown70573@outlook.com",
+    "qaflow0ytb7bbp0z@proton.me",
+    "qaflowakjewai6ps@proton.me",
+    "qaflowfbdb3ovksr@proton.me",
+    "qaflowgq5wyuxhe9@proton.me",
+    "qaflowud630wbo2a@proton.me",
+    "qaflowwrg2ptcd05@proton.me",
+    "qaflowxwy83tivv5@proton.me",
+    "qaflowyi59i282fx@proton.me"
+  ],
+  "submitted": 10,
+  "submit_ok": 10,
+  "wall_clock_ms": 240479.08,
+  "final_status_counts": {
+    "error": 4,
+    "success": 6
+  },
+  "ss_queue_ms": {
+    "n": 0,
+    "p50": null,
+    "p95": null,
+    "max": null
+  },
+  "task_wall_clock_ms": {
+    "n": 0,
+    "p50": null,
+    "p95": null,
+    "max": null
+  },
+  "submits": [
+    {
+      "idx": 0,
+      "client_task_id": "pipe-conc10-20260724T134916Z-conc10-00",
+      "preferred_account_email": "andersmia76491@outlook.com",
+      "submit_ok": true,
+      "submit_status": 200,
+      "submit_ms": 52.07,
+      "task_id": "pipe-conc10-20260724T134916Z-conc10-00",
+      "body_status": "queued"
+    },
+    {
+      "idx": 1,
+      "client_task_id": "pipe-conc10-20260724T134916Z-conc10-01",
+      "preferred_account_email": "barnettregina91891@outlook.com",
+      "submit_ok": true,
+      "submit_status": 200,
+      "submit_ms": 85.24,
+      "task_id": "pipe-conc10-20260724T134916Z-conc10-01",
+      "body_status": "queued"
+    },
+    {
+      "idx": 2,
+      "client_task_id": "pipe-conc10-20260724T134916Z-conc10-02",
+      "preferred_account_email": "blakekyle5108@outlook.com",
+      "submit_ok": true,
+      "submit_status": 200,
+      "submit_ms": 67.08,
+      "task_id": "pipe-conc10-20260724T134916Z-conc10-02",
+      "body_status": "queued"
+    },
+    {
+      "idx": 3,
+      "client_task_id": "pipe-conc10-20260724T134916Z-conc10-03",
+      "preferred_account_email": "dreamachristine11594@outlook.com",
+      "submit_ok": true,
+      "submit_status": 200,
+      "submit_ms": 88.73,
+      "task_id": "pipe-conc10-20260724T134916Z-conc10-03",
+      "body_status": "queued"
+    },
+    {
+      "idx": 4,
+      "client_task_id": "pipe-conc10-20260724T134916Z-conc10-04",
+      "preferred_account_email": "emberevan8683@outlook.com",
+      "submit_ok": true,
+      "submit_status": 200,
+      "submit_ms": 96.12,
+      "task_id": "pipe-conc10-20260724T134916Z-conc10-04",
+      "body_status": "queued"
+    },
+    {
+      "idx": 5,
+      "client_task_id": "pipe-conc10-20260724T134916Z-conc10-05",
+      "preferred_account_email": "enricoalfred9264@outlook.com",
+      "submit_ok": true,
+      "submit_status": 200,
+      "submit_ms": 54.63,
+      "task_id": "pipe-conc10-20260724T134916Z-conc10-05",
+      "body_status": "queued"
+    },
+    {
+      "idx": 6,
+      "client_task_id": "pipe-conc10-20260724T134916Z-conc10-06",
+      "preferred_account_email": "felicitypamela2673@outlook.com",
+      "submit_ok": true,
+      "submit_status": 200,
+      "submit_ms": 70.61,
+      "task_id": "pipe-conc10-20260724T134916Z-conc10-06",
+      "body_status": "queued"
+    },
+    {
+      "idx": 7,
+      "client_task_id": "pipe-conc10-20260724T134916Z-conc10-07",
+      "preferred_account_email": "ivetterock54353@outlook.com",
+      "submit_ok": true,
+      "submit_status": 200,
+      "submit_ms": 110.08,
+      "task_id": "pipe-conc10-20260724T134916Z-conc10-07",
+      "body_status": "queued"
+    },
+    {
+      "idx": 8,
+      "client_task_id": "pipe-conc10-20260724T134916Z-conc10-08",
+      "preferred_account_email": "ivorbrown70573@outlook.com",
+      "submit_ok": true,
+      "submit_status": 200,
+      "submit_ms": 101.43,
+      "task_id": "pipe-conc10-20260724T134916Z-conc10-08",
+      "body_status": "queued"
+    },
+    {
+      "idx": 9,
+      "client_task_id": "pipe-conc10-20260724T134916Z-conc10-09",
+      "preferred_account_email": "qaflow0ytb7bbp0z@proton.me",
+      "submit_ok": true,
+      "submit_status": 200,
+      "submit_ms": 118.76,
+      "task_id": "pipe-conc10-20260724T134916Z-conc10-09",
+      "body_status": "queued"
+    }
+  ],
+  "final_items": [
+    {
+      "id": "pipe-conc10-20260724T134916Z-conc10-00",
+      "status": "error",
+      "wall_clock_ms": null,
+      "phase_timings_ms": null,
+      "error": "image task hard timeout before upstream completion (225.0s); no conversation_id captured"
+    },
+    {
+      "id": "pipe-conc10-20260724T134916Z-conc10-01",
+      "status": "success",
+      "wall_clock_ms": null,
+      "phase_timings_ms": null,
+      "error": null
+    },
+    {
+      "id": "pipe-conc10-20260724T134916Z-conc10-02",
+      "status": "success",
+      "wall_clock_ms": null,
+      "phase_timings_ms": null,
+      "error": null
+    },
+    {
+      "id": "pipe-conc10-20260724T134916Z-conc10-03",
+      "status": "success",
+      "wall_clock_ms": null,
+      "phase_timings_ms": null,
+      "error": null
+    },
+    {
+      "id": "pipe-conc10-20260724T134916Z-conc10-04",
+      "status": "success",
+      "wall_clock_ms": null,
+      "phase_timings_ms": null,
+      "error": null
+    },
+    {
+      "id": "pipe-conc10-20260724T134916Z-conc10-05",
+      "status": "success",
+      "wall_clock_ms": null,
+      "phase_timings_ms": null,
+      "error": null
+    },
+    {
+      "id": "pipe-conc10-20260724T134916Z-conc10-06",
+      "status": "error",
+      "wall_clock_ms": null,
+      "phase_timings_ms": null,
+      "error": "image task hard timeout before upstream completion (225.0s); no conversation_id captured"
+    },
+    {
+      "id": "pipe-conc10-20260724T134916Z-conc10-07",
+      "status": "success",
+      "wall_clock_ms": null,
+      "phase_timings_ms": null,
+      "error": null
+    },
+    {
+      "id": "pipe-conc10-20260724T134916Z-conc10-08",
+      "status": "error",
+      "wall_clock_ms": null,
+      "phase_timings_ms": null,
+      "error": "image task hard timeout before upstream completion (225.0s); no conversation_id captured"
+    },
+    {
+      "id": "pipe-conc10-20260724T134916Z-conc10-09",
+      "status": "error",
+      "wall_clock_ms": null,
+      "phase_timings_ms": null,
+      "error": "image task hard timeout before upstream completion (225.0s); no conversation_id captured"
+    }
+  ],
+  "pipeline_snapshot_before": {
+    "in_flight": 0,
+    "ps": {
+      "name": "ps",
+      "limit": 10,
+      "active": 0,
+      "queued": 0
+    },
+    "ss": {
+      "name": "ss",
+      "limit": 10,
+      "active": 0,
+      "queued": 0
+    },
+    "upload": {
+      "name": "upload",
+      "limit": 8,
+      "active": 0,
+      "queued": 0
+    },
+    "download": {
+      "name": "download",
+      "limit": 8,
+      "active": 0,
+      "queued": 0
+    },
+    "ready_buffer": {
+      "bytes": 0,
+      "items": 0,
+      "ss_paused": false,
+      "max_bytes": 536870912,
+      "max_items": 32
+    },
+    "segments": []
+  },
+  "pipeline_snapshot_after": {
+    "in_flight": 0,
+    "ps": {
+      "name": "ps",
+      "limit": 10,
+      "active": 0,
+      "queued": 0
+    },
+    "ss": {
+      "name": "ss",
+      "limit": 10,
+      "active": 10,
+      "queued": 4
+    },
+    "upload": {
+      "name": "upload",
+      "limit": 8,
+      "active": 0,
+      "queued": 0
+    },
+    "download": {
+      "name": "download",
+      "limit": 8,
+      "active": 0,
+      "queued": 0
+    },
+    "ready_buffer": {
+      "bytes": 0,
+      "items": 0,
+      "ss_paused": false,
+      "max_bytes": 536870912,
+      "max_items": 32
+    },
+    "segments": [
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-00",
+        "stage": "sse",
+        "slot": 0,
+        "started_at": 1784900959.1630032,
+        "ended_at": 1784900961.2980585
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-00",
+        "stage": "sse",
+        "slot": 0,
+        "started_at": 1784900961.3133512
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-02",
+        "stage": "sse",
+        "slot": 1,
+        "started_at": 1784900962.8206646,
+        "ended_at": 1784900993.4871182
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-06",
+        "stage": "sse",
+        "slot": 2,
+        "started_at": 1784900963.5506184,
+        "ended_at": 1784900964.6238122
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-01",
+        "stage": "sse",
+        "slot": 3,
+        "started_at": 1784900963.600434,
+        "ended_at": 1784901009.752463
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-05",
+        "stage": "sse",
+        "slot": 4,
+        "started_at": 1784900963.7832808,
+        "ended_at": 1784900964.8749838
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-06",
+        "stage": "sse",
+        "slot": 2,
+        "started_at": 1784900964.6630862
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-05",
+        "stage": "sse",
+        "slot": 4,
+        "started_at": 1784900964.889242
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-03",
+        "stage": "sse",
+        "slot": 5,
+        "started_at": 1784900965.3290462,
+        "ended_at": 1784900966.3953466
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-03",
+        "stage": "sse",
+        "slot": 5,
+        "started_at": 1784900966.4092498
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-08",
+        "stage": "sse",
+        "slot": 6,
+        "started_at": 1784900968.176176,
+        "ended_at": 1784900969.25617
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-04",
+        "stage": "sse",
+        "slot": 7,
+        "started_at": 1784900968.2142386,
+        "ended_at": 1784901030.4925334
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-07",
+        "stage": "sse",
+        "slot": 8,
+        "started_at": 1784900969.1291149,
+        "ended_at": 1784900970.2054217
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-08",
+        "stage": "sse",
+        "slot": 6,
+        "started_at": 1784900969.269654
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-03",
+        "stage": "sse",
+        "slot": 5,
+        "started_at": 1784900969.8925087
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-05",
+        "stage": "sse",
+        "slot": 4,
+        "started_at": 1784900970.2058032
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-00",
+        "stage": "sse",
+        "slot": 0,
+        "started_at": 1784900993.4873464
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-07",
+        "stage": "sse",
+        "slot": 3,
+        "started_at": 1784901009.7527041
+      },
+      {
+        "task_key": "admin:pipe-conc10-20260724T134916Z-conc10-06",
+        "stage": "sse",
+        "slot": 2,
+        "started_at": 1784901030.4936478
+      }
+    ]
+  },
+  "poll_log": [
+    {
+      "t_secs": 0.15,
+      "counts": {
+        "running": 1,
+        "queued": 9
+      },
+      "pipeline_in_flight": 1,
+      "ss_active": 0,
+      "ss_queued": 0
+    },
+    {
+      "t_secs": 5.16,
+      "counts": {
+        "running": 4,
+        "queued": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 1,
+      "ss_queued": 0
+    },
+    {
+      "t_secs": 10.17,
+      "counts": {
+        "running": 8,
+        "queued": 2
+      },
+      "pipeline_in_flight": 8,
+      "ss_active": 6,
+      "ss_queued": 0
+    },
+    {
+      "t_secs": 15.18,
+      "counts": {
+        "running": 10
+      },
+      "pipeline_in_flight": 10,
+      "ss_active": 10,
+      "ss_queued": 1
+    },
+    {
+      "t_secs": 20.18,
+      "counts": {
+        "running": 10
+      },
+      "pipeline_in_flight": 10,
+      "ss_active": 10,
+      "ss_queued": 3
+    },
+    {
+      "t_secs": 25.19,
+      "counts": {
+        "running": 10
+      },
+      "pipeline_in_flight": 10,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 30.2,
+      "counts": {
+        "running": 10
+      },
+      "pipeline_in_flight": 10,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 35.2,
+      "counts": {
+        "running": 10
+      },
+      "pipeline_in_flight": 10,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 40.21,
+      "counts": {
+        "running": 10
+      },
+      "pipeline_in_flight": 10,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 45.22,
+      "counts": {
+        "running": 9,
+        "success": 1
+      },
+      "pipeline_in_flight": 9,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 50.22,
+      "counts": {
+        "running": 9,
+        "success": 1
+      },
+      "pipeline_in_flight": 9,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 55.23,
+      "counts": {
+        "running": 6,
+        "success": 4
+      },
+      "pipeline_in_flight": 6,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 60.24,
+      "counts": {
+        "running": 6,
+        "success": 4
+      },
+      "pipeline_in_flight": 6,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 65.25,
+      "counts": {
+        "running": 6,
+        "success": 4
+      },
+      "pipeline_in_flight": 6,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 70.26,
+      "counts": {
+        "running": 6,
+        "success": 4
+      },
+      "pipeline_in_flight": 6,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 75.26,
+      "counts": {
+        "running": 6,
+        "success": 4
+      },
+      "pipeline_in_flight": 6,
+      "ss_active": 10,
+      "ss_queued": 3
+    },
+    {
+      "t_secs": 80.27,
+      "counts": {
+        "running": 5,
+        "success": 5
+      },
+      "pipeline_in_flight": 5,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 85.28,
+      "counts": {
+        "running": 5,
+        "success": 5
+      },
+      "pipeline_in_flight": 5,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 90.28,
+      "counts": {
+        "running": 5,
+        "success": 5
+      },
+      "pipeline_in_flight": 5,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 95.29,
+      "counts": {
+        "running": 5,
+        "success": 5
+      },
+      "pipeline_in_flight": 5,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 100.3,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 105.3,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 110.31,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 115.32,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 120.32,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 125.33,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 130.33,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 135.34,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 140.35,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 145.36,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 150.36,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 155.37,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 160.37,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 165.38,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 170.39,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 175.39,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 180.4,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 185.41,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 190.41,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 195.42,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 200.43,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 205.43,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 210.44,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 215.45,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 220.45,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 225.46,
+      "counts": {
+        "running": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 4,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 230.47,
+      "counts": {
+        "error": 1,
+        "success": 6,
+        "running": 3
+      },
+      "pipeline_in_flight": 3,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 235.47,
+      "counts": {
+        "error": 2,
+        "success": 6,
+        "running": 2
+      },
+      "pipeline_in_flight": 2,
+      "ss_active": 10,
+      "ss_queued": 4
+    },
+    {
+      "t_secs": 240.48,
+      "counts": {
+        "error": 4,
+        "success": 6
+      },
+      "pipeline_in_flight": 0,
+      "ss_active": 10,
+      "ss_queued": 4
+    }
+  ]
+}

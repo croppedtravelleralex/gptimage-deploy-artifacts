@@ -1,0 +1,13 @@
+{
+  "phase": "STAB-conc10",
+  "completed": 10,
+  "failed": 0,
+  "ok_count": 10,
+  "failed_count": 0,
+  "pass": true,
+  "target": ">=8/10",
+  "wall_clock_ms": 150394.79,
+  "report": "/root/gptimage/data/runlogs/stab-conc10-20260724T110344Z/pipe-conc10-20260724T110345Z.json",
+  "generated_at": "2026-07-24T11:06:18Z",
+  "note": "hot-only dispatch + binding_max=1; warmup hot=5"
+}

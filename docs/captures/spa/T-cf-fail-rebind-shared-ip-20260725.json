@@ -1,0 +1,32 @@
+{
+  "generated_at": "2026-07-25T17:20:00Z",
+  "operation": "cf_fail_shared_ip_rebind",
+  "max_per_egress": 2,
+  "script": "scripts/_tmp_rebind_cf_fail_shared_ip.py --apply",
+  "all_ok": true,
+  "final_state": {
+    "total_accounts": 19,
+    "cf_ok": 19,
+    "egress_max_per_ip": 2
+  },
+  "assignments": [
+    {"email": "qaflowakjewai6ps@proton.me", "endpoint": "82.29.223.33:7847", "egress": "82.29.223.33"},
+    {"email": "ivetterock54353@outlook.com", "endpoint": "82.29.223.33:7847", "egress": "82.29.223.33"},
+    {"email": "barnettregina91891@outlook.com", "endpoint": "82.29.223.32:7846", "egress": "82.29.223.32"},
+    {"email": "andersmia76491@outlook.com", "endpoint": "82.29.223.32:7846", "egress": "82.29.223.32"},
+    {"email": "enricoalfred9264@outlook.com", "endpoint": "82.21.231.169:7483", "egress": "82.21.231.169"},
+    {"email": "blakekyle5108@outlook.com", "endpoint": "82.21.231.169:7483", "egress": "82.21.231.169"},
+    {"email": "qaflowyi59i282fx@proton.me", "endpoint": "82.21.231.220:7534", "egress": "82.21.231.220"},
+    {"email": "qaflowwrg2ptcd05@proton.me", "endpoint": "82.29.223.232:8046", "egress": "82.29.223.232"},
+    {"email": "qaflowxho1z6hynk@proton.me", "endpoint": "82.21.231.227:7541", "egress": "82.21.231.227"}
+  ],
+  "egress_shared_pairs": [
+    {"egress": "82.29.223.33", "accounts": 2},
+    {"egress": "82.29.223.32", "accounts": 2},
+    {"egress": "82.21.231.169", "accounts": 2}
+  ],
+  "fixups": [
+    "qaflowwrg2ptcd05 → 82.29.223.232 (220 复探 cf403)",
+    "barnettregina → 82.29.223.32 与 anders 共 IP（74/31/227 边缘失败）"
+  ]
+}

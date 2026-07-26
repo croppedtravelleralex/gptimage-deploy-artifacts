@@ -1,0 +1,101 @@
+{
+  "stamp": "20260724T115322Z",
+  "fail_fast": true,
+  "serial5": {
+    "phase": "PROD-serial5",
+    "account_email": "qaflowakjewai6ps@proton.me",
+    "runs_planned": 5,
+    "runs_executed": 5,
+    "ok_count": 5,
+    "pass": true,
+    "stopped_early": false,
+    "timeout_secs": 540,
+    "gap_secs": 60,
+    "latency_ms": {
+      "n": 5,
+      "p50_ms": 76071.0,
+      "p95_ms": 117999.0,
+      "p99_ms": 117999.0,
+      "min_ms": 42907.0,
+      "max_ms": 117999.0,
+      "mean_ms": 74838.6
+    },
+    "results": [
+      {
+        "run": 1,
+        "http_code": 200,
+        "ok": true,
+        "elapsed_ms": 76071,
+        "b64_len": 3638352,
+        "error": null
+      },
+      {
+        "run": 2,
+        "http_code": 200,
+        "ok": true,
+        "elapsed_ms": 117999,
+        "b64_len": 3392172,
+        "error": null
+      },
+      {
+        "run": 3,
+        "http_code": 200,
+        "ok": true,
+        "elapsed_ms": 88655,
+        "b64_len": 3514688,
+        "error": null
+      },
+      {
+        "run": 4,
+        "http_code": 200,
+        "ok": true,
+        "elapsed_ms": 48561,
+        "b64_len": 3276424,
+        "error": null
+      },
+      {
+        "run": 5,
+        "http_code": 200,
+        "ok": true,
+        "elapsed_ms": 42907,
+        "b64_len": 3254188,
+        "error": null
+      }
+    ],
+    "generated_at": "2026-07-24T12:03:48.747716+00:00"
+  },
+  "conc10": {
+    "phase": "PROD-conc10",
+    "count": 10,
+    "completed": 10,
+    "failed": 0,
+    "pass": true,
+    "wall_clock_ms": 135351.86,
+    "task_wall_clock_ms": {
+      "n": 10,
+      "p50_ms": 57983.0,
+      "p95_ms": 125730.0,
+      "p99_ms": 125730.0,
+      "min_ms": 37028.0,
+      "max_ms": 125730.0,
+      "mean_ms": 74136.9,
+      "source": "call_logs"
+    },
+    "ss_queue_ms": {
+      "n": 0,
+      "p50_ms": null,
+      "p95_ms": null,
+      "p99_ms": null,
+      "min_ms": null,
+      "max_ms": null,
+      "mean_ms": null
+    },
+    "final_status_counts": {
+      "success": 10
+    },
+    "report": "/root/gptimage/data/runlogs/prod-latency-conc10-20260724T120350Z/pipe-conc10-20260724T120352Z.json",
+    "raw_tail": "{\"ok\": true, \"report\": \"/root/gptimage/data/runlogs/prod-latency-conc10-20260724T120350Z/pipe-conc10-20260724T120352Z.json\", \"summary\": {\"wall_clock_ms\": 135351.86, \"completed\": 10, \"failed\": 0, \"ss_queue_p50\": null, \"ss_queue_p95\": null, \"task_wall_p50\": null}}\n",
+    "generated_at": "2026-07-24T12:06:12.253247+00:00"
+  },
+  "overall_pass": true
+}

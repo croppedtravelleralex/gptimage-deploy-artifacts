@@ -30,15 +30,30 @@ class AccountCapabilityTests(unittest.TestCase):
         else:
             config.data[key] = previous
 
-    def test_unknown_quota_accounts_are_available_only_when_not_throttled(self) -> None:
+    def test_unknown_quota_accounts_are_not_schedulable_until_verified(self) -> None:
         self.assertFalse(
             AccountService._is_image_account_available(
                 {"status": "限流", "image_quota_unknown": True, "quota": 0}
             )
         )
-        self.assertTrue(
+        self.assertFalse(
             AccountService._is_image_account_available(
                 {"status": "正常", "image_quota_unknown": True, "quota": 0}
+            )
+        )
+        self.assertFalse(
+            AccountService._has_confirmed_image_quota(
+                {"status": "正常", "image_quota_unknown": True, "quota": 5}
+            )
+        )
+        self.assertTrue(
+            AccountService._has_confirmed_image_quota(
+                {
+                    "status": "正常",
+                    "image_quota_unknown": False,
+                    "quota": 5,
+                    "last_quota_refresh_at": "2999-01-01T00:00:00+00:00",
+                }
             )
         )
 
@@ -234,7 +249,7 @@ class AccountCapabilityTests(unittest.TestCase):
 
             self.assertEqual(service._list_ready_candidate_tokens(), ["clean-token"])
             stats = service.get_stats()
-            self.assertEqual(stats["schedulable"], 1)
+            self.assertEqual(stats["image_schedulable"], 1)
             self.assertEqual(stats["tainted_count"], 2)
 
     def test_stats_expose_panda_upload_visibility_counts(self) -> None:
@@ -544,6 +559,8 @@ class AccountCapabilityTests(unittest.TestCase):
 
     def test_recently_verified_accounts_are_prioritized(self) -> None:
         prev_required = self._set_config("image_require_recent_quota_refresh", False)
+        prev_pipeline = config.data.get("image_pipeline")
+        config.data["image_pipeline"] = {"enabled": False}
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
@@ -562,6 +579,10 @@ class AccountCapabilityTests(unittest.TestCase):
                 self.assertEqual(service._list_ready_candidate_tokens()[0], "recent-token")
         finally:
             self._restore_config("image_require_recent_quota_refresh", prev_required)
+            if prev_pipeline is None:
+                config.data.pop("image_pipeline", None)
+            else:
+                config.data["image_pipeline"] = prev_pipeline
 
     def test_recent_quota_requirement_falls_back_when_no_recent_accounts_exist(self) -> None:
         prev_required = self._set_config("image_require_recent_quota_refresh", True)
@@ -581,9 +602,49 @@ class AccountCapabilityTests(unittest.TestCase):
                     ]
                 )
 
-                self.assertEqual(service._list_ready_candidate_tokens(), ["stale-token", "never-token"])
+                self.assertEqual(service._list_ready_candidate_tokens(), ["never-token"])
         finally:
             self._restore_config("image_require_recent_quota_refresh", prev_required)
+            self._restore_config("image_quota_freshness_hours", prev_hours)
+
+    def test_pipeline_quota_freshness_excludes_stale_verified_accounts(self) -> None:
+        prev_pipeline = config.data.get("image_pipeline")
+        config.data["image_pipeline"] = {
+            "enabled": True,
+            "require_quota_freshness": True,
+        }
+        prev_hours = self._set_config("image_quota_freshness_hours", 6)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+                service.add_account_items(
+                    [
+                        {
+                            "access_token": "stale-token",
+                            "status": "正常",
+                            "quota": 10,
+                            "last_quota_refresh_at": "2000-01-01T00:00:00+00:00",
+                        },
+                        {
+                            "access_token": "fresh-token",
+                            "status": "正常",
+                            "quota": 10,
+                            "last_quota_refresh_at": "2999-01-01T00:00:00+00:00",
+                        },
+                        {
+                            "access_token": "unknown-token",
+                            "status": "正常",
+                            "quota": 10,
+                            "image_quota_unknown": True,
+                        },
+                    ]
+                )
+                self.assertEqual(service._list_ready_candidate_tokens(), ["fresh-token"])
+        finally:
+            if prev_pipeline is None:
+                config.data.pop("image_pipeline", None)
+            else:
+                config.data["image_pipeline"] = prev_pipeline
             self._restore_config("image_quota_freshness_hours", prev_hours)
 
     def test_configured_image_token_attempts_can_skip_more_than_twenty_bad_candidates(self) -> None:
@@ -785,6 +846,76 @@ class AccountCapabilityTests(unittest.TestCase):
                 config.data.pop("auto_remove_invalid_accounts", None)
             else:
                 config.data["auto_remove_invalid_accounts"] = original_value
+
+    def test_binding_inflight_default_is_one_for_cf_stability(self) -> None:
+        prev_binding = self._set_config("image_binding_inflight_max", None)
+        try:
+            self.assertEqual(config.image_binding_inflight_max, 1)
+        finally:
+            self._restore_config("image_binding_inflight_max", prev_binding)
+
+    def test_image_slot_available_respects_binding_inflight(self) -> None:
+        prev_binding = self._set_config("image_binding_inflight_max", 1)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+                shared_proxy = "socks5://user:pass@1.2.3.4:1080"
+                service.add_account_items(
+                    [
+                        {
+                            "access_token": "token-a",
+                            "email": "a@example.com",
+                            "status": "正常",
+                            "quota": 3,
+                            "proxy": shared_proxy,
+                        },
+                        {
+                            "access_token": "token-b",
+                            "email": "b@example.com",
+                            "status": "正常",
+                            "quota": 3,
+                            "proxy": shared_proxy,
+                        },
+                    ]
+                )
+                with service._image_slot_condition:
+                    service._image_inflight["token-a"] = 1
+                    self.assertFalse(service._image_slot_available_locked("token-b", skip_global_limit=True))
+                with service._image_slot_condition:
+                    service._image_inflight.clear()
+                    service._image_inflight["token-a"] = 1
+        finally:
+            self._restore_config("image_binding_inflight_max", prev_binding)
+
+    def test_image_slot_available_allows_two_on_same_binding_when_limit_is_two(self) -> None:
+        prev_binding = self._set_config("image_binding_inflight_max", 2)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+                shared_proxy = "socks5://user:pass@1.2.3.4:1080"
+                service.add_account_items(
+                    [
+                        {
+                            "access_token": "token-a",
+                            "email": "a@example.com",
+                            "status": "正常",
+                            "quota": 3,
+                            "proxy": shared_proxy,
+                        },
+                        {
+                            "access_token": "token-b",
+                            "email": "b@example.com",
+                            "status": "正常",
+                            "quota": 3,
+                            "proxy": shared_proxy,
+                        },
+                    ]
+                )
+                with service._image_slot_condition:
+                    service._image_inflight["token-a"] = 1
+                    self.assertTrue(service._image_slot_available_locked("token-b", skip_global_limit=True))
+        finally:
+            self._restore_config("image_binding_inflight_max", prev_binding)
 
 
 class TokenLogTests(unittest.TestCase):

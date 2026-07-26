@@ -1,0 +1,85 @@
+{
+  "generated_at": "2026-07-25T17:10:00Z",
+  "pool": "/app/data/runlogs/webshare_100_proxies.secret.txt",
+  "pool_size": 100,
+  "accounts_bound": 19,
+  "unused_candidates": 81,
+  "pool_cf_ok_total_live": 16,
+  "summary": {
+    "stable_spare_cf_ok": 8,
+    "need_for_9_cf_fail_accounts": 9,
+    "gap": 1,
+    "note": "100 节点池中仅 16 个能过 CF live probe；10 个已被 cf_ok 账号占用。空闲且稳定(2/3+)仅 8 个，还差 1 个需补购 Webshare 或从 cf_ok 号腾挪。"
+  },
+  "stable_spare_proxies": [
+    {
+      "proxy_endpoint": "82.29.223.33:7847",
+      "egress_ip": "82.29.223.33",
+      "cf_passes": "3/3",
+      "requirements_ok": true,
+      "quarantined": true
+    },
+    {
+      "proxy_endpoint": "82.29.223.32:7846",
+      "egress_ip": "82.29.223.32",
+      "cf_passes": "3/5",
+      "requirements_ok": true,
+      "quarantined": true
+    },
+    {
+      "proxy_endpoint": "82.21.231.169:7483",
+      "egress_ip": "82.21.231.169",
+      "cf_passes": "2/3",
+      "requirements_ok": true,
+      "quarantined": true
+    },
+    {
+      "proxy_endpoint": "82.21.231.220:7534",
+      "egress_ip": "82.21.231.220",
+      "cf_passes": "2/3",
+      "requirements_ok": true,
+      "quarantined": true
+    },
+    {
+      "proxy_endpoint": "82.21.231.227:7541",
+      "egress_ip": "82.21.231.227",
+      "cf_passes": "2/3",
+      "requirements_ok": true,
+      "quarantined": true
+    },
+    {
+      "proxy_endpoint": "82.21.231.74:7388",
+      "egress_ip": "82.21.231.74",
+      "cf_passes": "2/3",
+      "requirements_ok": true,
+      "quarantined": true
+    },
+    {
+      "proxy_endpoint": "82.29.223.232:8046",
+      "egress_ip": "82.29.223.232",
+      "cf_passes": "2/3",
+      "requirements_ok": true,
+      "quarantined": true
+    },
+    {
+      "proxy_endpoint": "82.21.231.31:7345",
+      "egress_ip": "82.21.231.31",
+      "cf_passes": "2/3",
+      "requirements_ok": "flaky",
+      "quarantined": true,
+      "warning": "多轮探活边缘通过，单次复测曾 cf403，换绑前需再 probe"
+    }
+  ],
+  "cf_fail_accounts_need_rebind": [
+    "qaflowakjewai6ps@proton.me",
+    "ivetterock54353@outlook.com",
+    "barnettregina91891@outlook.com",
+    "andersmia76491@outlook.com",
+    "enricoalfred9264@outlook.com",
+    "blakekyle5108@outlook.com",
+    "qaflowyi59i282fx@proton.me",
+    "qaflowwrg2ptcd05@proton.me",
+    "qaflowxho1z6hynk@proton.me"
+  ],
+  "scan_script": "scripts/_tmp_find_cf_ok_webshare.py --include-quarantined"
+}

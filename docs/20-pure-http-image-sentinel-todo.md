@@ -1,12 +1,47 @@
 # 20 — 严格纯 HTTP 生图：Sentinel / Turnstile 修复全量待办
 
-最后校准：2026-07-22（Asia/Shanghai）
+最后校准：2026-07-23（Asia/Shanghai）
 
 > **目标**：生产生图数据面 **100% curl_cffi HTTP**，触发上游 `image_gen` 并完成出图；**禁止**浏览器/Camoufox/FlareSolverr/外部 Turnstile solver 作数据面或暖机兜底。  
 > **工程入口**：`04` 项 **PROTO-PURE-HTTP**（本文件为详细真相源）。  
 > **关联证据**：`docs/captures/spa/G-image-gen-not-triggered-20260721.md`、`field-diff-picture_v2-live-vs-bench.json`、`spa-image-20260721T144019Z.har`（HAR 不入库）。
 
-> **2026-07-22 观测修复已落地**：P4-D1～D5（诊断窗 **90s**）与 P4-6（`cf_scan5` + 串行5→并发4 门禁）代码已完成；本地单测 `test_spa_bench_sse_and_gates.py` 通过。下一步：在 Panda 重跑串行 5 / cf_scan5 /（通过后）并发 4。
+> **2026-07-23**：串行 5 **5/5**（`qaflowakjewai6ps@proton.me`）；单账号 conc10 **30/30**；多账号轮询 conc10 **4/10**（冷号突发 CF403 @ init）。验收 gate 临时 **90s**。
+
+---
+
+## 0.1 纯 HTTP 生图链路速查（Chrome TLS 指纹 + curl_cffi）
+
+> 用户口语「Chrome 开票/开图」在本仓指 **curl_cffi Chrome impersonate**，不是 Camoufox/Playwright 数据面。
+
+```text
+账号 fp（impersonate chrome120/124/131 + UA + device-id）
+  → sticky Webshare 代理
+  → bootstrap（可选，home 软 403 可容忍）
+  → GET chat-requirements + POST finalize（proofofwork + turnstile，VM 纯 HTTP 求解）
+  → prepare（无 Sentinel 头）
+  → POST /backend-api/f/conversation（start，带 Sentinel/Turnstile）
+  → SSE 消费至 image_gen / sediment
+  → poll conversation 或 /tasks（连续 CF → cf_abort 快失败）
+  → estuary 下载 PNG
+```
+
+| 环节 | 代码入口 | 配置/开关 |
+|------|----------|-----------|
+| TLS 指纹 | `services/account_fingerprint.py` | 每号 `impersonate` |
+| requirements/finalize | `services/openai_backend_api.py` | `_get_chat_requirements_once` |
+| prepare/start body | `services/protocol/chatgpt_web_request.py` | `image_spa_tool_path`（默认 `true`=auto-tool；`false`→`picture_v2`） |
+| Turnstile VM | `utils/turnstile.py` | 禁止外部 solver |
+| 对话/SSE | `services/protocol/conversation.py` | `image_stream_cf_failover` |
+| OpenAI 后端封装 | `services/openai_backend_api.py` | CF 单次失败即上层换号 |
+| 压测/验收 | `scripts/_tmp_spa_image_bench3.py`、`scripts/spa_image_panda_acceptance.py` | `--protocol picture_v2\|spa_tool`、`--image-gen-deadline` |
+| Pipeline 验收 | `scripts/_tmp_acceptance_serial5_conc10_suite.py` | `preferred_account_email` 多账号轮询 |
+
+**证据链（按时间）**：`H-pure-http-sentinel-fix-20260722.md`（突破）→ `J-*`（生产单单元）→ `O-*`（串行 5 + 额度）→ `acceptance-90s-picture_v2-20260723`（单账号 conc10 30/30）→ `acceptance-90s-multiacct-20260723`（多账号 conc10 4/10）。
+
+**禁止**：Camoufox/Playwright 作生图数据面；FlareSolverr；空 Turnstile 软降级。
+
+**票生命周期实验**（2026-07-23）：`22` §8、`scripts/_tmp_sentinel_ticket_ablation.py` — 验证 delay/reuse/cross-IP/TTL/并发开票，非生产默认路径。
 
 ---
 
@@ -165,7 +200,7 @@
 | P4-D5 | 45 秒 gate fail 后只读监听同一 SSE 流至 **90 秒** | 不重提 conversation；迟到工具事件归类可见 | **完成** |
 | P4-6b | Webshare **5 节点并发** CF403 预扫 + 串行5→并发4 门禁编排 | `scripts/spa_image_panda_acceptance.py --phase cf_scan5`；`serial5_passed` 后才允许 `concurrent4` | **完成（脚本）** |
 | P4-7 | poll 429 熔断 + SSE 等 sediment + 额度本地扣减 + cf_probe 全链 requirements | 连续 3×429 快失败；bench/生产 success 同步 `limits_progress`；验收用 **邮箱** 标识账号 | **完成（2026-07-23）** |
-| P4-4 | Panda sticky Webshare：**串行 5** | `no_image_gen=0`，出图成功 | **通过**：`qaflowakjewai6ps@proton.me` 5/5（65s gate），证据 `captures/spa/O-panda-serial5-quota-account-postfix-20260723.md` |
+| P4-4 | Panda sticky Webshare：**串行 5** | `no_image_gen=0`，出图成功 | **通过**（历史 65s gate）；2026-07-23 复验 **68–74s image_gen**，gate 临时 **90s**，上游延迟待办 **PROTO-UPSTREAM-LATENCY** |
 | P4-5 | Panda sticky Webshare：**并发 4** | `no_image_gen=0`，出图成功 | 待办；串行已通过，可启动 |
 | P4-6 | 收口：`H-pure-http-sentinel-fix-*.md` + 刷新 `12`/`04`/`06`/`CHANGELOG` | 文档与代码一致 | 完成（2026-07-22） |
 
@@ -222,6 +257,7 @@
 
 | 日期 | 说明 |
 |------|------|
+| 2026-07-23 | 串行 5 5/5 + 单账号 conc10 30/30；多账号 conc10 4/10；新增 §0.1 链路速查 |
 | 2026-07-22 | 第 4 轮诊断纠正：首页软失败 403 为 4/4、业务链传播 CF 为 0；SSE 活跃且有类工具参数 JSON，发现 deadline 先于行解析的边界假阴性风险；新增 P4-D1～D5，观测修复前不补第 5 轮/并发 4 |
 | 2026-07-22 | 同账号保持原 fp/session 换绑到新 IP `45.39.75.27`；串行 5 执行 4/5，前三轮成功、第四轮 `no_image_gen_within_45s` 后止损；当时仅记录业务 CF 分类为 0，首页软失败 403 见上方纠正；第 5 轮与并发 4 未执行 |
 | 2026-07-22 | 同账号/同 fp/同 shape 新旧 IP A/B：新 IP `45.39.75.27` 2/2 无 CF 成功；旧 IP `82.29.223.111` 无 CF但下载 503；严格 IP 归因未成立 |

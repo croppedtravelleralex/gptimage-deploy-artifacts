@@ -1,0 +1,13 @@
+{
+  "phase": "STAB-conc10",
+  "completed": 6,
+  "failed": 4,
+  "ok_count": 6,
+  "failed_count": 4,
+  "pass": false,
+  "target": ">=8/10",
+  "wall_clock_ms": 240547.47,
+  "report": "/root/gptimage/data/runlogs/stab-conc10-20260724T105541Z/pipe-conc10-20260724T105544Z.json",
+  "generated_at": "2026-07-24T10:59:46Z",
+  "note": "post STAB-B1 deploy; warmup hot_count=4 after container restart"
+}

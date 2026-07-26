@@ -1,25 +1,93 @@
 # 当前状态
 
-最后更新：2026-07-23（Asia/Shanghai）
+最后更新：2026-07-26（Asia/Shanghai）
 
 ## 摘要（当前权威）
 
+**槽位 / conc10 / Rust**：详见 **`26-slot-lifecycle-rust-roadmap.md`**（释槽路径、inflight 泄漏、dispatchable=6 根因、Rust Layer 1–3）。
+
 **新号稳定产出**为固定 Camoufox 链路（见 `16-camoufox-stable-pipeline.md`）：取号 → 未占用 Webshare → 探活+邮箱预检 → 本机 Camoufox 注册 → blob 上传 Panda → 默认 `identity_isolated` 观察 → 成熟后开调度。正式入口 `scripts/outlook_camoufox_stable_register.py`；默认 `register`，已注册 Outlook 的人工恢复用同脚本 `--mode relogin`。正式入口已移除两个 `_tmp_` 脚本依赖，并支持将账号 sticky Webshare 与 Camoufox 实际 browser proxy 分开传入。注册机 UI/协议批量已停用。
 
-- **CF 403**：边缘 HTML challenge（出口 IP + 行为），**不能协议根除**；裁决与缓解见 **`17-cf403-and-egress.md`**。Panda 直连 backend 必炸；生产须 sticky Webshare。2026-07-21 已上 IMAGE 换号 failover、同 binding 生图≤1、错峰 1.5s。
+- **CF 403**：边缘 HTML challenge（出口 IP + 行为），**不能协议根除**；裁决与缓解见 **`17-cf403-and-egress.md`**（含「同 IP 不同账号」、**批量 scan 隔离 vs `proxy_cf_ok` 缓存**专节）。Panda 直连 backend 必炸；生产须 sticky Webshare。
+- **纯 HTTP 生图**：STAB-A1 公平 API serial5 **5/5**；历史 multiacct conc10 **10/10**（`PROD-conc10-20260724T150152Z`）。**2026-07-25 回归**：`040240Z` **4/10**（6 路 CF/上游 225s）；`034701Z` **0/10**（inflight 泄漏）；换绑+释槽修复后待复测。
+- **号池调度面（2026-07-26）**：`total=19`；**进调度 17** / **生图可用 17**（`philliphicks` 限流；`enrico` `identity_isolated`）；**`proxy_cf_ok` 19/19**；**`proxy_binding_max_accounts=2`**（单 egress 最多 2 号）；CF 坏号换绑 `scripts/_tmp_rebind_cf_fail_shared_ip.py`；隔离恢复 `scripts/_tmp_recover_cf_quarantine.py`。
+- **取号争用**：conc10 `account_queue` 占墙钟 **0.1%**（原 22.8%）；lease 预热 + preferred 等待已落地。
+- **内存**：conc10 后 RSS **~259MB**（原 ~443MB）；重启基线 ~104MB。
+- **延迟验收（历史最佳）**：同步 API **serial10 10/10**；**conc10 10/10**（`PROD-conc10-20260724T150152Z` / `023900Z`）。阶段分解见 `captures/spa/PROD-latency-phase-breakdown-20260724.md`。
+- **UI「按 IP 分组」**：按 `proxy_egress_ip` 聚合；与 `proxy_binding_hash`（代理 URL）不同，换绑须实测 egress。
+- **前端**：`25-frontend-performance-plan` 已部分落地（号池/懒加载/WebP）；日志 200 条/页布局 bug 已修（待部署 `web_dist`）。
 - 2026-07-22 Outlook invalid 单号恢复：本机直连 Webshare 的 ChatGPT session/callback 会 `connection reset`，同一批 5 个未占用节点改走“本机 → Panda → Webshare”后均为 session/CSRF 200。`iv***3` 使用正确 NextAuth state Cookie + 本机 Camoufox OTP 重登成功；新 token hash `b5ff0dd61227` 在 Panda `/backend-api/me` 验证为 quota 25 后替换旧 token `d57c8af1da7d`，生产终态 `verified_ready`。该实测路径已固化进正式脚本 `--mode relogin --browser-proxy-file ...`：新 token 仍只在本地隔离落盘，不自动修改 Panda。备份：`/root/gptimage/data/backups/outlook-node-swap-iv-20260722-102756/`。
 - 2026-07-23 Outlook `token invalidated` 双号恢复：`charlietim7490` / `barnettregina91891` 按同日 iv***3 链路本机 Camoufox `--mode relogin` + Panda 18443 链串行成功；`_tmp_panda_commit_import_blob.py` 写库后**必须** `POST /api/accounts/reload-from-storage`（否则 8012 内存仍显示旧 `token invalidated`）。终态两号 `verified_ready`，quota 5/25。
-- 2026-07-23 Outlook 新号观察批次：`0716-4000_015.txt` index **3/4**（`felicitypamela2673` / `andersmia76491`）+ 未占用 Webshare `45.39.75.27` / `92.113.231.203` 本机 Camoufox 注册成功；Panda 观察态导入 `_tmp_panda_import_observe_blob.py`（`/me` 探活，避免 `conversation/init` CF 误杀）→ `identity_isolated`。证据：`data/runlogs/outlook-camoufox-stable-20260723/`。
+- 2026-07-24 Outlook 新号观察批次（晚间）：`0716-4000_015.txt` index **20/22** + Panda live `probe_proxy_cf` 选 Webshare `82.21.231.115` / `92.113.231.193`；Panda `identity_isolated`；`total=21`。证据：`outlook-camoufox-stable-20260724-batch2/`。index **18/19** 凭据 Graph 失效或 OTP 会话 `invalid_state` 弃用。
+- 2026-07-24 观察导入 grace：导入后 **420s** 内跳过 token/配额远程刷新（`panda_observe_refresh_after`）；已部署 Panda + `web_dist` 额度 UI 修复；`gibsonarthur3532` 已删号，`82.29.223.33` 隔离。
+- 2026-07-24 Outlook 新号观察批次：`0716-4000_015.txt` index **16/17** + Panda live `probe_proxy_cf` 选 Webshare `82.29.223.33` / `82.21.231.74`；Panda `identity_isolated`。证据：`outlook-camoufox-stable-20260724-batch1/`。
+- 2026-07-24 Outlook 死号处置：`haroldsunny44941` 重登失败（OpenAI `account_deactivated`，昨夜进池后 token invalidated）；已从 Panda 删除；sticky `82.29.223.120:7934` 隔离。
+- 2026-07-23 Outlook 死号处置：`charlietim7490` 重登失败（OpenAI `account_deactivated`），已从 Panda 删除；sticky `92.113.246.215:5800` 写入 `gpt_unavailable_proxies.json`（`cf403`）。`commit` 脚本 relogin 时保留原 `created_at`。
+- 2026-07-23 Webshare 池：`webshare_cf_scan` 已将 100 节点批量标 `cf403_scan` 隔离；**注册前须 live `probe_proxy_cf`**（`scripts/_tmp_probe_webshare_cf_ok.py`），勿仅依赖 quarantine 文件反选。号池在用 host 仍须排除。
 - Panda IP canary（2026-07-20）：2 个 Proton（`xwy83…` / `yi59…`）经 `socks5://127.0.0.1:18443`→Panda `43.156.233.219` **注册成功**；空代理刷 `/backend-api` → **CF 403**；已隔离，`proxy_runtime` 恢复 `single_proxy`。
 - 裁决：Panda 宿主机 IP 可过注册页，**不可**作生产 backend 出口；调度仍须账号级 sticky Webshare。
 - 调度 UI/API：进=`verified_ready`，出=`identity_isolated`。
-- 逆向：estuary 下载须主 session Bearer；文本已对齐 SPA `/f/conversation`+prepare。**严格纯 HTTP 生图已正式部署 Panda 并完成生产单单元 canary**。旧 IP 串行 5 曾因 CF 信号停在 `2/5`；A/B 后已将同一账号保持原 fp/session 换绑到新 IP `45.39.75.27`。新 IP 串行 5 实际执行 `4/5`：前 3 次出图下载成功，第 4 次在 45 秒内未识别到明确 `image_gen`，按门禁停止且未执行第 5 次；无换号、无整单重试。纠正后的 CF 口径为：首页 `home_soft_fail status=403` 为 `4/4`，requirements/prepare/start 未传播 CF，前三轮 `/tasks` 无 CF，第四轮未进入 poll。未通过 `5/5`，不能把旧 IP 定性为唯一主因，并发 4 未执行。证据见 `captures/spa/{J,K,L,M}-*.json`。
+- 逆向（第一手）：**Camoufox 登录+生图 HAR**（`spa-camoufox-*.har`、`spa-image-*.har`）→ `field-diff-20260721.md` → HTTP repro + `bench3-20260721.md`；索引 `captures/spa/README.md` §Camoufox、`19` §0.1。estuary 下载须主 session Bearer；文本已对齐 SPA `/f/conversation`+prepare。**严格纯 HTTP 生图已正式部署 Panda 并完成生产单单元 canary**。旧 IP 串行 5 曾因 CF 信号停在 `2/5`；A/B 后已将同一账号保持原 fp/session 换绑到新 IP `45.39.75.27`。新 IP 串行 5 实际执行 `4/5`：前 3 次出图下载成功，第 4 次在 45 秒内未识别到明确 `image_gen`，按门禁停止且未执行第 5 次；无换号、无整单重试。纠正后的 CF 口径为：首页 `home_soft_fail status=403` 为 `4/4`，requirements/prepare/start 未传播 CF，前三轮 `/tasks` 无 CF，第四轮未进入 poll。未通过 `5/5`，不能把旧 IP 定性为唯一主因，并发 4 未执行。证据见 `captures/spa/{J,K,L,M}-*.json`。
 - 拟人 Phase A+B 已落地；**降封效果尚未证明**（`12`）。
 - 发布：本地 build → artifacts → Panda overlay；禁 Panda build / 禁 scp 业务码。
 - 详案：`16`（产出）、`11`/`12`/`19`/`20`（LLM/协议/纯 HTTP 生图）、`17`（CF）、`04`（待办）、`09`/`10`（长寿/拟人）。
 - Rust 重写：**Phase A 已接线** + **鉴权/UI/简易后端** + **Phase B 契约层**——独立仓 `gptimage-gateway-rs`（`:8013` + helper `:19001`；生产 `:8012` 未切流）。生图运行时默认关（`IMAGE_ENABLED=0`）；路线见该仓 `plan.md` / 指针 `14`。MVP 生图矩阵签字待后端接入 + CF 可测窗。
 
 > 以下各节为历史流水，**不得覆盖上方摘要**。
+
+### 2026-07-24 Outlook 新号观察批次（晚间，live CF 探活）
+
+| 项 | issac | frasier |
+| --- | --- | --- |
+| 凭据行 | `0716-4000_015.txt` index **20** | index **22** |
+| Webshare | `82.21.231.115:7429` | `92.113.231.193:7278` |
+| 选 IP | Panda `probe_proxy_cf` live 探活（排除号池已用 host） | |
+| 注册 | 本机 Camoufox + Panda `18443` 链；~115s / ~172s | |
+| Panda | `identity_isolated`；`panda_observe_refresh_after` +420s；`total=21` | |
+| 弃用 | index **18** Graph token 失效；index **19** OTP 后 `invalid_state` | |
+| 证据 | `data/runlogs/outlook-camoufox-stable-20260724-batch2/` | |
+
+### 2026-07-24 观察导入 grace + gibson 处置
+
+- 导入观察号写入 `panda_observe_refresh_after`（默认 +420s），grace 期内跳过 `refresh_access_token` / `fetch_remote_info` / refresh-all 队列。
+- `gibsonarthur3532@outlook.com`（batch1 index 16）导入后秒级 `token invalidated`；已删号；`82.29.223.33:7847` → `account_deactivated` 隔离。
+- `web_dist` 额度 UI：观察态显示账面 `quota`（非 `available_image_quota=0`）；已 `force-recreate` 部署 Panda。
+
+### 2026-07-24 Outlook 新号观察批次（上午，live CF 探活）
+
+| 项 | gibson | ivor |
+| --- | --- | --- |
+| 凭据行 | `0716-4000_015.txt` index **16** | index **17** |
+| Webshare | `82.29.223.33:7847` | `82.21.231.74:7388` |
+| 选 IP | Panda `probe_proxy_cf` live 探活（排除号池已用 host） | |
+| Panda | `identity_isolated`；`total=20`（删 `haroldsunny` 后） | |
+| 证据 | `data/runlogs/outlook-camoufox-stable-20260724-batch1/` | |
+
+### 2026-07-24 Outlook 死号处置（haroldsunny）
+
+- 昨夜观察号 `haroldsunny44941@outlook.com`（index 15 / `82.29.223.120`）今早 `token invalidated`；本机 `--mode relogin` + Panda 18443 链 OTP 后 OpenAI 返回 **`account_deactivated`**，不可恢复。
+- 已从 Panda 删除；`82.29.223.120:7934` → `gpt_unavailable_proxies.json`（`account_deactivated`）。证据 `data/runlogs/outlook-recovery-20260724/`。
+
+### 2026-07-23 Outlook 新号观察批次（晚间，egress 探活 + UI 修复）
+
+| 项 | blake | harold |
+| --- | --- | --- |
+| 凭据行 | `0716-4000_015.txt` index **14** | index **15**（原计划 13/14；index **13** OTP 后 `account_deactivated` 弃用） |
+| Webshare | `92.113.236.66:6651` | `82.29.223.120:7934` |
+| 选 IP | 排除号池已用 host；晚间 Panda `probe_proxy_cf` 全池 **0** OK → 本机 egress 探活 + 注册实测 | |
+| 注册 | 本机 Camoufox ~85s / ~113s；修复 OTP/about-you 多语言 UI | |
+| Panda | `identity_isolated`；`total=19` | |
+| 证据 | `data/runlogs/outlook-camoufox-stable-20260723-batch3/` | |
+
+### 2026-07-23 Outlook 新号观察批次（下午，live CF 探活）
+
+| 项 | enrico | ember |
+| --- | --- | --- |
+| 凭据行 | `0716-4000_015.txt` index **5** | index **12**（index 6/8 token 交换失败，改号） |
+| Webshare | `82.21.231.132:7446` | `82.21.231.233:7547` |
+| 选 IP | Panda `probe_proxy_cf` live 探活（`scripts/_tmp_probe_webshare_cf_ok.py`），**勿**仅靠 `gpt_unavailable_proxies.json` 反选（批量 scan 后 100 节点全隔离，仍有 live OK） | |
+| Panda | `identity_isolated` | |
+| 证据 | `data/runlogs/outlook-camoufox-stable-20260723-batch2/` | |
 
 ### 2026-07-23 Outlook 死号恢复与 UI 内存陈旧
 

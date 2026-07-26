@@ -1,0 +1,757 @@
+{
+  "schema": "sentinel-ticket-ablation/v1",
+  "meta": {
+    "email": "qaflowakjewai6ps@proton.me",
+    "proxy_egress_hint": "92.113.246.176",
+    "batch_id": "batch5",
+    "batch_label": "concurrent",
+    "phases": [
+      "concurrent"
+    ],
+    "alt_proxy_available": true,
+    "alt_email": "philliphicks336926@outlook.com",
+    "probe_mode": {
+      "gate_secs": 10.0,
+      "read_secs": 15.0
+    }
+  },
+  "batches_run": [
+    "batch1",
+    "batch2",
+    "batch3",
+    "batch4-60",
+    "batch4-120",
+    "batch4-300",
+    "batch5"
+  ],
+  "batch_plan": {
+    "batch1": {
+      "label": "control_reuse_session",
+      "phases": [
+        "baseline",
+        "reuse",
+        "cross_session"
+      ],
+      "note": "基线 + 同票复用 + 跨 session 同 IP"
+    },
+    "batch2": {
+      "label": "cross_egress",
+      "phases": [
+        "cross_ip",
+        "cross_both"
+      ],
+      "note": "跨 IP / 跨 session+IP"
+    },
+    "batch3": {
+      "label": "delay_30s",
+      "phases": [
+        "delay"
+      ],
+      "delay_secs": 30.0,
+      "note": "延迟 30s 用票"
+    },
+    "batch4-60": {
+      "label": "delay_60s",
+      "phases": [
+        "delay"
+      ],
+      "delay_secs": 60.0,
+      "note": "TTL 探针 60s"
+    },
+    "batch4-120": {
+      "label": "delay_120s",
+      "phases": [
+        "delay"
+      ],
+      "delay_secs": 120.0,
+      "note": "TTL 探针 120s"
+    },
+    "batch4-300": {
+      "label": "delay_300s",
+      "phases": [
+        "delay"
+      ],
+      "delay_secs": 300.0,
+      "note": "TTL 探针 300s"
+    },
+    "batch5": {
+      "label": "concurrent",
+      "phases": [
+        "concurrent"
+      ],
+      "concurrent_workers": 2,
+      "note": "同账号并行开票+用票（workers=2）"
+    }
+  },
+  "summary": {
+    "generated_at": "2026-07-23T12:28:05.067633+00:00",
+    "case_count": 7,
+    "ttl_estimate": {
+      "delay_rows": [
+        {
+          "delay_secs": 300.0,
+          "ok": true
+        }
+      ],
+      "last_ok_delay_secs": 300.0,
+      "first_fail_delay_secs": null,
+      "estimated_ttl_lower_bound_secs": 300.0,
+      "estimated_ttl_upper_bound_secs": null
+    },
+    "findings": {
+      "baseline": {
+        "case": "baseline_immediate",
+        "open": {
+          "requirements_ms": {
+            "http_calls": 4,
+            "req_bytes": 7408,
+            "resp_bytes": 627806,
+            "total_bytes": 635214
+          },
+          "egress_ip": "92.113.246.176",
+          "token_len": 2892,
+          "proof_len": 647,
+          "turnstile_len": 2628,
+          "jwt_exp_unix": null,
+          "cf_observability": {
+            "home_403_soft_fail": false,
+            "home_status": 200,
+            "requirements_cf403": 0,
+            "start_cf403": 0,
+            "tasks_cf403": 0,
+            "propagated_cf": 0
+          }
+        },
+        "use": {
+          "label": "baseline_immediate",
+          "ok": true,
+          "http_status": 200,
+          "conversation_id": "6a62042a-9434-83ec-b528-de80dd7dd532",
+          "has_image_gen": true,
+          "sse_chunks": 26,
+          "error": null,
+          "error_class": null,
+          "elapsed_ms": 6725,
+          "egress_ip": "92.113.246.176"
+        },
+        "elapsed_ms": 9050
+      },
+      "cross_request_reuse": {
+        "case": "reuse_same_session",
+        "open": {
+          "requirements_ms": {
+            "http_calls": 4,
+            "req_bytes": 7456,
+            "resp_bytes": 289013,
+            "total_bytes": 296469
+          },
+          "egress_ip": "92.113.246.176",
+          "token_len": 2852,
+          "proof_len": 731,
+          "turnstile_len": 2600,
+          "jwt_exp_unix": null,
+          "cf_observability": {
+            "home_403_soft_fail": false,
+            "home_status": 200,
+            "requirements_cf403": 0,
+            "start_cf403": 0,
+            "tasks_cf403": 0,
+            "propagated_cf": 0
+          }
+        },
+        "first": {
+          "label": "reuse_first",
+          "ok": true,
+          "http_status": 200,
+          "conversation_id": "6a620435-8468-83ec-bbff-08b8130b6c52",
+          "has_image_gen": true,
+          "sse_chunks": 26,
+          "error": null,
+          "error_class": null,
+          "elapsed_ms": 6849,
+          "egress_ip": "92.113.246.176"
+        },
+        "second": {
+          "label": "reuse_second_same_ticket",
+          "ok": false,
+          "http_status": 403,
+          "conversation_id": "",
+          "has_image_gen": false,
+          "sse_chunks": 0,
+          "error": "/backend-api/f/conversation failed: status=403, body=cloudflare_or_edge_html_block: upstream returned an HTML challenge page (context=/backend-api/f/conversation). Usually intermittent proxy/CF edge block — retry or switch egress; not necessarily an invalid token.",
+          "error_class": "http_reject",
+          "elapsed_ms": 772,
+          "egress_ip": "92.113.246.176",
+          "body_snip": ""
+        },
+        "reuse_accepted": false
+      },
+      "cross_session": {
+        "case": "cross_session_same_ip",
+        "open": {
+          "requirements_ms": {
+            "http_calls": 4,
+            "req_bytes": 7524,
+            "resp_bytes": 287697,
+            "total_bytes": 295221
+          },
+          "egress_ip": "92.113.246.176",
+          "token_len": 2852,
+          "proof_len": 735,
+          "turnstile_len": 2620,
+          "jwt_exp_unix": null,
+          "cf_observability": {
+            "home_403_soft_fail": false,
+            "home_status": 200,
+            "requirements_cf403": 0,
+            "start_cf403": 0,
+            "tasks_cf403": 0,
+            "propagated_cf": 0
+          }
+        },
+        "use": {
+          "label": "cross_session_same_ip",
+          "ok": true,
+          "http_status": 200,
+          "conversation_id": "6a62043e-9098-83ec-9a70-f810f9f72eee",
+          "has_image_gen": true,
+          "sse_chunks": 25,
+          "error": null,
+          "error_class": null,
+          "elapsed_ms": 5286,
+          "egress_ip": "92.113.246.176"
+        },
+        "open_egress": "92.113.246.176",
+        "use_egress": "92.113.246.176"
+      },
+      "cross_ip": {
+        "case": "cross_ip",
+        "open_proxy_hash": "49675fdabb54",
+        "use_proxy_hash": "b2f3cb7639c2",
+        "alt_account_email": "philliphicks336926@outlook.com",
+        "open": {
+          "requirements_ms": {
+            "http_calls": 4,
+            "req_bytes": 7360,
+            "resp_bytes": 627240,
+            "total_bytes": 634600
+          },
+          "egress_ip": "92.113.246.176",
+          "token_len": 2852,
+          "proof_len": 643,
+          "turnstile_len": 2624,
+          "jwt_exp_unix": null,
+          "cf_observability": {
+            "home_403_soft_fail": false,
+            "home_status": 200,
+            "requirements_cf403": 0,
+            "start_cf403": 0,
+            "tasks_cf403": 0,
+            "propagated_cf": 0
+          }
+        },
+        "use": {
+          "label": "cross_ip",
+          "ok": true,
+          "http_status": 200,
+          "conversation_id": "6a62047e-faf0-83ec-92a9-5795477b28f4",
+          "has_image_gen": true,
+          "sse_chunks": 25,
+          "error": null,
+          "error_class": null,
+          "elapsed_ms": 6236,
+          "egress_ip": "82.29.223.111"
+        },
+        "open_egress": "92.113.246.176",
+        "use_egress": "82.29.223.111",
+        "ip_changed": true
+      },
+      "cross_both": {
+        "case": "cross_session_cross_ip",
+        "alt_account_email": "philliphicks336926@outlook.com",
+        "open": {
+          "requirements_ms": {
+            "http_calls": 4,
+            "req_bytes": 7280,
+            "resp_bytes": 286194,
+            "total_bytes": 293474
+          },
+          "egress_ip": "92.113.246.176",
+          "token_len": 2808,
+          "proof_len": 779,
+          "turnstile_len": 2628,
+          "jwt_exp_unix": null,
+          "cf_observability": {
+            "home_403_soft_fail": false,
+            "home_status": 200,
+            "requirements_cf403": 0,
+            "start_cf403": 0,
+            "tasks_cf403": 0,
+            "propagated_cf": 0
+          }
+        },
+        "use": {
+          "label": "cross_session_cross_ip",
+          "ok": true,
+          "http_status": 200,
+          "conversation_id": "6a620487-18a4-83ec-9483-109d6d22c36a",
+          "has_image_gen": true,
+          "sse_chunks": 26,
+          "error": null,
+          "error_class": null,
+          "elapsed_ms": 5605,
+          "egress_ip": "82.29.223.111"
+        },
+        "open_egress": "92.113.246.176",
+        "use_egress": "82.29.223.111"
+      },
+      "concurrent": {
+        "case": "concurrent_same_account",
+        "workers": 2,
+        "parallel_finalize": [
+          {
+            "worker": 0,
+            "ok": true,
+            "token_len": 2828,
+            "egress_ip": "92.113.246.176",
+            "elapsed_ms": 2051
+          },
+          {
+            "worker": 1,
+            "ok": true,
+            "token_len": 2764,
+            "egress_ip": "92.113.246.176",
+            "elapsed_ms": 1241
+          }
+        ],
+        "parallel_finalize_ok": 2,
+        "parallel_open_then_use": [
+          {
+            "worker": 0,
+            "open": {
+              "requirements_ms": {
+                "http_calls": 4,
+                "req_bytes": 7408,
+                "resp_bytes": 626878,
+                "total_bytes": 634286
+              },
+              "egress_ip": "92.113.246.176",
+              "token_len": 2872,
+              "proof_len": 655,
+              "turnstile_len": 2620,
+              "jwt_exp_unix": null,
+              "cf_observability": {
+                "home_403_soft_fail": false,
+                "home_status": 200,
+                "requirements_cf403": 0,
+                "start_cf403": 0,
+                "tasks_cf403": 0,
+                "propagated_cf": 0
+              }
+            },
+            "use": {
+              "label": "concurrent_use_0",
+              "ok": true,
+              "http_status": 200,
+              "conversation_id": "6a6208c9-d998-83ec-b06f-346c6132f2e4",
+              "has_image_gen": true,
+              "sse_chunks": 26,
+              "error": null,
+              "error_class": null,
+              "elapsed_ms": 12541,
+              "egress_ip": "92.113.246.176"
+            },
+            "ok": true
+          },
+          {
+            "worker": 1,
+            "open": {
+              "requirements_ms": {
+                "http_calls": 4,
+                "req_bytes": 7248,
+                "resp_bytes": 287202,
+                "total_bytes": 294450
+              },
+              "egress_ip": "92.113.246.176",
+              "token_len": 2808,
+              "proof_len": 743,
+              "turnstile_len": 2640,
+              "jwt_exp_unix": null,
+              "cf_observability": {
+                "home_403_soft_fail": false,
+                "home_status": 200,
+                "requirements_cf403": 0,
+                "start_cf403": 0,
+                "tasks_cf403": 0,
+                "propagated_cf": 0
+              }
+            },
+            "use": {
+              "label": "concurrent_use_1",
+              "ok": true,
+              "http_status": 200,
+              "conversation_id": "6a6208c8-d108-83ec-8d63-8b5b24cd4122",
+              "has_image_gen": true,
+              "sse_chunks": 25,
+              "error": null,
+              "error_class": null,
+              "elapsed_ms": 5766,
+              "egress_ip": "92.113.246.176"
+            },
+            "ok": true
+          }
+        ],
+        "parallel_use_ok": 2,
+        "browser_pool_hypothesis": "If parallel_open_then_use succeeds at workers=N without browsers, HTTP per-call finalize scales concurrency; browser ticket pool not required for curl_cffi path.",
+        "elapsed_ms": 17550
+      }
+    }
+  },
+  "cases": [
+    {
+      "case": "baseline_immediate",
+      "open": {
+        "requirements_ms": {
+          "http_calls": 4,
+          "req_bytes": 7408,
+          "resp_bytes": 627806,
+          "total_bytes": 635214
+        },
+        "egress_ip": "92.113.246.176",
+        "token_len": 2892,
+        "proof_len": 647,
+        "turnstile_len": 2628,
+        "jwt_exp_unix": null,
+        "cf_observability": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        }
+      },
+      "use": {
+        "label": "baseline_immediate",
+        "ok": true,
+        "http_status": 200,
+        "conversation_id": "6a62042a-9434-83ec-b528-de80dd7dd532",
+        "has_image_gen": true,
+        "sse_chunks": 26,
+        "error": null,
+        "error_class": null,
+        "elapsed_ms": 6725,
+        "egress_ip": "92.113.246.176"
+      },
+      "elapsed_ms": 9050
+    },
+    {
+      "case": "reuse_same_session",
+      "open": {
+        "requirements_ms": {
+          "http_calls": 4,
+          "req_bytes": 7456,
+          "resp_bytes": 289013,
+          "total_bytes": 296469
+        },
+        "egress_ip": "92.113.246.176",
+        "token_len": 2852,
+        "proof_len": 731,
+        "turnstile_len": 2600,
+        "jwt_exp_unix": null,
+        "cf_observability": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        }
+      },
+      "first": {
+        "label": "reuse_first",
+        "ok": true,
+        "http_status": 200,
+        "conversation_id": "6a620435-8468-83ec-bbff-08b8130b6c52",
+        "has_image_gen": true,
+        "sse_chunks": 26,
+        "error": null,
+        "error_class": null,
+        "elapsed_ms": 6849,
+        "egress_ip": "92.113.246.176"
+      },
+      "second": {
+        "label": "reuse_second_same_ticket",
+        "ok": false,
+        "http_status": 403,
+        "conversation_id": "",
+        "has_image_gen": false,
+        "sse_chunks": 0,
+        "error": "/backend-api/f/conversation failed: status=403, body=cloudflare_or_edge_html_block: upstream returned an HTML challenge page (context=/backend-api/f/conversation). Usually intermittent proxy/CF edge block — retry or switch egress; not necessarily an invalid token.",
+        "error_class": "http_reject",
+        "elapsed_ms": 772,
+        "egress_ip": "92.113.246.176",
+        "body_snip": ""
+      },
+      "reuse_accepted": false
+    },
+    {
+      "case": "cross_session_same_ip",
+      "open": {
+        "requirements_ms": {
+          "http_calls": 4,
+          "req_bytes": 7524,
+          "resp_bytes": 287697,
+          "total_bytes": 295221
+        },
+        "egress_ip": "92.113.246.176",
+        "token_len": 2852,
+        "proof_len": 735,
+        "turnstile_len": 2620,
+        "jwt_exp_unix": null,
+        "cf_observability": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        }
+      },
+      "use": {
+        "label": "cross_session_same_ip",
+        "ok": true,
+        "http_status": 200,
+        "conversation_id": "6a62043e-9098-83ec-9a70-f810f9f72eee",
+        "has_image_gen": true,
+        "sse_chunks": 25,
+        "error": null,
+        "error_class": null,
+        "elapsed_ms": 5286,
+        "egress_ip": "92.113.246.176"
+      },
+      "open_egress": "92.113.246.176",
+      "use_egress": "92.113.246.176"
+    },
+    {
+      "case": "cross_ip",
+      "open_proxy_hash": "49675fdabb54",
+      "use_proxy_hash": "b2f3cb7639c2",
+      "alt_account_email": "philliphicks336926@outlook.com",
+      "open": {
+        "requirements_ms": {
+          "http_calls": 4,
+          "req_bytes": 7360,
+          "resp_bytes": 627240,
+          "total_bytes": 634600
+        },
+        "egress_ip": "92.113.246.176",
+        "token_len": 2852,
+        "proof_len": 643,
+        "turnstile_len": 2624,
+        "jwt_exp_unix": null,
+        "cf_observability": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        }
+      },
+      "use": {
+        "label": "cross_ip",
+        "ok": true,
+        "http_status": 200,
+        "conversation_id": "6a62047e-faf0-83ec-92a9-5795477b28f4",
+        "has_image_gen": true,
+        "sse_chunks": 25,
+        "error": null,
+        "error_class": null,
+        "elapsed_ms": 6236,
+        "egress_ip": "82.29.223.111"
+      },
+      "open_egress": "92.113.246.176",
+      "use_egress": "82.29.223.111",
+      "ip_changed": true
+    },
+    {
+      "case": "cross_session_cross_ip",
+      "alt_account_email": "philliphicks336926@outlook.com",
+      "open": {
+        "requirements_ms": {
+          "http_calls": 4,
+          "req_bytes": 7280,
+          "resp_bytes": 286194,
+          "total_bytes": 293474
+        },
+        "egress_ip": "92.113.246.176",
+        "token_len": 2808,
+        "proof_len": 779,
+        "turnstile_len": 2628,
+        "jwt_exp_unix": null,
+        "cf_observability": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        }
+      },
+      "use": {
+        "label": "cross_session_cross_ip",
+        "ok": true,
+        "http_status": 200,
+        "conversation_id": "6a620487-18a4-83ec-9483-109d6d22c36a",
+        "has_image_gen": true,
+        "sse_chunks": 26,
+        "error": null,
+        "error_class": null,
+        "elapsed_ms": 5605,
+        "egress_ip": "82.29.223.111"
+      },
+      "open_egress": "92.113.246.176",
+      "use_egress": "82.29.223.111"
+    },
+    {
+      "case": "delay",
+      "delay_secs": 300.0,
+      "open": {
+        "requirements_ms": {
+          "http_calls": 4,
+          "req_bytes": 7456,
+          "resp_bytes": 288785,
+          "total_bytes": 296241
+        },
+        "egress_ip": "92.113.246.176",
+        "token_len": 2852,
+        "proof_len": 731,
+        "turnstile_len": 2608,
+        "jwt_exp_unix": null,
+        "cf_observability": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        }
+      },
+      "use": {
+        "label": "delay_300s",
+        "ok": true,
+        "http_status": 200,
+        "conversation_id": "6a620851-c364-83ec-80db-8695f9689586",
+        "has_image_gen": true,
+        "sse_chunks": 27,
+        "error": null,
+        "error_class": null,
+        "elapsed_ms": 8987,
+        "egress_ip": "92.113.246.176"
+      },
+      "wall_between_finalize_and_sse_secs": 308.987,
+      "elapsed_ms": 310057
+    },
+    {
+      "case": "concurrent_same_account",
+      "workers": 2,
+      "parallel_finalize": [
+        {
+          "worker": 0,
+          "ok": true,
+          "token_len": 2828,
+          "egress_ip": "92.113.246.176",
+          "elapsed_ms": 2051
+        },
+        {
+          "worker": 1,
+          "ok": true,
+          "token_len": 2764,
+          "egress_ip": "92.113.246.176",
+          "elapsed_ms": 1241
+        }
+      ],
+      "parallel_finalize_ok": 2,
+      "parallel_open_then_use": [
+        {
+          "worker": 0,
+          "open": {
+            "requirements_ms": {
+              "http_calls": 4,
+              "req_bytes": 7408,
+              "resp_bytes": 626878,
+              "total_bytes": 634286
+            },
+            "egress_ip": "92.113.246.176",
+            "token_len": 2872,
+            "proof_len": 655,
+            "turnstile_len": 2620,
+            "jwt_exp_unix": null,
+            "cf_observability": {
+              "home_403_soft_fail": false,
+              "home_status": 200,
+              "requirements_cf403": 0,
+              "start_cf403": 0,
+              "tasks_cf403": 0,
+              "propagated_cf": 0
+            }
+          },
+          "use": {
+            "label": "concurrent_use_0",
+            "ok": true,
+            "http_status": 200,
+            "conversation_id": "6a6208c9-d998-83ec-b06f-346c6132f2e4",
+            "has_image_gen": true,
+            "sse_chunks": 26,
+            "error": null,
+            "error_class": null,
+            "elapsed_ms": 12541,
+            "egress_ip": "92.113.246.176"
+          },
+          "ok": true
+        },
+        {
+          "worker": 1,
+          "open": {
+            "requirements_ms": {
+              "http_calls": 4,
+              "req_bytes": 7248,
+              "resp_bytes": 287202,
+              "total_bytes": 294450
+            },
+            "egress_ip": "92.113.246.176",
+            "token_len": 2808,
+            "proof_len": 743,
+            "turnstile_len": 2640,
+            "jwt_exp_unix": null,
+            "cf_observability": {
+              "home_403_soft_fail": false,
+              "home_status": 200,
+              "requirements_cf403": 0,
+              "start_cf403": 0,
+              "tasks_cf403": 0,
+              "propagated_cf": 0
+            }
+          },
+          "use": {
+            "label": "concurrent_use_1",
+            "ok": true,
+            "http_status": 200,
+            "conversation_id": "6a6208c8-d108-83ec-8d63-8b5b24cd4122",
+            "has_image_gen": true,
+            "sse_chunks": 25,
+            "error": null,
+            "error_class": null,
+            "elapsed_ms": 5766,
+            "egress_ip": "92.113.246.176"
+          },
+          "ok": true
+        }
+      ],
+      "parallel_use_ok": 2,
+      "browser_pool_hypothesis": "If parallel_open_then_use succeeds at workers=N without browsers, HTTP per-call finalize scales concurrency; browser ticket pool not required for curl_cffi path.",
+      "elapsed_ms": 17550
+    }
+  ]
+}

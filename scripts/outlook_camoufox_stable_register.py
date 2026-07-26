@@ -356,6 +356,41 @@ def proxy_host(proxy: str) -> str:
     return str(u.hostname or "")
 
 
+def is_chain_browser_proxy(sticky_proxy: str, browser_proxy: str) -> bool:
+    sticky = str(sticky_proxy or "").strip()
+    browser = str(browser_proxy or "").strip()
+    if not sticky or not browser:
+        return False
+    return proxy_endpoint(browser) != proxy_endpoint(sticky)
+
+
+def validate_chain_egress_matches_sticky(
+    *,
+    sticky_proxy: str,
+    browser_proxy: str,
+    probe: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    """链式注册/重登：Camoufox 实测出口 IP 必须等于 sticky 绑定 host。"""
+    sticky_host = proxy_host(sticky_proxy)
+    detail: dict[str, Any] = {
+        "sticky_host": sticky_host,
+        "browser_proxy": proxy_endpoint(browser_proxy),
+        "probe_ip": str(probe.get("ip") or "").strip(),
+        "chain_mode": is_chain_browser_proxy(sticky_proxy, browser_proxy),
+    }
+    if not sticky_host:
+        detail["reason"] = "sticky_host_missing"
+        return False, detail
+    if not detail["chain_mode"]:
+        detail["reason"] = "direct_webshare"
+        return True, detail
+    if detail["probe_ip"] == sticky_host:
+        detail["reason"] = "chain_egress_match"
+        return True, detail
+    detail["reason"] = "chain_egress_mismatch"
+    return False, detail
+
+
 def load_outlook_line(path: Path, index: int) -> dict[str, str]:
     lines = [
         l.strip()
@@ -490,6 +525,7 @@ def register_outlook(
     sticky_proxy: str,
     out_dir: Path,
     browser_proxy: str = "",
+    allow_egress_mismatch: bool = False,
 ) -> dict[str, Any]:
     browser_proxy = (browser_proxy or sticky_proxy).strip()
     email = credential["email"].strip().lower()
@@ -514,6 +550,23 @@ def register_outlook(
         (report_dir / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         return result
 
+    egress_ok, egress_detail = validate_chain_egress_matches_sticky(
+        sticky_proxy=sticky_proxy,
+        browser_proxy=browser_proxy,
+        probe=probe,
+    )
+    result["egress_match"] = egress_detail
+    log("egress_match", ok=egress_ok, **egress_detail)
+    if not egress_ok and not allow_egress_mismatch:
+        result["error"] = (
+            "chain_egress_mismatch:"
+            f"probe_ip={egress_detail.get('probe_ip')}"
+            f" sticky_host={egress_detail.get('sticky_host')}"
+            f" browser_proxy={egress_detail.get('browser_proxy')}"
+        )
+        (report_dir / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        return result
+
     try:
         pf = preflight_mailbox(credential, sticky_proxy)
     except Exception as exc:  # noqa: BLE001
@@ -530,7 +583,7 @@ def register_outlook(
     openai_password = generate_openai_account_password()
     authorize_url, code_verifier = cam._authorize_url(email, screen_hint="signup", client="platform")
     proxy_cfg = cam._proxy_dict(browser_proxy)
-    launch_kwargs: dict[str, Any] = {"headless": False, "os": "windows", "humanize": True}
+    launch_kwargs: dict[str, Any] = {"headless": False, "os": "windows", "humanize": True, "locale": "en-US"}
     if proxy_cfg:
         launch_kwargs["proxy"] = proxy_cfg
         if "127.0.0.1" not in browser_proxy and "localhost" not in browser_proxy:
@@ -564,9 +617,17 @@ def register_outlook(
             if path.rstrip("/") == "/create-account/password":
                 boundary = datetime.now(timezone.utc)
                 mailbox["_code_not_before"] = boundary
-                cam._switch_to_otp_signup(page)
-                path = cam._page_path(page)
-                cam._log("switched_to_otp_signup", path=path)
+                try:
+                    cam._switch_to_otp_signup(page)
+                    path = cam._page_path(page)
+                    cam._log("switched_to_otp_signup", path=path)
+                except RuntimeError as exc:
+                    if "otp_signup_link_missing" not in str(exc):
+                        raise
+                    cam._log("otp_signup_fallback_password", error=str(exc)[:160])
+                    cam._fill_password(page, openai_password)
+                    path = cam._page_path(page)
+                    cam._log("password_done", path=path)
 
             if "email-verification" in path:
                 cam._fill_otp(page, mailbox, mail, boundary)
@@ -644,6 +705,7 @@ def relogin_outlook(
     sticky_proxy: str,
     out_dir: Path,
     browser_proxy: str = "",
+    allow_egress_mismatch: bool = False,
 ) -> dict[str, Any]:
     """按实测 NextAuth 固定链重登，产物保持隔离，不自动替换 Panda 旧 token。"""
     browser_proxy = (browser_proxy or sticky_proxy).strip()
@@ -670,6 +732,23 @@ def relogin_outlook(
         (report_dir / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         return result
 
+    egress_ok, egress_detail = validate_chain_egress_matches_sticky(
+        sticky_proxy=sticky_proxy,
+        browser_proxy=browser_proxy,
+        probe=probe,
+    )
+    result["egress_match"] = egress_detail
+    log("egress_match", ok=egress_ok, **egress_detail)
+    if not egress_ok and not allow_egress_mismatch:
+        result["error"] = (
+            "chain_egress_mismatch:"
+            f"probe_ip={egress_detail.get('probe_ip')}"
+            f" sticky_host={egress_detail.get('sticky_host')}"
+            f" browser_proxy={egress_detail.get('browser_proxy')}"
+        )
+        (report_dir / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        return result
+
     try:
         preflight = preflight_mailbox(credential, sticky_proxy)
         mail, mailbox = preflight["mail"], preflight["mailbox"]
@@ -682,7 +761,7 @@ def relogin_outlook(
         )
 
         proxy_config = cam._proxy_dict(browser_proxy)
-        launch_kwargs: dict[str, Any] = {"headless": False, "os": "windows", "humanize": True}
+        launch_kwargs: dict[str, Any] = {"headless": False, "os": "windows", "humanize": True, "locale": "en-US"}
         if proxy_config:
             launch_kwargs["proxy"] = proxy_config
         browser_cm = Camoufox(**launch_kwargs)
@@ -795,6 +874,11 @@ def main() -> int:
     ap.add_argument("--used-hosts-file", default="", help="Optional file of used hosts / proxy URLs")
     ap.add_argument("--out-dir", default=str(ROOT / "data" / "runlogs" / "outlook-camoufox-stable"))
     ap.add_argument("--check-only", action="store_true", help="Only pick + probe + mailbox preflight")
+    ap.add_argument(
+        "--allow-egress-mismatch",
+        action="store_true",
+        help="链式代理时允许 browser 出口 IP 与 sticky host 不一致（默认拒绝）",
+    )
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -850,6 +934,14 @@ def main() -> int:
         log("proxy_probe", **probe)
         if not probe.get("ok"):
             return 3
+        egress_ok, egress_detail = validate_chain_egress_matches_sticky(
+            sticky_proxy=sticky,
+            browser_proxy=browser_proxy,
+            probe=probe,
+        )
+        log("egress_match", ok=egress_ok, **egress_detail)
+        if not egress_ok and not args.allow_egress_mismatch:
+            return 5
         try:
             preflight_mailbox(credential, sticky)
             log("mailbox_preflight", ok=True)
@@ -858,12 +950,16 @@ def main() -> int:
             return 4
         return 0
 
+    if args.allow_egress_mismatch:
+        log("egress_match_override", enabled=True)
+
     runner = relogin_outlook if args.mode == "relogin" else register_outlook
     out = runner(
         credential=credential,
         sticky_proxy=sticky,
         browser_proxy=browser_proxy,
         out_dir=out_dir,
+        allow_egress_mismatch=bool(args.allow_egress_mismatch),
     )
     return 0 if out.get("ok") else 1
 

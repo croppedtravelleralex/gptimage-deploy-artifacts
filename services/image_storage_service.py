@@ -230,6 +230,12 @@ class ImageStorageService:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(image_data)
             stored_local = True
+            try:
+                from services.image_service import ensure_thumbnail
+
+                ensure_thumbnail(rel)
+            except Exception:
+                pass
 
         if mode in {"webdav", "both"}:
             remote_url = WebDAVClient(self.settings()).put(rel, image_data)

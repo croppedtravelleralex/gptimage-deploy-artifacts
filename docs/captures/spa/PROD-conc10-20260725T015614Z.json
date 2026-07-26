@@ -1,0 +1,360 @@
+{
+  "stamp": "20260725T015614Z",
+  "prompt_tag": "PROD-conc10-20260725T015614Z",
+  "runs_planned": 10,
+  "runs_executed": 10,
+  "ok_count": 0,
+  "pass": false,
+  "trace_engine": [],
+  "trace_event_count_mean": null,
+  "conc_wall_ms": 149389,
+  "dispatch_emails": [
+    "emberevan8683@outlook.com",
+    "enricoalfred9264@outlook.com",
+    "felicitypamela2673@outlook.com",
+    "ivetterock54353@outlook.com",
+    "ivorbrown70573@outlook.com",
+    "qaflowakjewai6ps@proton.me",
+    "qaflowfbdb3ovksr@proton.me",
+    "qaflowgq5wyuxhe9@proton.me",
+    "qaflowud630wbo2a@proton.me",
+    "qaflowwrg2ptcd05@proton.me",
+    "qaflowyi59i282fx@proton.me"
+  ],
+  "http_results": [
+    {
+      "run": 1,
+      "account_email": "enricoalfred9264@outlook.com",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 148598,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: sync admission seats full",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 120
+        },
+        "code": "image_service_busy"
+      }
+    },
+    {
+      "run": 2,
+      "account_email": "felicitypamela2673@outlook.com",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 149340,
+      "b64_len": 0,
+      "error": {
+        "message": "image pool starved: dispatchable=0 < 2",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "rate_limit_exceeded"
+      }
+    },
+    {
+      "run": 3,
+      "account_email": "ivetterock54353@outlook.com",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 148444,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: sync admission seats full",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 120
+        },
+        "code": "image_service_busy"
+      }
+    },
+    {
+      "run": 4,
+      "account_email": "ivorbrown70573@outlook.com",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 148744,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: sync admission seats full",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 120
+        },
+        "code": "image_service_busy"
+      }
+    },
+    {
+      "run": 5,
+      "account_email": "qaflowakjewai6ps@proton.me",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 146500,
+      "b64_len": 0,
+      "error": {
+        "message": "image pool starved: dispatchable=0 < 2",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "rate_limit_exceeded"
+      }
+    },
+    {
+      "run": 6,
+      "account_email": "qaflowfbdb3ovksr@proton.me",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 149377,
+      "b64_len": 0,
+      "error": {
+        "message": "image pool starved: dispatchable=0 < 2",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "rate_limit_exceeded"
+      }
+    },
+    {
+      "run": 7,
+      "account_email": "qaflowgq5wyuxhe9@proton.me",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 147808,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: sync admission seats full",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 120
+        },
+        "code": "image_service_busy"
+      }
+    },
+    {
+      "run": 8,
+      "account_email": "qaflowud630wbo2a@proton.me",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 149356,
+      "b64_len": 0,
+      "error": {
+        "message": "image pool starved: dispatchable=0 < 2",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "rate_limit_exceeded"
+      }
+    },
+    {
+      "run": 9,
+      "account_email": "qaflowwrg2ptcd05@proton.me",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 149096,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: estimated wait 185s exceeds sync budget",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 185
+        },
+        "code": "image_service_busy"
+      }
+    },
+    {
+      "run": 10,
+      "account_email": "qaflowyi59i282fx@proton.me",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 147581,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: sync admission seats full",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 120
+        },
+        "code": "image_service_busy"
+      }
+    }
+  ],
+  "http_latency_ms": {
+    "n": 10,
+    "min_ms": 146500.0,
+    "p50_ms": 148598.0,
+    "p95_ms": 149377.0,
+    "max_ms": 149377.0,
+    "mean_ms": 148484.4
+  },
+  "phase_rows": [
+    {
+      "time": "2026-07-25 09:58:50",
+      "account_email": "",
+      "status": "failed",
+      "task_queue_ms": 0,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 0,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 0,
+      "poll_resolve_ms": 0,
+      "download_ms": 0,
+      "wall_clock_ms": 146218,
+      "trace_engine": "",
+      "trace_events": 0
+    },
+    {
+      "time": "2026-07-25 09:58:53",
+      "account_email": "",
+      "status": "failed",
+      "task_queue_ms": 0,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 0,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 0,
+      "poll_resolve_ms": 0,
+      "download_ms": 0,
+      "wall_clock_ms": 2909,
+      "trace_engine": "",
+      "trace_events": 0
+    },
+    {
+      "time": "2026-07-25 09:58:53",
+      "account_email": "",
+      "status": "failed",
+      "task_queue_ms": 0,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 0,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 0,
+      "poll_resolve_ms": 0,
+      "download_ms": 0,
+      "wall_clock_ms": 2904,
+      "trace_engine": "",
+      "trace_events": 0
+    },
+    {
+      "time": "2026-07-25 09:58:53",
+      "account_email": "",
+      "status": "failed",
+      "task_queue_ms": 0,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 0,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 0,
+      "poll_resolve_ms": 0,
+      "download_ms": 0,
+      "wall_clock_ms": 2868,
+      "trace_engine": "",
+      "trace_events": 0
+    }
+  ],
+  "phase_summary": {
+    "task_queue_ms": {
+      "n": 4,
+      "min_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 0.0,
+      "mean_ms": 0.0
+    },
+    "admit_queue_ms": {
+      "n": 4,
+      "min_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 0.0,
+      "mean_ms": 0.0
+    },
+    "ps_queue_ms": {
+      "n": 4,
+      "min_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 0.0,
+      "mean_ms": 0.0
+    },
+    "account_queue_ms": {
+      "n": 4,
+      "min_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 0.0,
+      "mean_ms": 0.0
+    },
+    "ss_queue_ms": {
+      "n": 4,
+      "min_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 0.0,
+      "mean_ms": 0.0
+    },
+    "sse_stream_ms": {
+      "n": 4,
+      "min_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 0.0,
+      "mean_ms": 0.0
+    },
+    "poll_resolve_ms": {
+      "n": 4,
+      "min_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 0.0,
+      "mean_ms": 0.0
+    },
+    "download_ms": {
+      "n": 4,
+      "min_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 0.0,
+      "mean_ms": 0.0
+    },
+    "wall_clock_ms": {
+      "n": 4,
+      "min_ms": 2868.0,
+      "p50_ms": 2909.0,
+      "p95_ms": 146218.0,
+      "max_ms": 146218.0,
+      "mean_ms": 38724.8
+    }
+  },
+  "wall_share_pct": {
+    "task_queue_ms": 0.0,
+    "admit_queue_ms": 0.0,
+    "ps_queue_ms": 0.0,
+    "account_queue_ms": 0.0,
+    "ss_queue_ms": 0.0,
+    "sse_stream_ms": 0.0,
+    "poll_resolve_ms": 0.0,
+    "download_ms": 0.0
+  },
+  "serial_compare": {
+    "serial10_ref": "PROD-serial10-20260724T143921Z.json",
+    "serial10": {
+      "task_queue_ms": 0.0,
+      "admit_queue_ms": 0.0,
+      "ps_queue_ms": 0.0,
+      "account_queue_ms": 5.9,
+      "ss_queue_ms": 0.0,
+      "sse_stream_ms": 79.1,
+      "poll_resolve_ms": 6.3,
+      "download_ms": 1.8
+    },
+    "conc10": {
+      "task_queue_ms": 0.0,
+      "admit_queue_ms": 0.0,
+      "ps_queue_ms": 0.0,
+      "account_queue_ms": 0.0,
+      "ss_queue_ms": 0.0,
+      "sse_stream_ms": 0.0,
+      "poll_resolve_ms": 0.0,
+      "download_ms": 0.0
+    }
+  },
+  "generated_at": "2026-07-25T01:59:21.730921+00:00"
+}

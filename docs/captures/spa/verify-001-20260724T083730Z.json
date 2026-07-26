@@ -1,0 +1,87 @@
+{
+  "generated_at": "2026-07-24T08:38:36.092636+00:00",
+  "since": "2026-07-24 08:37:40",
+  "email": "qaflowakjewai6ps@proton.me",
+  "results": [
+    {
+      "tag": "c1",
+      "ok": true,
+      "http_code": 200,
+      "elapsed_secs": 38.67,
+      "b64_len": 1074388,
+      "error": null
+    },
+    {
+      "tag": "c2",
+      "ok": true,
+      "http_code": 200,
+      "elapsed_secs": 38.76,
+      "b64_len": 914540,
+      "error": null
+    }
+  ],
+  "checks": {
+    "both_ok": true,
+    "call_log_rows": 2,
+    "unique_task_ids": 2,
+    "max_logs_per_task": 1,
+    "thin_without_task_id": 0,
+    "all_tasks_single_log": true,
+    "all_have_phase_chips": true,
+    "api_logs_limit_200_ok": true,
+    "api_logs_limit_200_count": 200
+  },
+  "logs": [
+    {
+      "time": "2026-07-24 08:38:23",
+      "summary": "文生图调用完成",
+      "task_id": "sync-as51OlDsHKUIu_997SLyGg",
+      "status": "success",
+      "total_wall_ms": 38693,
+      "phase_timings_ms": {
+        "admit_queue_ms": 0,
+        "upload_queue_ms": 0,
+        "ps_queue_ms": 0,
+        "ss_queue_ms": 0,
+        "account_queue_ms": 1371,
+        "download_queue_ms": 0,
+        "upload_ms": 0,
+        "ps_ms": 0,
+        "ss_ms": 32763,
+        "sse_stream_ms": 23505,
+        "download_ms": 1241,
+        "wall_clock_ms": 38573
+      },
+      "completion_tokens": 1650,
+      "tokens_per_sec": 70.2,
+      "upload_bytes": null,
+      "download_bytes": null
+    },
+    {
+      "time": "2026-07-24 08:38:23",
+      "summary": "文生图调用完成",
+      "task_id": "sync-384qRO7GhAqydpcLpO06eg",
+      "status": "success",
+      "total_wall_ms": 38659,
+      "phase_timings_ms": {
+        "admit_queue_ms": 0,
+        "upload_queue_ms": 0,
+        "ps_queue_ms": 0,
+        "ss_queue_ms": 0,
+        "account_queue_ms": 2542,
+        "download_queue_ms": 0,
+        "upload_ms": 0,
+        "ps_ms": 0,
+        "ss_ms": 32713,
+        "sse_stream_ms": 21955,
+        "download_ms": 1493,
+        "wall_clock_ms": 37513
+      },
+      "completion_tokens": 1650,
+      "tokens_per_sec": 75.15,
+      "upload_bytes": null,
+      "download_bytes": null
+    }
+  ],
+  "pass": true
+}

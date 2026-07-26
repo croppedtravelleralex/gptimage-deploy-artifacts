@@ -1,0 +1,319 @@
+{
+  "stamp": "20260725T021551Z",
+  "prompt_tag": "PROD-conc10-20260725T021551Z",
+  "runs_planned": 10,
+  "runs_executed": 10,
+  "ok_count": 2,
+  "pass": false,
+  "trace_engine": "rust",
+  "trace_event_count_mean": 16.0,
+  "conc_wall_ms": 65149,
+  "dispatch_emails": [
+    "emberevan8683@outlook.com",
+    "enricoalfred9264@outlook.com",
+    "felicitypamela2673@outlook.com",
+    "ivetterock54353@outlook.com",
+    "qaflowakjewai6ps@proton.me",
+    "qaflowgq5wyuxhe9@proton.me",
+    "qaflowwrg2ptcd05@proton.me",
+    "qaflowyi59i282fx@proton.me"
+  ],
+  "http_results": [
+    {
+      "run": 1,
+      "account_email": "enricoalfred9264@outlook.com",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 332,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: sync admission seats full",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 180
+        },
+        "code": "image_service_busy"
+      }
+    },
+    {
+      "run": 2,
+      "account_email": "felicitypamela2673@outlook.com",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 346,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: sync admission seats full",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 180
+        },
+        "code": "image_service_busy"
+      }
+    },
+    {
+      "run": 3,
+      "account_email": "ivetterock54353@outlook.com",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 340,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: sync admission seats full",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 180
+        },
+        "code": "image_service_busy"
+      }
+    },
+    {
+      "run": 4,
+      "account_email": "qaflowakjewai6ps@proton.me",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 335,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: sync admission seats full",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 180
+        },
+        "code": "image_service_busy"
+      }
+    },
+    {
+      "run": 5,
+      "account_email": "qaflowgq5wyuxhe9@proton.me",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 333,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: sync admission seats full",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 180
+        },
+        "code": "image_service_busy"
+      }
+    },
+    {
+      "run": 6,
+      "account_email": "qaflowwrg2ptcd05@proton.me",
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 65131,
+      "b64_len": 2300600,
+      "error": null
+    },
+    {
+      "run": 7,
+      "account_email": "qaflowyi59i282fx@proton.me",
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 57389,
+      "b64_len": 2817544,
+      "error": null
+    },
+    {
+      "run": 8,
+      "account_email": "emberevan8683@outlook.com",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 337,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: sync admission seats full",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 180
+        },
+        "code": "image_service_busy"
+      }
+    },
+    {
+      "run": 9,
+      "account_email": "enricoalfred9264@outlook.com",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 340,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: sync admission seats full",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 180
+        },
+        "code": "image_service_busy"
+      }
+    },
+    {
+      "run": 10,
+      "account_email": "felicitypamela2673@outlook.com",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 333,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: sync admission seats full",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 180
+        },
+        "code": "image_service_busy"
+      }
+    }
+  ],
+  "http_latency_ms": {
+    "n": 10,
+    "min_ms": 332.0,
+    "p50_ms": 337.0,
+    "p95_ms": 65131.0,
+    "max_ms": 65131.0,
+    "mean_ms": 12521.6
+  },
+  "phase_rows": [
+    {
+      "time": "2026-07-25 10:17:05",
+      "account_email": "qaflowwrg2ptcd05@proton.me",
+      "status": "success",
+      "task_queue_ms": 20726,
+      "admit_queue_ms": 3,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 140,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 22473,
+      "poll_resolve_ms": 0,
+      "download_ms": 547,
+      "wall_clock_ms": 36273,
+      "trace_engine": "rust",
+      "trace_events": 16
+    },
+    {
+      "time": "2026-07-25 10:17:12",
+      "account_email": "ivetterock54353@outlook.com",
+      "status": "success",
+      "task_queue_ms": 20590,
+      "admit_queue_ms": 7,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 309,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 34791,
+      "poll_resolve_ms": 0,
+      "download_ms": 993,
+      "wall_clock_ms": 44237,
+      "trace_engine": "rust",
+      "trace_events": 16
+    }
+  ],
+  "phase_summary": {
+    "task_queue_ms": {
+      "n": 2,
+      "min_ms": 20590.0,
+      "p50_ms": 20590.0,
+      "p95_ms": 20726.0,
+      "max_ms": 20726.0,
+      "mean_ms": 20658.0
+    },
+    "admit_queue_ms": {
+      "n": 2,
+      "min_ms": 3.0,
+      "p50_ms": 3.0,
+      "p95_ms": 7.0,
+      "max_ms": 7.0,
+      "mean_ms": 5.0
+    },
+    "ps_queue_ms": {
+      "n": 2,
+      "min_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 0.0,
+      "mean_ms": 0.0
+    },
+    "account_queue_ms": {
+      "n": 2,
+      "min_ms": 140.0,
+      "p50_ms": 140.0,
+      "p95_ms": 309.0,
+      "max_ms": 309.0,
+      "mean_ms": 224.5
+    },
+    "ss_queue_ms": {
+      "n": 2,
+      "min_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 0.0,
+      "mean_ms": 0.0
+    },
+    "sse_stream_ms": {
+      "n": 2,
+      "min_ms": 22473.0,
+      "p50_ms": 22473.0,
+      "p95_ms": 34791.0,
+      "max_ms": 34791.0,
+      "mean_ms": 28632.0
+    },
+    "poll_resolve_ms": {
+      "n": 2,
+      "min_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 0.0,
+      "mean_ms": 0.0
+    },
+    "download_ms": {
+      "n": 2,
+      "min_ms": 547.0,
+      "p50_ms": 547.0,
+      "p95_ms": 993.0,
+      "max_ms": 993.0,
+      "mean_ms": 770.0
+    },
+    "wall_clock_ms": {
+      "n": 2,
+      "min_ms": 36273.0,
+      "p50_ms": 36273.0,
+      "p95_ms": 44237.0,
+      "max_ms": 44237.0,
+      "mean_ms": 40255.0
+    }
+  },
+  "wall_share_pct": {
+    "task_queue_ms": 51.3,
+    "admit_queue_ms": 0.0,
+    "ps_queue_ms": 0.0,
+    "account_queue_ms": 0.6,
+    "ss_queue_ms": 0.0,
+    "sse_stream_ms": 71.1,
+    "poll_resolve_ms": 0.0,
+    "download_ms": 1.9
+  },
+  "serial_compare": {
+    "serial10_ref": "PROD-serial10-20260724T143921Z.json",
+    "serial10": {
+      "task_queue_ms": 0.0,
+      "admit_queue_ms": 0.0,
+      "ps_queue_ms": 0.0,
+      "account_queue_ms": 5.9,
+      "ss_queue_ms": 0.0,
+      "sse_stream_ms": 79.1,
+      "poll_resolve_ms": 6.3,
+      "download_ms": 1.8
+    },
+    "conc10": {
+      "task_queue_ms": 51.3,
+      "admit_queue_ms": 0.0,
+      "ps_queue_ms": 0.0,
+      "account_queue_ms": 0.6,
+      "ss_queue_ms": 0.0,
+      "sse_stream_ms": 71.1,
+      "poll_resolve_ms": 0.0,
+      "download_ms": 1.9
+    }
+  },
+  "generated_at": "2026-07-25T02:17:36.588549+00:00"
+}

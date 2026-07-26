@@ -21,6 +21,8 @@ type ImageComposerProps = {
   imageModel: ImageModel;
   imageModels: ImageModel[];
   availableQuota: string;
+  availableQuotaDetail?: string;
+  quotaRefreshAge?: string;
   activeTaskCount: number;
   referenceImages: Array<{ name: string; dataUrl: string }>;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
@@ -33,6 +35,10 @@ type ImageComposerProps = {
   onImageHeightChange: (value: string) => void;
   onImageQualityChange: (value: string) => void;
   onImageModelChange: (value: ImageModel) => void;
+  promptEnhance?: boolean;
+  promptEnhanceLocale?: string;
+  onPromptEnhanceChange?: (value: boolean) => void;
+  onPromptEnhanceLocaleChange?: (value: string) => void;
   onSubmit: () => void | Promise<void>;
   onPickReferenceImage: () => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
@@ -91,6 +97,8 @@ export function ImageComposer({
   imageModel,
   imageModels,
   availableQuota,
+  availableQuotaDetail,
+  quotaRefreshAge,
   activeTaskCount,
   referenceImages,
   textareaRef,
@@ -103,6 +111,10 @@ export function ImageComposer({
   onImageHeightChange,
   onImageQualityChange,
   onImageModelChange,
+  promptEnhance = false,
+  promptEnhanceLocale = "en",
+  onPromptEnhanceChange,
+  onPromptEnhanceLocaleChange,
   onSubmit,
   onPickReferenceImage,
   onReferenceImageChange,
@@ -317,8 +329,17 @@ export function ImageComposer({
                     <ImagePlus className="size-3.5 sm:size-4" />
                     <span className="hidden sm:inline">{referenceImages.length > 0 ? "添加参考图" : "上传"}</span>
                   </Button>
-                  <div className="shrink-0 rounded-full bg-stone-100 px-2 py-1 text-[10px] font-medium text-stone-600 sm:px-3 sm:py-2 sm:text-xs">
-                    <span className="hidden sm:inline">剩余额度 </span>{availableQuota}
+                  <div
+                    className="flex shrink-0 items-center gap-1.5 rounded-full bg-stone-100 px-2 py-1 text-[10px] font-medium text-stone-600 sm:px-3 sm:py-2 sm:text-xs"
+                    title={availableQuotaDetail || "已核对且可参与生图调度的额度合计"}
+                  >
+                    {quotaRefreshAge ? (
+                      <span className="text-stone-400">{quotaRefreshAge}</span>
+                    ) : null}
+                    <span>
+                      <span className="hidden sm:inline">可用生图额度 </span>
+                      {availableQuota}
+                    </span>
                   </div>
                   {activeTaskCount > 0 && (
                     <div className="flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-[10px] font-medium text-amber-700 sm:gap-1.5 sm:px-3 sm:py-2 sm:text-xs">
@@ -412,6 +433,36 @@ export function ImageComposer({
                                 </button>
                               );
                             })}
+                          </div>
+                        </div>
+                        <div className="mb-3">
+                          <div className="mb-2 text-sm font-medium text-stone-900">Prompt 增强</div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              className={cn(
+                                "h-9 rounded-full border px-3 text-sm transition",
+                                promptEnhance
+                                  ? "border-stone-950 bg-stone-950 text-white"
+                                  : "border-stone-200 bg-white text-stone-800 hover:border-stone-300",
+                              )}
+                              onClick={() => onPromptEnhanceChange?.(!promptEnhance)}
+                            >
+                              {promptEnhance ? "已开启" : "关闭"}
+                            </button>
+                            <Select
+                              value={promptEnhanceLocale}
+                              onValueChange={(value) => onPromptEnhanceLocaleChange?.(value)}
+                              disabled={!promptEnhance}
+                            >
+                              <SelectTrigger className="h-9 w-[140px] rounded-full border-stone-200 bg-white text-sm shadow-none">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent className="z-[120]">
+                                <SelectItem value="en">英文扩写</SelectItem>
+                                <SelectItem value="same_as_user">跟用户语种</SelectItem>
+                              </SelectContent>
+                            </Select>
                           </div>
                         </div>
                         <div className="mb-3">

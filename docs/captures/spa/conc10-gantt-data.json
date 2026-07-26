@@ -1,0 +1,773 @@
+{
+  "rounds": [
+    {
+      "run_id": "pipe-conc10-20260723T071912Z",
+      "label": "20260723T071912Z",
+      "span_ms": 111276.6,
+      "tasks": [
+        {
+          "task_id": "00",
+          "wall_clock_ms": 39249,
+          "start_ms": 0.0,
+          "end_ms": 39394.0,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 31035.9
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 38092
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 1100
+            }
+          ]
+        },
+        {
+          "task_id": "01",
+          "wall_clock_ms": 48002,
+          "start_ms": 2.4,
+          "end_ms": 49581.3,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 40853.2
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 46162
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 1737
+            }
+          ]
+        },
+        {
+          "task_id": "02",
+          "wall_clock_ms": 50559,
+          "start_ms": 7.3,
+          "end_ms": 54890.7,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 42060.2
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 48889
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 1580
+            }
+          ]
+        },
+        {
+          "task_id": "03",
+          "wall_clock_ms": 49466,
+          "start_ms": 5.2,
+          "end_ms": 52360.9,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 41307.3
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 48404
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 1009
+            }
+          ]
+        },
+        {
+          "task_id": "04",
+          "wall_clock_ms": 69553,
+          "start_ms": 12.8,
+          "end_ms": 76573.5,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 68790.5
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 68454
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 1063
+            }
+          ]
+        },
+        {
+          "task_id": "05",
+          "wall_clock_ms": 90597,
+          "start_ms": 11.2,
+          "end_ms": 96321.0,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 59334.899999999994
+            },
+            {
+              "key": "ss_queue_ms",
+              "label": "sS排队",
+              "ms": 24919
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 3580
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 3489
+            }
+          ]
+        },
+        {
+          "task_id": "06",
+          "wall_clock_ms": 103061,
+          "start_ms": 14.6,
+          "end_ms": 111276.6,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 102516.6
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 4230
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 1734
+            }
+          ]
+        },
+        {
+          "task_id": "07",
+          "wall_clock_ms": 75768,
+          "start_ms": 18.5,
+          "end_ms": 87055.2,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 78257.8
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 1217
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 500
+            }
+          ]
+        },
+        {
+          "task_id": "08",
+          "wall_clock_ms": 74898,
+          "start_ms": 16.8,
+          "end_ms": 84519.2,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 76170.4
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 73567
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 1293
+            }
+          ]
+        },
+        {
+          "task_id": "09",
+          "wall_clock_ms": 65998,
+          "start_ms": 20.1,
+          "end_ms": 78934.8,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 70187.7
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 65010
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 951
+            }
+          ]
+        }
+      ],
+      "wall_p50": 67775.5,
+      "wall_p95": 103061
+    },
+    {
+      "run_id": "pipe-conc10-20260723T072133Z",
+      "label": "20260723T072133Z",
+      "span_ms": 104583.0,
+      "tasks": [
+        {
+          "task_id": "00",
+          "wall_clock_ms": 40045,
+          "start_ms": 7.1,
+          "end_ms": 42938.2,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 32798.2
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 38172
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 1824
+            }
+          ]
+        },
+        {
+          "task_id": "01",
+          "wall_clock_ms": 52369,
+          "start_ms": 5.0,
+          "end_ms": 54032.2,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 46761.8
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 51915
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 413
+            }
+          ]
+        },
+        {
+          "task_id": "02",
+          "wall_clock_ms": 43575,
+          "start_ms": 0.0,
+          "end_ms": 43707.9,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 36466.6
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 42538
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 994
+            }
+          ]
+        },
+        {
+          "task_id": "03",
+          "wall_clock_ms": 46148,
+          "start_ms": 14.7,
+          "end_ms": 52587.1,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 44444.4
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 44523
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 1588
+            }
+          ]
+        },
+        {
+          "task_id": "04",
+          "wall_clock_ms": 38656,
+          "start_ms": 11.7,
+          "end_ms": 42708.2,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 34564.5
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 37737
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 862
+            }
+          ]
+        },
+        {
+          "task_id": "05",
+          "wall_clock_ms": 69378,
+          "start_ms": 16.7,
+          "end_ms": 77156.8,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 35800.5
+            },
+            {
+              "key": "ss_queue_ms",
+              "label": "sS排队",
+              "ms": 33252
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 35385
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 696
+            }
+          ]
+        },
+        {
+          "task_id": "06",
+          "wall_clock_ms": 46738,
+          "start_ms": 13.2,
+          "end_ms": 51973.8,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 43788.4
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 46048
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 639
+            }
+          ]
+        },
+        {
+          "task_id": "07",
+          "wall_clock_ms": 77068,
+          "start_ms": 21.0,
+          "end_ms": 87380.8,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 47091.100000000006
+            },
+            {
+              "key": "ss_queue_ms",
+              "label": "sS排队",
+              "ms": 32359
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 43823
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 848
+            }
+          ]
+        },
+        {
+          "task_id": "08",
+          "wall_clock_ms": 69597,
+          "start_ms": 19.5,
+          "end_ms": 78754.0,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 35982.100000000006
+            },
+            {
+              "key": "ss_queue_ms",
+              "label": "sS排队",
+              "ms": 32606
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 36048
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 899
+            }
+          ]
+        },
+        {
+          "task_id": "09",
+          "wall_clock_ms": 92567,
+          "start_ms": 22.4,
+          "end_ms": 104583.0,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 56892.3
+            },
+            {
+              "key": "ss_queue_ms",
+              "label": "sS排队",
+              "ms": 38948
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 2096
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 1781
+            }
+          ]
+        }
+      ],
+      "wall_p50": 49553.5,
+      "wall_p95": 92567
+    },
+    {
+      "run_id": "pipe-conc10-20260723T072340Z",
+      "label": "20260723T072340Z",
+      "span_ms": 166877.9,
+      "tasks": [
+        {
+          "task_id": "00",
+          "wall_clock_ms": 78941,
+          "start_ms": 5.3,
+          "end_ms": 80144.6,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 72065.0
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 77949
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 940
+            }
+          ]
+        },
+        {
+          "task_id": "01",
+          "wall_clock_ms": 39386,
+          "start_ms": 11.0,
+          "end_ms": 43455.4,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 35825.3
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 38793
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 542
+            }
+          ]
+        },
+        {
+          "task_id": "02",
+          "wall_clock_ms": 59488,
+          "start_ms": 15.4,
+          "end_ms": 66222.8,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 33721.1
+            },
+            {
+              "key": "ss_queue_ms",
+              "label": "sS排队",
+              "ms": 23872
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 33946
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 1621
+            }
+          ]
+        },
+        {
+          "task_id": "03",
+          "wall_clock_ms": 31419,
+          "start_ms": 0.0,
+          "end_ms": 31528.7,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 23844.2
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 30486
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 877
+            }
+          ]
+        },
+        {
+          "task_id": "04",
+          "wall_clock_ms": 127925,
+          "start_ms": 18.2,
+          "end_ms": 137813.8,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 74394.2
+            },
+            {
+              "key": "ss_queue_ms",
+              "label": "sS排队",
+              "ms": 54661
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 72120
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 1104
+            }
+          ]
+        },
+        {
+          "task_id": "05",
+          "wall_clock_ms": 102388,
+          "start_ms": 19.5,
+          "end_ms": 113884.0,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 38026.600000000006
+            },
+            {
+              "key": "ss_queue_ms",
+              "label": "sS排队",
+              "ms": 67666
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 33806
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 860
+            }
+          ]
+        },
+        {
+          "task_id": "06",
+          "wall_clock_ms": 164210,
+          "start_ms": 9.6,
+          "end_ms": 166877.9,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 152400.7
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 2669
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 1390
+            }
+          ]
+        },
+        {
+          "task_id": "07",
+          "wall_clock_ms": 88834,
+          "start_ms": 16.8,
+          "end_ms": 97243.8,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 54079.8
+            },
+            {
+              "key": "ss_queue_ms",
+              "label": "sS排队",
+              "ms": 34453
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 52660
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 1668
+            }
+          ]
+        },
+        {
+          "task_id": "08",
+          "wall_clock_ms": 133145,
+          "start_ms": 20.9,
+          "end_ms": 146430.6,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 56080.0
+            },
+            {
+              "key": "ss_queue_ms",
+              "label": "sS排队",
+              "ms": 82219
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 49790
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 1095
+            }
+          ]
+        },
+        {
+          "task_id": "09",
+          "wall_clock_ms": 96777,
+          "start_ms": 14.1,
+          "end_ms": 102092.9,
+          "segments": [
+            {
+              "key": "pre_ss_wait",
+              "label": "准入→sS",
+              "ms": 94531.8
+            },
+            {
+              "key": "ss_ms",
+              "label": "sS生图",
+              "ms": 95886
+            },
+            {
+              "key": "download_ms",
+              "label": "下载",
+              "ms": 841
+            }
+          ]
+        }
+      ],
+      "wall_p50": 92805.5,
+      "wall_p95": 164210
+    }
+  ],
+  "source": "image_tasks.db on Panda",
+  "suite": "acceptance-90s-picture_v2-20260723"
+}

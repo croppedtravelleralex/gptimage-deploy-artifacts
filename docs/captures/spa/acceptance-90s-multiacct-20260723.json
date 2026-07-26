@@ -1,0 +1,1445 @@
+{
+  "suite_id": "acceptance-90s-multiacct-20260723",
+  "started_at": "2026-07-23T08:47:11.446270+00:00",
+  "account_email": "qaflowakjewai6ps@proton.me",
+  "protocol": "picture_v2",
+  "image_gen_deadline_secs": 90.0,
+  "sse_diagnostic_read_secs": 120.0,
+  "host_out": "/root/gptimage/data/runlogs/spa_repro/acceptance-90s-multiacct-20260723",
+  "container_out": "/app/data/runlogs/spa_repro/acceptance-90s-multiacct-20260723",
+  "serial5": {
+    "evidence_path": "/root/gptimage/data/runlogs/spa_repro/acceptance-90s-multiacct-20260723/serial5.json",
+    "summary": {
+      "planned": 5,
+      "attempted": 5,
+      "ok": 5,
+      "failed": 0,
+      "not_run": 0,
+      "no_image_gen": 0,
+      "cf403_propagated": 0,
+      "stopped_early": false,
+      "stop_reason": null,
+      "serial5_passed": true,
+      "failure_classes": {
+        "tool_args_as_text": 0,
+        "late_image_gen_after_gate": 0,
+        "no_image_gen_quiet_stream": 0,
+        "no_image_gen_within_gate": 0
+      }
+    },
+    "identity": {
+      "account_email": "qaflowakjewai6ps@proton.me",
+      "proxy_hash": "49675fdabb54"
+    },
+    "constraints": {
+      "planned_requests": 5,
+      "image_gen_deadline_secs": 90.0,
+      "sse_diagnostic_read_secs": 120.0,
+      "round_gap_secs": 20.0,
+      "concurrency": 1
+    },
+    "per_round": [
+      {
+        "round": 1,
+        "ok": true,
+        "failure_class": null,
+        "error": "",
+        "total_ms": 47412,
+        "timings_ms": {
+          "egress_ms": 647,
+          "requirements_ms": 1293,
+          "prepare_ms": 210,
+          "conversation_start_ms": 0,
+          "sse_gate_ms": 90000,
+          "sse_diagnostic_ms": 0,
+          "sse_total_ms": 33093,
+          "sse_ms": 33093,
+          "sse_image_gen_ms": 26255,
+          "sse_first_event_ms": 0,
+          "poll_resolve_ms": 7317,
+          "download_ms": 1699,
+          "total_ms": 47412
+        },
+        "traffic": {
+          "http_calls": 18,
+          "req_bytes": 9529,
+          "resp_bytes": 3093419,
+          "total_bytes": 3102948
+        },
+        "cf_layers": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        },
+        "image_bytes": null
+      },
+      {
+        "round": 2,
+        "ok": true,
+        "failure_class": null,
+        "error": "",
+        "total_ms": 50098,
+        "timings_ms": {
+          "egress_ms": 301,
+          "requirements_ms": 1602,
+          "prepare_ms": 2341,
+          "conversation_start_ms": 0,
+          "sse_gate_ms": 90000,
+          "sse_diagnostic_ms": 0,
+          "sse_total_ms": 28251,
+          "sse_ms": 28251,
+          "sse_image_gen_ms": 23758,
+          "sse_first_event_ms": 0,
+          "poll_resolve_ms": 6831,
+          "download_ms": 1404,
+          "total_ms": 50098
+        },
+        "traffic": {
+          "http_calls": 18,
+          "req_bytes": 9253,
+          "resp_bytes": 3239298,
+          "total_bytes": 3248551
+        },
+        "cf_layers": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        },
+        "image_bytes": null
+      },
+      {
+        "round": 3,
+        "ok": true,
+        "failure_class": null,
+        "error": "",
+        "total_ms": 65691,
+        "timings_ms": {
+          "egress_ms": 255,
+          "requirements_ms": 1289,
+          "prepare_ms": 218,
+          "conversation_start_ms": 0,
+          "sse_gate_ms": 90000,
+          "sse_diagnostic_ms": 0,
+          "sse_total_ms": 52746,
+          "sse_ms": 52746,
+          "sse_image_gen_ms": 48041,
+          "sse_first_event_ms": 0,
+          "poll_resolve_ms": 6557,
+          "download_ms": 634,
+          "total_ms": 65691
+        },
+        "traffic": {
+          "http_calls": 18,
+          "req_bytes": 9593,
+          "resp_bytes": 2612746,
+          "total_bytes": 2622339
+        },
+        "cf_layers": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        },
+        "image_bytes": null
+      },
+      {
+        "round": 4,
+        "ok": true,
+        "failure_class": null,
+        "error": "",
+        "total_ms": 51403,
+        "timings_ms": {
+          "egress_ms": 721,
+          "requirements_ms": 1177,
+          "prepare_ms": 185,
+          "conversation_start_ms": 0,
+          "sse_gate_ms": 90000,
+          "sse_diagnostic_ms": 0,
+          "sse_total_ms": 38438,
+          "sse_ms": 38438,
+          "sse_image_gen_ms": 32397,
+          "sse_first_event_ms": 0,
+          "poll_resolve_ms": 6759,
+          "download_ms": 1317,
+          "total_ms": 51403
+        },
+        "traffic": {
+          "http_calls": 18,
+          "req_bytes": 9285,
+          "resp_bytes": 3076989,
+          "total_bytes": 3086274
+        },
+        "cf_layers": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        },
+        "image_bytes": null
+      },
+      {
+        "round": 5,
+        "ok": true,
+        "failure_class": null,
+        "error": "",
+        "total_ms": 63150,
+        "timings_ms": {
+          "egress_ms": 242,
+          "requirements_ms": 938,
+          "prepare_ms": 132,
+          "conversation_start_ms": 0,
+          "sse_gate_ms": 90000,
+          "sse_diagnostic_ms": 0,
+          "sse_total_ms": 49975,
+          "sse_ms": 49975,
+          "sse_image_gen_ms": 48266,
+          "sse_first_event_ms": 0,
+          "poll_resolve_ms": 7557,
+          "download_ms": 545,
+          "total_ms": 63150
+        },
+        "traffic": {
+          "http_calls": 18,
+          "req_bytes": 9597,
+          "resp_bytes": 2810186,
+          "total_bytes": 2819783
+        },
+        "cf_layers": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        },
+        "image_bytes": null
+      }
+    ],
+    "timing_total_ms": {
+      "n": 5,
+      "min": 47412.0,
+      "max": 65691.0,
+      "mean": 55550.8,
+      "p50": 51403.0,
+      "p95": 65691.0,
+      "p99": 65691.0,
+      "sum": 277754.0
+    },
+    "timing_phases_ms": {
+      "conversation_start_ms": {
+        "n": 5,
+        "min": 0.0,
+        "max": 0.0,
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "sum": 0.0
+      },
+      "download_ms": {
+        "n": 5,
+        "min": 545.0,
+        "max": 1699.0,
+        "mean": 1119.8,
+        "p50": 1317.0,
+        "p95": 1699.0,
+        "p99": 1699.0,
+        "sum": 5599.0
+      },
+      "egress_ms": {
+        "n": 5,
+        "min": 242.0,
+        "max": 721.0,
+        "mean": 433.2,
+        "p50": 301.0,
+        "p95": 721.0,
+        "p99": 721.0,
+        "sum": 2166.0
+      },
+      "poll_resolve_ms": {
+        "n": 5,
+        "min": 6557.0,
+        "max": 7557.0,
+        "mean": 7004.2,
+        "p50": 6831.0,
+        "p95": 7557.0,
+        "p99": 7557.0,
+        "sum": 35021.0
+      },
+      "prepare_ms": {
+        "n": 5,
+        "min": 132.0,
+        "max": 2341.0,
+        "mean": 617.2,
+        "p50": 210.0,
+        "p95": 2341.0,
+        "p99": 2341.0,
+        "sum": 3086.0
+      },
+      "requirements_ms": {
+        "n": 5,
+        "min": 938.0,
+        "max": 1602.0,
+        "mean": 1259.8,
+        "p50": 1289.0,
+        "p95": 1602.0,
+        "p99": 1602.0,
+        "sum": 6299.0
+      },
+      "sse_diagnostic_ms": {
+        "n": 5,
+        "min": 0.0,
+        "max": 0.0,
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "sum": 0.0
+      },
+      "sse_first_event_ms": {
+        "n": 5,
+        "min": 0.0,
+        "max": 0.0,
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "sum": 0.0
+      },
+      "sse_gate_ms": {
+        "n": 5,
+        "min": 90000.0,
+        "max": 90000.0,
+        "mean": 90000.0,
+        "p50": 90000.0,
+        "p95": 90000.0,
+        "p99": 90000.0,
+        "sum": 450000.0
+      },
+      "sse_image_gen_ms": {
+        "n": 5,
+        "min": 23758.0,
+        "max": 48266.0,
+        "mean": 35743.4,
+        "p50": 32397.0,
+        "p95": 48266.0,
+        "p99": 48266.0,
+        "sum": 178717.0
+      },
+      "sse_ms": {
+        "n": 5,
+        "min": 28251.0,
+        "max": 52746.0,
+        "mean": 40500.6,
+        "p50": 38438.0,
+        "p95": 52746.0,
+        "p99": 52746.0,
+        "sum": 202503.0
+      },
+      "sse_total_ms": {
+        "n": 5,
+        "min": 28251.0,
+        "max": 52746.0,
+        "mean": 40500.6,
+        "p50": 38438.0,
+        "p95": 52746.0,
+        "p99": 52746.0,
+        "sum": 202503.0
+      },
+      "total_ms": {
+        "n": 5,
+        "min": 47412.0,
+        "max": 65691.0,
+        "mean": 55550.8,
+        "p50": 51403.0,
+        "p95": 65691.0,
+        "p99": 65691.0,
+        "sum": 277754.0
+      }
+    },
+    "traffic_req_bytes": {
+      "n": 5,
+      "min": 9253.0,
+      "max": 9597.0,
+      "mean": 9451.4,
+      "p50": 9529.0,
+      "p95": 9597.0,
+      "p99": 9597.0,
+      "sum": 47257.0
+    },
+    "traffic_resp_bytes": {
+      "n": 5,
+      "min": 2612746.0,
+      "max": 3239298.0,
+      "mean": 2966527.6,
+      "p50": 3076989.0,
+      "p95": 3239298.0,
+      "p99": 3239298.0,
+      "sum": 14832638.0
+    },
+    "traffic_total_bytes": {
+      "n": 5,
+      "min": 2622339.0,
+      "max": 3248551.0,
+      "mean": 2975979.0,
+      "p50": 3086274.0,
+      "p95": 3248551.0,
+      "p99": 3248551.0,
+      "sum": 14879895.0
+    },
+    "traffic_sse_bytes": {
+      "n": 5,
+      "min": 0.0,
+      "max": 0.0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "sum": 0.0
+    }
+  },
+  "conc10_rounds": [
+    {
+      "report_path": "/root/gptimage/data/runlogs/spa_repro/acceptance-90s-multiacct-20260723/conc10-r1/pipe-conc10-20260723T085640Z.json",
+      "run_id": "pipe-conc10-20260723T085640Z",
+      "summary": {
+        "count": 10,
+        "submitted": 10,
+        "submit_ok": 10,
+        "wall_clock_ms": 240492.1,
+        "final_status_counts": {
+          "error": 6,
+          "success": 4
+        }
+      },
+      "wall_clock_ms": {
+        "n": 1,
+        "min": 240492.1,
+        "max": 240492.1,
+        "mean": 240492.1,
+        "p50": 240492.1,
+        "p95": 240492.1,
+        "p99": 240492.1,
+        "sum": 240492.1
+      },
+      "task_wall_clock_ms": {
+        "n": 0,
+        "min": null,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "sum": null
+      },
+      "ss_queue_ms": {
+        "n": 0,
+        "min": null,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "sum": null
+      },
+      "ps_queue_ms": {
+        "n": 0,
+        "min": null,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "sum": null
+      },
+      "submit_ms": {
+        "n": 10,
+        "min": 43.1,
+        "max": 120.48,
+        "mean": 79.743,
+        "p50": 75.97,
+        "p95": 120.48,
+        "p99": 120.48,
+        "sum": 797.43
+      },
+      "phase_timings_ms": {},
+      "poll_duration_secs": {
+        "n": 49,
+        "min": 0.14,
+        "max": 240.49,
+        "mean": 120.317,
+        "p50": 120.32,
+        "p95": 230.48,
+        "p99": 240.49,
+        "sum": 5895.52
+      },
+      "pipeline_snapshot_before": {
+        "in_flight": 0,
+        "ps": {
+          "name": "ps",
+          "limit": 10,
+          "active": 0,
+          "queued": 0
+        },
+        "ss": {
+          "name": "ss",
+          "limit": 10,
+          "active": 0,
+          "queued": 0
+        },
+        "upload": {
+          "name": "upload",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "download": {
+          "name": "download",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "ready_buffer": {
+          "bytes": 0,
+          "items": 0,
+          "ss_paused": false,
+          "max_bytes": 536870912,
+          "max_items": 32
+        },
+        "segments": []
+      },
+      "pipeline_snapshot_after": {
+        "in_flight": 0,
+        "ps": {
+          "name": "ps",
+          "limit": 10,
+          "active": 0,
+          "queued": 0
+        },
+        "ss": {
+          "name": "ss",
+          "limit": 10,
+          "active": 10,
+          "queued": 1
+        },
+        "upload": {
+          "name": "upload",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "download": {
+          "name": "download",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "ready_buffer": {
+          "bytes": 0,
+          "items": 0,
+          "ss_paused": false,
+          "max_bytes": 536870912,
+          "max_items": 32
+        },
+        "segments": [
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-03",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784797000.502409,
+            "ended_at": 1784797004.2121334
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-01",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784797001.8129618,
+            "ended_at": 1784797004.2726595
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-00",
+            "stage": "sse",
+            "slot": 2,
+            "started_at": 1784797003.333706,
+            "ended_at": 1784797007.917771
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-06",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784797004.4905183,
+            "ended_at": 1784797039.1508572
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-07",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784797005.8728259,
+            "ended_at": 1784797010.1088257
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-05",
+            "stage": "sse",
+            "slot": 3,
+            "started_at": 1784797007.205245,
+            "ended_at": 1784797011.343178
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-00",
+            "stage": "sse",
+            "slot": 2,
+            "started_at": 1784797007.917858
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-04",
+            "stage": "sse",
+            "slot": 4,
+            "started_at": 1784797008.405854,
+            "ended_at": 1784797093.4717107
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-00",
+            "stage": "sse",
+            "slot": 2,
+            "started_at": 1784797009.0182257
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-08",
+            "stage": "sse",
+            "slot": 6,
+            "started_at": 1784797009.9575088,
+            "ended_at": 1784797087.011416
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-07",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784797010.1088808
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-00",
+            "stage": "sse",
+            "slot": 2,
+            "started_at": 1784797010.124839
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-07",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784797011.1969194
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-02",
+            "stage": "sse",
+            "slot": 9,
+            "started_at": 1784797011.239299,
+            "ended_at": 1784797014.5192757
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-05",
+            "stage": "sse",
+            "slot": 3,
+            "started_at": 1784797011.343255
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-07",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784797014.5193868
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-09",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784797039.151131,
+            "ended_at": 1784797044.8003314
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-05",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784797044.8005512
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-09",
+            "stage": "sse",
+            "slot": 6,
+            "started_at": 1784797087.0116737
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T085640Z-conc10-05",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784797093.472029
+          }
+        ]
+      },
+      "final_items": [
+        {
+          "id": "pipe-conc10-20260723T085640Z-conc10-00",
+          "status": "error",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": "upstream CF edge blocked (403), please retry or switch proxy egress"
+        },
+        {
+          "id": "pipe-conc10-20260723T085640Z-conc10-01",
+          "status": "error",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": "cf_edge_block: /backend-api/conversation/init HTTP 403"
+        },
+        {
+          "id": "pipe-conc10-20260723T085640Z-conc10-02",
+          "status": "error",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": "cf_edge_block: /backend-api/conversation/init HTTP 403"
+        },
+        {
+          "id": "pipe-conc10-20260723T085640Z-conc10-03",
+          "status": "error",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": "cf_edge_block: /backend-api/conversation/init HTTP 403"
+        },
+        {
+          "id": "pipe-conc10-20260723T085640Z-conc10-04",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T085640Z-conc10-05",
+          "status": "error",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": "upstream CF edge blocked (403), please retry or switch proxy egress"
+        },
+        {
+          "id": "pipe-conc10-20260723T085640Z-conc10-06",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T085640Z-conc10-07",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T085640Z-conc10-08",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T085640Z-conc10-09",
+          "status": "error",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": "image task hard timeout before upstream completion (225.0s); no conversation_id captured"
+        }
+      ],
+      "submits": [
+        {
+          "idx": 0,
+          "client_task_id": "pipe-conc10-20260723T085640Z-conc10-00",
+          "preferred_account_email": "andersmia76491@outlook.com",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 99.18,
+          "task_id": "pipe-conc10-20260723T085640Z-conc10-00",
+          "body_status": "queued"
+        },
+        {
+          "idx": 1,
+          "client_task_id": "pipe-conc10-20260723T085640Z-conc10-01",
+          "preferred_account_email": "barnettregina91891@outlook.com",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 91.81,
+          "task_id": "pipe-conc10-20260723T085640Z-conc10-01",
+          "body_status": "queued"
+        },
+        {
+          "idx": 2,
+          "client_task_id": "pipe-conc10-20260723T085640Z-conc10-02",
+          "preferred_account_email": "dreamachristine11594@outlook.com",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 75.97,
+          "task_id": "pipe-conc10-20260723T085640Z-conc10-02",
+          "body_status": "queued"
+        },
+        {
+          "idx": 3,
+          "client_task_id": "pipe-conc10-20260723T085640Z-conc10-03",
+          "preferred_account_email": "felicitypamela2673@outlook.com",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 43.1,
+          "task_id": "pipe-conc10-20260723T085640Z-conc10-03",
+          "body_status": "queued"
+        },
+        {
+          "idx": 4,
+          "client_task_id": "pipe-conc10-20260723T085640Z-conc10-04",
+          "preferred_account_email": "ivetterock54353@outlook.com",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 120.48,
+          "task_id": "pipe-conc10-20260723T085640Z-conc10-04",
+          "body_status": "queued"
+        },
+        {
+          "idx": 5,
+          "client_task_id": "pipe-conc10-20260723T085640Z-conc10-05",
+          "preferred_account_email": "qaflow0ytb7bbp0z@proton.me",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 112.42,
+          "task_id": "pipe-conc10-20260723T085640Z-conc10-05",
+          "body_status": "queued"
+        },
+        {
+          "idx": 6,
+          "client_task_id": "pipe-conc10-20260723T085640Z-conc10-06",
+          "preferred_account_email": "qaflowakjewai6ps@proton.me",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 51.53,
+          "task_id": "pipe-conc10-20260723T085640Z-conc10-06",
+          "body_status": "queued"
+        },
+        {
+          "idx": 7,
+          "client_task_id": "pipe-conc10-20260723T085640Z-conc10-07",
+          "preferred_account_email": "qaflowfbdb3ovksr@proton.me",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 59.07,
+          "task_id": "pipe-conc10-20260723T085640Z-conc10-07",
+          "body_status": "queued"
+        },
+        {
+          "idx": 8,
+          "client_task_id": "pipe-conc10-20260723T085640Z-conc10-08",
+          "preferred_account_email": "qaflowgq5wyuxhe9@proton.me",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 64.76,
+          "task_id": "pipe-conc10-20260723T085640Z-conc10-08",
+          "body_status": "queued"
+        },
+        {
+          "idx": 9,
+          "client_task_id": "pipe-conc10-20260723T085640Z-conc10-09",
+          "preferred_account_email": "qaflowud630wbo2a@proton.me",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 79.11,
+          "task_id": "pipe-conc10-20260723T085640Z-conc10-09",
+          "body_status": "queued"
+        }
+      ],
+      "poll_log": [
+        {
+          "t_secs": 0.14,
+          "counts": {
+            "queued": 9,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 1,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 5.15,
+          "counts": {
+            "running": 2,
+            "error": 2,
+            "queued": 6
+          },
+          "pipeline_in_flight": 2,
+          "ss_active": 2,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 10.16,
+          "counts": {
+            "error": 3,
+            "queued": 2,
+            "running": 5
+          },
+          "pipeline_in_flight": 5,
+          "ss_active": 8,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 15.17,
+          "counts": {
+            "error": 4,
+            "running": 6
+          },
+          "pipeline_in_flight": 6,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 20.17,
+          "counts": {
+            "error": 4,
+            "running": 6
+          },
+          "pipeline_in_flight": 6,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 25.18,
+          "counts": {
+            "error": 4,
+            "running": 6
+          },
+          "pipeline_in_flight": 6,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 30.19,
+          "counts": {
+            "error": 4,
+            "running": 6
+          },
+          "pipeline_in_flight": 6,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 35.19,
+          "counts": {
+            "error": 4,
+            "running": 6
+          },
+          "pipeline_in_flight": 6,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 40.2,
+          "counts": {
+            "error": 4,
+            "running": 6
+          },
+          "pipeline_in_flight": 6,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 45.21,
+          "counts": {
+            "error": 4,
+            "running": 5,
+            "success": 1
+          },
+          "pipeline_in_flight": 5,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 50.21,
+          "counts": {
+            "error": 4,
+            "running": 5,
+            "success": 1
+          },
+          "pipeline_in_flight": 5,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 55.22,
+          "counts": {
+            "error": 4,
+            "running": 5,
+            "success": 1
+          },
+          "pipeline_in_flight": 5,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 60.23,
+          "counts": {
+            "error": 4,
+            "running": 5,
+            "success": 1
+          },
+          "pipeline_in_flight": 5,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 65.23,
+          "counts": {
+            "error": 4,
+            "running": 5,
+            "success": 1
+          },
+          "pipeline_in_flight": 5,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 70.24,
+          "counts": {
+            "error": 4,
+            "running": 4,
+            "success": 2
+          },
+          "pipeline_in_flight": 4,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 75.25,
+          "counts": {
+            "error": 4,
+            "running": 4,
+            "success": 2
+          },
+          "pipeline_in_flight": 4,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 80.26,
+          "counts": {
+            "error": 4,
+            "running": 4,
+            "success": 2
+          },
+          "pipeline_in_flight": 4,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 85.27,
+          "counts": {
+            "error": 4,
+            "running": 4,
+            "success": 2
+          },
+          "pipeline_in_flight": 4,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 90.28,
+          "counts": {
+            "error": 4,
+            "running": 3,
+            "success": 3
+          },
+          "pipeline_in_flight": 3,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 95.28,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 100.29,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 105.3,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 110.3,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 115.31,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 120.32,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 125.32,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 130.33,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 135.34,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 140.34,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 145.35,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 150.36,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 155.37,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 160.37,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 165.38,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 170.39,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 175.4,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 180.41,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 185.41,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 190.42,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 195.43,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 200.43,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 205.44,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 210.45,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 215.45,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 220.46,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 225.47,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 230.48,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 235.48,
+          "counts": {
+            "error": 5,
+            "success": 4,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 240.49,
+          "counts": {
+            "error": 6,
+            "success": 4
+          },
+          "pipeline_in_flight": 0,
+          "ss_active": 10,
+          "ss_queued": 1
+        }
+      ],
+      "round": 1,
+      "exit_code": 1
+    }
+  ],
+  "execution_log": [
+    {
+      "phase": "serial5",
+      "round": 1,
+      "exit_code": 0,
+      "wall_secs": 54.75,
+      "log_tail": "torage] Using database storage: sqlite:////app/data/accounts.db\n{\"phase\": \"egress\", \"mode\": \"panda_webshare\", \"ok\": true, \"ip\": \"92.113.246.176\", \"elapsed_ms\": 647}\n{\"phase\": \"requirements_ok\", \"mode\": \"panda_webshare\", \"ms\": 1293, \"attempt\": 1}\n{\"phase\": \"prepare_ok\", \"mode\": \"panda_webshare\", \"ms\": 210, \"conduit\": true}\n{\"phase\": \"sse_done\", \"mode\": \"panda_webshare\", \"ms\": 33093, \"cid\": \"6a61d598-eef0-83ec-b0b7-398e2928edd3\", \"has_image_gen\": true, \"file_ids\": [], \"chunks\": 21, \"deadline_hit\": false, \"late_image_gen\": false}\n{\"phase\": \"urls_resolved\", \"mode\": \"panda_webshare\", \"ms\": 7317, \"urls\": 1}\n{\"phase\": \"download_done\", \"mode\": \"panda_webshare\", \"ms\": 1699, \"images\": [{\"index\": 0, \"bytes\": 2422631, \"format\": \"png\", \"width\": 1402, \"height\": 1122, \"sha256\": \"8ae537c755d941c4da79963a641461056531b89dbc4eb2e9b39b4094c66493d8\", \"path\": \"image_0.png\"}], \"ok\": true}\n{\"round\": 1, \"account_email\": \"qaflowakjewai6ps@proton.me\", \"ok\": true, \"failure_class\": null, \"error\": null, \"timings_ms\": {\"egress_ms\": 647, \"requirements_ms\": 1293, \"prepare_ms\": 210, \"conversation_start_ms\": 0, \"sse_gate_ms\": 90000, \"sse_diagnostic_ms\": 0, \"sse_total_ms\": 33093, \"sse_ms\": 33093, \"sse_image_gen_ms\": 26255, \"sse_first_event_ms\": 0, \"poll_resolve_ms\": 7317, \"download_ms\": 1699, \"total_ms\": 47412}}\n{\"planned\": 5, \"attempted\": 1, \"ok\": 1, \"failed\": 0, \"not_run\": 4, \"no_image_gen\": 0, \"cf403_propagated\": 0, \"stopped_early\": false, \"stop_reason\": null, \"serial5_passed\": false, \"failure_classes\": {\"tool_args_as_text\": 0, \"late_image_gen_after_gate\": 0, \"no_image_gen_quiet_stream\": 0, \"no_image_gen_within_gate\": 0}}\nEXIT:0\n[INFO] {\"event\": \"image_resolve_poll_needed\", \"conversation_id\": \"6a61d598-eef0-83ec-b0b7-398e2928edd3\", \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_00000000b21081fbad071fd6925b909e\"], \"poll_timeout_secs\": 180.0}\n[INFO] {\"event\": \"image_poll_start\", \"conversation_id\": \"6a61d598-eef0-83ec-b0b7-398e2928edd3\", \"timeout_secs\": 180.0, \"initial_wait_secs\": 3.0, \"interval_secs\": 3.0, \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_00000000b21081fbad071fd6925b909e\"], \"poll_budget\": {\"attempt\": 0, \"conversation_gets\": 0, \"tasks_gets\": 0, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 180.0, \"exhausted_reason\": \"\"}}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61d598-eef0-83ec-b0b7-398e2928edd3\", \"attempt\": 1, \"file_ids\": [\"file_00000000b21081fbad071fd6925b909e\"], \"sediment_ids\": [\"file_00000000b21081fbad071fd6925b909e\"], \"poll_budget\": {\"attempt\": 1, \"conversation_gets\": 1, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 176.89, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit_pending_settle\", \"conversation_id\": \"6a61d598-eef0-83ec-b0b7-398e2928edd3\", \"file_ids\": [\"file_00000000b21081fbad071fd6925b909e\"], \"sediment_ids\": [\"file_00000000b21081fbad071fd6925b909e\"], \"settle_secs\": 2.0}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61d598-eef0-83ec-b0b7-398e2928edd3\", \"attempt\": 2, \"file_ids\": [\"file_00000000b21081fbad071fd6925b909e\"], \"sediment_ids\": [\"file_00000000b21081fbad071fd6925b909e\"], \"poll_budget\": {\"attempt\": 2, \"conversation_gets\": 2, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 174.3, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit\", \"conversation_id\": \"6a61d598-eef0-83ec-b0b7-398e2928edd3\", \"file_ids\": [\"file_00000000b21081fbad071fd6925b909e\"], \"sediment_ids\": [\"file_00000000b21081fbad071fd6925b909e\"]}\n[DEBUG] {\"event\": \"image_urls_resolved\", \"conversation_id\": \"6a61d598-eef0-83ec-b0b7-398e2928edd3\", \"file_ids\": [\"file_00000000b21081fbad071fd6925b909e\"], \"sediment_ids\": [\"file_00000000b21081fbad071fd6925b909e\"], \"urls\": [\"https://chatgpt.com/backend-api/estuary/content?id=file_00000000b21081fbad071fd6925b909e&fn=Rainy+urban+alley+at+dusk%281%29.png&cd=attachment&ts=495776&p=fs&cid=1&sig=0f268d7fe723dc19cbc6fcdd13e6c3c4b23fd82c328f7dedaf57dda5744d2e24&v=0\"]}\n"
+    },
+    {
+      "phase": "serial5",
+      "round": 2,
+      "exit_code": 0,
+      "wall_secs": 56.79,
+      "log_tail": "rage] Using database storage: sqlite:////app/data/accounts.db\n{\"phase\": \"egress\", \"mode\": \"panda_webshare\", \"ok\": true, \"ip\": \"92.113.246.176\", \"elapsed_ms\": 301}\n{\"phase\": \"requirements_ok\", \"mode\": \"panda_webshare\", \"ms\": 1602, \"attempt\": 1}\n{\"phase\": \"prepare_ok\", \"mode\": \"panda_webshare\", \"ms\": 2341, \"conduit\": true}\n{\"phase\": \"sse_done\", \"mode\": \"panda_webshare\", \"ms\": 28251, \"cid\": \"6a61d5e8-561c-83ec-88ea-c566b5004452\", \"has_image_gen\": true, \"file_ids\": [], \"chunks\": 11, \"deadline_hit\": false, \"late_image_gen\": false}\n{\"phase\": \"urls_resolved\", \"mode\": \"panda_webshare\", \"ms\": 6831, \"urls\": 1}\n{\"phase\": \"download_done\", \"mode\": \"panda_webshare\", \"ms\": 1404, \"images\": [{\"index\": 0, \"bytes\": 2561347, \"format\": \"png\", \"width\": 1402, \"height\": 1122, \"sha256\": \"3ba34ed278e33e4e331ad22c28b7384ec16807a36f133d1aa1c920230c3335e6\", \"path\": \"image_0.png\"}], \"ok\": true}\n{\"round\": 2, \"account_email\": \"qaflowakjewai6ps@proton.me\", \"ok\": true, \"failure_class\": null, \"error\": null, \"timings_ms\": {\"egress_ms\": 301, \"requirements_ms\": 1602, \"prepare_ms\": 2341, \"conversation_start_ms\": 0, \"sse_gate_ms\": 90000, \"sse_diagnostic_ms\": 0, \"sse_total_ms\": 28251, \"sse_ms\": 28251, \"sse_image_gen_ms\": 23758, \"sse_first_event_ms\": 0, \"poll_resolve_ms\": 6831, \"download_ms\": 1404, \"total_ms\": 50098}}\n{\"planned\": 5, \"attempted\": 2, \"ok\": 2, \"failed\": 0, \"not_run\": 3, \"no_image_gen\": 0, \"cf403_propagated\": 0, \"stopped_early\": false, \"stop_reason\": null, \"serial5_passed\": false, \"failure_classes\": {\"tool_args_as_text\": 0, \"late_image_gen_after_gate\": 0, \"no_image_gen_quiet_stream\": 0, \"no_image_gen_within_gate\": 0}}\nEXIT:0\n[INFO] {\"event\": \"image_resolve_poll_needed\", \"conversation_id\": \"6a61d5e8-561c-83ec-88ea-c566b5004452\", \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_00000000574c81f794c928e3c39ec65a\"], \"poll_timeout_secs\": 180.0}\n[INFO] {\"event\": \"image_poll_start\", \"conversation_id\": \"6a61d5e8-561c-83ec-88ea-c566b5004452\", \"timeout_secs\": 180.0, \"initial_wait_secs\": 3.0, \"interval_secs\": 3.0, \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_00000000574c81f794c928e3c39ec65a\"], \"poll_budget\": {\"attempt\": 0, \"conversation_gets\": 0, \"tasks_gets\": 0, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 180.0, \"exhausted_reason\": \"\"}}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61d5e8-561c-83ec-88ea-c566b5004452\", \"attempt\": 1, \"file_ids\": [\"file_00000000574c81f794c928e3c39ec65a\"], \"sediment_ids\": [\"file_00000000574c81f794c928e3c39ec65a\"], \"poll_budget\": {\"attempt\": 1, \"conversation_gets\": 1, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 177.1, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit_pending_settle\", \"conversation_id\": \"6a61d5e8-561c-83ec-88ea-c566b5004452\", \"file_ids\": [\"file_00000000574c81f794c928e3c39ec65a\"], \"sediment_ids\": [\"file_00000000574c81f794c928e3c39ec65a\"], \"settle_secs\": 2.0}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61d5e8-561c-83ec-88ea-c566b5004452\", \"attempt\": 2, \"file_ids\": [\"file_00000000574c81f794c928e3c39ec65a\"], \"sediment_ids\": [\"file_00000000574c81f794c928e3c39ec65a\"], \"poll_budget\": {\"attempt\": 2, \"conversation_gets\": 2, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 174.37, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit\", \"conversation_id\": \"6a61d5e8-561c-83ec-88ea-c566b5004452\", \"file_ids\": [\"file_00000000574c81f794c928e3c39ec65a\"], \"sediment_ids\": [\"file_00000000574c81f794c928e3c39ec65a\"]}\n[DEBUG] {\"event\": \"image_urls_resolved\", \"conversation_id\": \"6a61d5e8-561c-83ec-88ea-c566b5004452\", \"file_ids\": [\"file_00000000574c81f794c928e3c39ec65a\"], \"sediment_ids\": [\"file_00000000574c81f794c928e3c39ec65a\"], \"urls\": [\"https://chatgpt.com/backend-api/estuary/content?id=file_00000000574c81f794c928e3c39ec65a&fn=Rainy+urban+alley+at+dusk%282%29.png&cd=attachment&ts=495776&p=fs&cid=1&sig=b416589c1a3e5230cf194d3d505bd68daf74c79256e9493045f49056d2ffef84&v=0\"]}\n"
+    },
+    {
+      "phase": "serial5",
+      "round": 3,
+      "exit_code": 0,
+      "wall_secs": 73.26,
+      "log_tail": "te\n[storage] Using database storage: sqlite:////app/data/accounts.db\n{\"phase\": \"egress\", \"mode\": \"panda_webshare\", \"ok\": true, \"ip\": \"92.113.246.176\", \"elapsed_ms\": 255}\n{\"phase\": \"requirements_ok\", \"mode\": \"panda_webshare\", \"ms\": 1289, \"attempt\": 1}\n{\"phase\": \"prepare_ok\", \"mode\": \"panda_webshare\", \"ms\": 218, \"conduit\": true}\n{\"phase\": \"sse_done\", \"mode\": \"panda_webshare\", \"ms\": 52746, \"cid\": \"6a61d632-d088-83ec-8e5a-0bed3da7deb8\", \"has_image_gen\": true, \"file_ids\": [], \"chunks\": 22, \"deadline_hit\": false, \"late_image_gen\": false}\n{\"phase\": \"urls_resolved\", \"mode\": \"panda_webshare\", \"ms\": 6557, \"urls\": 1}\n{\"phase\": \"download_done\", \"mode\": \"panda_webshare\", \"ms\": 634, \"images\": [{\"index\": 0, \"bytes\": 2281746, \"format\": \"png\", \"width\": 1402, \"height\": 1122, \"sha256\": \"f01d1d6fa997e14cf58dca8cd9587e0aaaceb901b53a110a289438398041901f\", \"path\": \"image_0.png\"}], \"ok\": true}\n{\"round\": 3, \"account_email\": \"qaflowakjewai6ps@proton.me\", \"ok\": true, \"failure_class\": null, \"error\": null, \"timings_ms\": {\"egress_ms\": 255, \"requirements_ms\": 1289, \"prepare_ms\": 218, \"conversation_start_ms\": 0, \"sse_gate_ms\": 90000, \"sse_diagnostic_ms\": 0, \"sse_total_ms\": 52746, \"sse_ms\": 52746, \"sse_image_gen_ms\": 48041, \"sse_first_event_ms\": 0, \"poll_resolve_ms\": 6557, \"download_ms\": 634, \"total_ms\": 65691}}\n{\"planned\": 5, \"attempted\": 3, \"ok\": 3, \"failed\": 0, \"not_run\": 2, \"no_image_gen\": 0, \"cf403_propagated\": 0, \"stopped_early\": false, \"stop_reason\": null, \"serial5_passed\": false, \"failure_classes\": {\"tool_args_as_text\": 0, \"late_image_gen_after_gate\": 0, \"no_image_gen_quiet_stream\": 0, \"no_image_gen_within_gate\": 0}}\nEXIT:0\n[INFO] {\"event\": \"image_resolve_poll_needed\", \"conversation_id\": \"6a61d632-d088-83ec-8e5a-0bed3da7deb8\", \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_00000000f170820696aee9c3b0f9d703\"], \"poll_timeout_secs\": 180.0}\n[INFO] {\"event\": \"image_poll_start\", \"conversation_id\": \"6a61d632-d088-83ec-8e5a-0bed3da7deb8\", \"timeout_secs\": 180.0, \"initial_wait_secs\": 3.0, \"interval_secs\": 3.0, \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_00000000f170820696aee9c3b0f9d703\"], \"poll_budget\": {\"attempt\": 0, \"conversation_gets\": 0, \"tasks_gets\": 0, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 180.0, \"exhausted_reason\": \"\"}}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61d632-d088-83ec-8e5a-0bed3da7deb8\", \"attempt\": 1, \"file_ids\": [\"file_00000000f170820696aee9c3b0f9d703\"], \"sediment_ids\": [\"file_00000000f170820696aee9c3b0f9d703\"], \"poll_budget\": {\"attempt\": 1, \"conversation_gets\": 1, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 176.99, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit_pending_settle\", \"conversation_id\": \"6a61d632-d088-83ec-8e5a-0bed3da7deb8\", \"file_ids\": [\"file_00000000f170820696aee9c3b0f9d703\"], \"sediment_ids\": [\"file_00000000f170820696aee9c3b0f9d703\"], \"settle_secs\": 2.0}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61d632-d088-83ec-8e5a-0bed3da7deb8\", \"attempt\": 2, \"file_ids\": [\"file_00000000f170820696aee9c3b0f9d703\"], \"sediment_ids\": [\"file_00000000f170820696aee9c3b0f9d703\"], \"poll_budget\": {\"attempt\": 2, \"conversation_gets\": 2, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 174.35, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit\", \"conversation_id\": \"6a61d632-d088-83ec-8e5a-0bed3da7deb8\", \"file_ids\": [\"file_00000000f170820696aee9c3b0f9d703\"], \"sediment_ids\": [\"file_00000000f170820696aee9c3b0f9d703\"]}\n[DEBUG] {\"event\": \"image_urls_resolved\", \"conversation_id\": \"6a61d632-d088-83ec-8e5a-0bed3da7deb8\", \"file_ids\": [\"file_00000000f170820696aee9c3b0f9d703\"], \"sediment_ids\": [\"file_00000000f170820696aee9c3b0f9d703\"], \"urls\": [\"https://chatgpt.com/backend-api/estuary/content?id=file_00000000f170820696aee9c3b0f9d703&fn=Rainy+neon-lit+alley+at+dusk.png&cd=attachment&ts=495776&p=fs&cid=1&sig=dd35b990793e18c2e5dede9ecf0aa8c23dc9a5f91ff3f12ad92a3903a2000609&v=0\"]}\n"
+    },
+    {
+      "phase": "serial5",
+      "round": 4,
+      "exit_code": 0,
+      "wall_secs": 62.24,
+      "log_tail": "torage] Using database storage: sqlite:////app/data/accounts.db\n{\"phase\": \"egress\", \"mode\": \"panda_webshare\", \"ok\": true, \"ip\": \"92.113.246.176\", \"elapsed_ms\": 721}\n{\"phase\": \"requirements_ok\", \"mode\": \"panda_webshare\", \"ms\": 1177, \"attempt\": 1}\n{\"phase\": \"prepare_ok\", \"mode\": \"panda_webshare\", \"ms\": 185, \"conduit\": true}\n{\"phase\": \"sse_done\", \"mode\": \"panda_webshare\", \"ms\": 38438, \"cid\": \"6a61d692-6c84-83ec-ab69-dec56d4c0f76\", \"has_image_gen\": true, \"file_ids\": [], \"chunks\": 22, \"deadline_hit\": false, \"late_image_gen\": false}\n{\"phase\": \"urls_resolved\", \"mode\": \"panda_webshare\", \"ms\": 6759, \"urls\": 1}\n{\"phase\": \"download_done\", \"mode\": \"panda_webshare\", \"ms\": 1317, \"images\": [{\"index\": 0, \"bytes\": 2406331, \"format\": \"png\", \"width\": 1402, \"height\": 1122, \"sha256\": \"6abe6cec26698a758ef17e5ff3c8c4ed24669cc946faa859e6f43e16b3038316\", \"path\": \"image_0.png\"}], \"ok\": true}\n{\"round\": 4, \"account_email\": \"qaflowakjewai6ps@proton.me\", \"ok\": true, \"failure_class\": null, \"error\": null, \"timings_ms\": {\"egress_ms\": 721, \"requirements_ms\": 1177, \"prepare_ms\": 185, \"conversation_start_ms\": 0, \"sse_gate_ms\": 90000, \"sse_diagnostic_ms\": 0, \"sse_total_ms\": 38438, \"sse_ms\": 38438, \"sse_image_gen_ms\": 32397, \"sse_first_event_ms\": 0, \"poll_resolve_ms\": 6759, \"download_ms\": 1317, \"total_ms\": 51403}}\n{\"planned\": 5, \"attempted\": 4, \"ok\": 4, \"failed\": 0, \"not_run\": 1, \"no_image_gen\": 0, \"cf403_propagated\": 0, \"stopped_early\": false, \"stop_reason\": null, \"serial5_passed\": false, \"failure_classes\": {\"tool_args_as_text\": 0, \"late_image_gen_after_gate\": 0, \"no_image_gen_quiet_stream\": 0, \"no_image_gen_within_gate\": 0}}\nEXIT:0\n[INFO] {\"event\": \"image_resolve_poll_needed\", \"conversation_id\": \"6a61d692-6c84-83ec-ab69-dec56d4c0f76\", \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_0000000051b081fb8c8049fd43f08d14\"], \"poll_timeout_secs\": 180.0}\n[INFO] {\"event\": \"image_poll_start\", \"conversation_id\": \"6a61d692-6c84-83ec-ab69-dec56d4c0f76\", \"timeout_secs\": 180.0, \"initial_wait_secs\": 3.0, \"interval_secs\": 3.0, \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_0000000051b081fb8c8049fd43f08d14\"], \"poll_budget\": {\"attempt\": 0, \"conversation_gets\": 0, \"tasks_gets\": 0, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 180.0, \"exhausted_reason\": \"\"}}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61d692-6c84-83ec-ab69-dec56d4c0f76\", \"attempt\": 1, \"file_ids\": [\"file_0000000051b081fb8c8049fd43f08d14\"], \"sediment_ids\": [\"file_0000000051b081fb8c8049fd43f08d14\"], \"poll_budget\": {\"attempt\": 1, \"conversation_gets\": 1, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 176.86, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit_pending_settle\", \"conversation_id\": \"6a61d692-6c84-83ec-ab69-dec56d4c0f76\", \"file_ids\": [\"file_0000000051b081fb8c8049fd43f08d14\"], \"sediment_ids\": [\"file_0000000051b081fb8c8049fd43f08d14\"], \"settle_secs\": 2.0}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61d692-6c84-83ec-ab69-dec56d4c0f76\", \"attempt\": 2, \"file_ids\": [\"file_0000000051b081fb8c8049fd43f08d14\"], \"sediment_ids\": [\"file_0000000051b081fb8c8049fd43f08d14\"], \"poll_budget\": {\"attempt\": 2, \"conversation_gets\": 2, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 174.29, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit\", \"conversation_id\": \"6a61d692-6c84-83ec-ab69-dec56d4c0f76\", \"file_ids\": [\"file_0000000051b081fb8c8049fd43f08d14\"], \"sediment_ids\": [\"file_0000000051b081fb8c8049fd43f08d14\"]}\n[DEBUG] {\"event\": \"image_urls_resolved\", \"conversation_id\": \"6a61d692-6c84-83ec-ab69-dec56d4c0f76\", \"file_ids\": [\"file_0000000051b081fb8c8049fd43f08d14\"], \"sediment_ids\": [\"file_0000000051b081fb8c8049fd43f08d14\"], \"urls\": [\"https://chatgpt.com/backend-api/estuary/content?id=file_0000000051b081fb8c8049fd43f08d14&fn=Rainy+city+alley+at+dusk%282%29.png&cd=attachment&ts=495776&p=fs&cid=1&sig=b12ffa168a8a81eedd4a1c9c66914c2e10041d7f1cca20eecd50650a87a2e3b2&v=0\"]}\n"
+    },
+    {
+      "phase": "serial5",
+      "round": 5,
+      "exit_code": 0,
+      "wall_secs": 68.38,
+      "log_tail": "lite\n[storage] Using database storage: sqlite:////app/data/accounts.db\n{\"phase\": \"egress\", \"mode\": \"panda_webshare\", \"ok\": true, \"ip\": \"92.113.246.176\", \"elapsed_ms\": 242}\n{\"phase\": \"requirements_ok\", \"mode\": \"panda_webshare\", \"ms\": 938, \"attempt\": 1}\n{\"phase\": \"prepare_ok\", \"mode\": \"panda_webshare\", \"ms\": 132, \"conduit\": true}\n{\"phase\": \"sse_done\", \"mode\": \"panda_webshare\", \"ms\": 49975, \"cid\": \"6a61d6de-c2bc-83ec-b304-652683866a18\", \"has_image_gen\": true, \"file_ids\": [], \"chunks\": 11, \"deadline_hit\": false, \"late_image_gen\": false}\n{\"phase\": \"urls_resolved\", \"mode\": \"panda_webshare\", \"ms\": 7557, \"urls\": 1}\n{\"phase\": \"download_done\", \"mode\": \"panda_webshare\", \"ms\": 545, \"images\": [{\"index\": 0, \"bytes\": 2496471, \"format\": \"png\", \"width\": 1122, \"height\": 1402, \"sha256\": \"41270b420660d301e996ac02deed6123149a8ca897e6d661e67a5de30f08c09d\", \"path\": \"image_0.png\"}], \"ok\": true}\n{\"round\": 5, \"account_email\": \"qaflowakjewai6ps@proton.me\", \"ok\": true, \"failure_class\": null, \"error\": null, \"timings_ms\": {\"egress_ms\": 242, \"requirements_ms\": 938, \"prepare_ms\": 132, \"conversation_start_ms\": 0, \"sse_gate_ms\": 90000, \"sse_diagnostic_ms\": 0, \"sse_total_ms\": 49975, \"sse_ms\": 49975, \"sse_image_gen_ms\": 48266, \"sse_first_event_ms\": 0, \"poll_resolve_ms\": 7557, \"download_ms\": 545, \"total_ms\": 63150}}\n{\"planned\": 5, \"attempted\": 5, \"ok\": 5, \"failed\": 0, \"not_run\": 0, \"no_image_gen\": 0, \"cf403_propagated\": 0, \"stopped_early\": false, \"stop_reason\": null, \"serial5_passed\": true, \"failure_classes\": {\"tool_args_as_text\": 0, \"late_image_gen_after_gate\": 0, \"no_image_gen_quiet_stream\": 0, \"no_image_gen_within_gate\": 0}}\nEXIT:0\n[INFO] {\"event\": \"image_resolve_poll_needed\", \"conversation_id\": \"6a61d6de-c2bc-83ec-b304-652683866a18\", \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_00000000ac388206a33ff5ad7a162495\"], \"poll_timeout_secs\": 180.0}\n[INFO] {\"event\": \"image_poll_start\", \"conversation_id\": \"6a61d6de-c2bc-83ec-b304-652683866a18\", \"timeout_secs\": 180.0, \"initial_wait_secs\": 3.0, \"interval_secs\": 3.0, \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_00000000ac388206a33ff5ad7a162495\"], \"poll_budget\": {\"attempt\": 0, \"conversation_gets\": 0, \"tasks_gets\": 0, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 180.0, \"exhausted_reason\": \"\"}}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61d6de-c2bc-83ec-b304-652683866a18\", \"attempt\": 1, \"file_ids\": [\"file_00000000ac388206a33ff5ad7a162495\"], \"sediment_ids\": [\"file_00000000ac388206a33ff5ad7a162495\"], \"poll_budget\": {\"attempt\": 1, \"conversation_gets\": 1, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 176.91, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit_pending_settle\", \"conversation_id\": \"6a61d6de-c2bc-83ec-b304-652683866a18\", \"file_ids\": [\"file_00000000ac388206a33ff5ad7a162495\"], \"sediment_ids\": [\"file_00000000ac388206a33ff5ad7a162495\"], \"settle_secs\": 2.0}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61d6de-c2bc-83ec-b304-652683866a18\", \"attempt\": 2, \"file_ids\": [\"file_00000000ac388206a33ff5ad7a162495\"], \"sediment_ids\": [\"file_00000000ac388206a33ff5ad7a162495\"], \"poll_budget\": {\"attempt\": 2, \"conversation_gets\": 2, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 174.18, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit\", \"conversation_id\": \"6a61d6de-c2bc-83ec-b304-652683866a18\", \"file_ids\": [\"file_00000000ac388206a33ff5ad7a162495\"], \"sediment_ids\": [\"file_00000000ac388206a33ff5ad7a162495\"]}\n[DEBUG] {\"event\": \"image_urls_resolved\", \"conversation_id\": \"6a61d6de-c2bc-83ec-b304-652683866a18\", \"file_ids\": [\"file_00000000ac388206a33ff5ad7a162495\"], \"sediment_ids\": [\"file_00000000ac388206a33ff5ad7a162495\"], \"urls\": [\"https://chatgpt.com/backend-api/estuary/content?id=file_00000000ac388206a33ff5ad7a162495&fn=Rainy+evening+in+a+cozy+alley.png&cd=attachment&ts=495776&p=fs&cid=1&sig=7e37e48e5d2ee95db0b24b3fe69a79bbded13a271ca977d38f12f5b761b38d24&v=0\"]}\n"
+    },
+    {
+      "phase": "pipeline_conc10",
+      "round": 1,
+      "exit_code": 1,
+      "wall_secs": 243.77,
+      "log_tail": "{\"ok\": true, \"report\": \"/app/data/runlogs/spa_repro/acceptance-90s-multiacct-20260723/conc10-r1/pipe-conc10-20260723T085640Z.json\", \"summary\": {\"wall_clock_ms\": 240492.1, \"completed\": 4, \"failed\": 6, \"ss_queue_p50\": null, \"ss_queue_p95\": null, \"task_wall_p50\": null}}\nEXIT:1\n"
+    }
+  ],
+  "outcome": "conc10_failed_round_1",
+  "finished_at": "2026-07-23T09:00:53.085904+00:00",
+  "total_wall_secs": 821.64
+}

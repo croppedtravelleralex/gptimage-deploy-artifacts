@@ -84,9 +84,10 @@ class TextNurtureTests(unittest.TestCase):
         }
         backend = MagicMock()
         backend.account = dict(account)
+        backend_factory = MagicMock(side_effect=[backend, MagicMock(account=dict(account))])
         with patch("services.text_nurture_service._settings", return_value=settings), patch(
             "services.text_nurture_service.account_service.get_account", return_value=account
-        ), patch("services.text_nurture_service.OpenAIBackendAPI", return_value=backend), patch(
+        ), patch("services.text_nurture_service.OpenAIBackendAPI", side_effect=backend_factory), patch(
             "services.text_nurture_service.collect_text", side_effect=["one", "two"]
         ) as collect_mock, patch.object(svc, "_slot_allowed", return_value=True), patch(
             "services.text_nurture_service.log_llm_ops"
@@ -102,6 +103,7 @@ class TextNurtureTests(unittest.TestCase):
         self.assertTrue(out["ok"])
         self.assertEqual(out["turns"], 2)
         self.assertEqual(collect_mock.call_count, 2)
+        self.assertEqual(backend_factory.call_count, 2)
 
 
 class LlmOpsAgentTests(unittest.TestCase):

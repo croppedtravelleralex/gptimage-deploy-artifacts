@@ -6,6 +6,7 @@ import itertools
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -107,9 +108,10 @@ class LogService:
         return True
 
     def add(self, type: str, summary: str = "", detail: dict[str, Any] | None = None, **data: Any) -> None:
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
         item = {
             "id": uuid4().hex,
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "time": now.strftime("%Y-%m-%d %H:%M:%S"),
             "type": type,
             "summary": summary,
             "detail": detail or data,

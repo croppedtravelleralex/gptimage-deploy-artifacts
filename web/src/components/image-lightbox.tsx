@@ -100,6 +100,7 @@ export function ImageLightbox({
   const rafRef = useRef<number | null>(null);
   const [transform, setTransform] = useState<ImageTransform>({ scale: 1, x: 0, y: 0 });
   const [isGesturing, setIsGesturing] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
   const current = images[currentIndex];
   const hasPrev = currentIndex > 0;
   const hasNext = currentIndex < images.length - 1;
@@ -154,7 +155,21 @@ export function ImageLightbox({
 
   useEffect(() => {
     resetTransform();
+    setImageLoaded(false);
   }, [current?.id, open, resetTransform]);
+
+  useEffect(() => {
+    if (!open || !current?.src) return;
+    const img = new Image();
+    img.src = current.src;
+    if (img.complete) {
+      setImageLoaded(true);
+      return;
+    }
+    const handleLoad = () => setImageLoaded(true);
+    img.addEventListener("load", handleLoad);
+    return () => img.removeEventListener("load", handleLoad);
+  }, [open, current?.src]);
 
   useEffect(() => {
     return () => {
@@ -402,9 +417,11 @@ export function ImageLightbox({
               alt=""
               className={cn(
                 "max-h-[90vh] max-w-[90vw] rounded-lg object-contain will-change-transform",
-                isGesturing ? "" : "transition-transform duration-150 ease-out",
+                isGesturing ? "" : "transition-[transform,opacity,filter] duration-150 ease-out",
+                imageLoaded ? "opacity-100 blur-0" : "opacity-40 blur-sm",
                 transform.scale > minScale ? "cursor-grab active:cursor-grabbing" : "cursor-zoom-in",
               )}
+              onLoad={() => setImageLoaded(true)}
               style={{
                 transform: `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})`,
               }}

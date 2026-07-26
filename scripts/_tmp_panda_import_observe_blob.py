@@ -7,7 +7,7 @@ import json
 import sqlite3
 import sys
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -72,12 +72,17 @@ def main(argv: list[str] | None = None) -> int:
 
     backup_db(root / "data", backup_dir)
     now = utc_now()
+    from services.account_service import AccountService
+
+    grace_sec = AccountService.observe_import_refresh_grace_seconds()
+    refresh_after = (datetime.now(timezone.utc) + timedelta(seconds=grace_sec)).isoformat()
     staged = dict(blob)
     staged.setdefault("status", "正常")
     staged.setdefault("quota", 0)
     staged["panda_receive_state"] = "identity_isolated"
     staged["panda_sync_state"] = "ready"
     staged["panda_imported_at"] = now
+    staged["panda_observe_refresh_after"] = refresh_after
     staged["updated_at"] = now
     staged["invalid_count"] = 0
     staged["last_refresh_error"] = None
@@ -119,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
             "user_id": me_payload.get("id"),
             "panda_receive_state": "identity_isolated",
             "panda_sync_state": "ready",
+            "panda_observe_refresh_after": refresh_after,
             "status": str(staged.get("status") or "正常"),
             "quota": int(staged.get("quota") or 0),
             "panda_probe_last_error": None,
@@ -139,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         "quota": int(final.get("quota") or 0),
         "status": str(final.get("status") or ""),
         "panda_receive_state": str(final.get("panda_receive_state") or ""),
+        "panda_observe_refresh_after": str(final.get("panda_observe_refresh_after") or ""),
         "proxy": (str(final.get("proxy") or "").split("@")[-1] or "")[:40],
         "backup_dir": str(backup_dir),
     }

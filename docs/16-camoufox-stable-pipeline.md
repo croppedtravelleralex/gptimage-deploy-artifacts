@@ -59,7 +59,16 @@
 - 池文件（Panda）：`/root/gptimage/data/runlogs/webshare_good_csrf_200.secret.txt`
 - 行格式支持：`http://user:pass@host:port` 或 `host:port:user:pass`
 - **必须**排除号池已占用 egress/host（`--exclude-hosts` / `--used-hosts-file`）
-- 生产原则：**一号一 sticky**；同 binding 承载有上限（见配置 `proxy_binding_max_accounts`），观察期仍优先独立节点
+- **注册前 live 探活**（`gpt_unavailable_proxies.json` 批量 scan 后可能全表隔离，仍须 live 找 OK 节点）：
+
+```bash
+docker exec -w /app -e PYTHONPATH=/app chatgpt2api-local \
+  /app/.venv/bin/python /app/scripts/_tmp_probe_webshare_cf_ok.py \
+  --pool /app/data/runlogs/webshare_100_proxies.secret.txt \
+  --exclude-hosts "<号池已用 host>" --count 2 --workers 8
+```
+
+- 生产原则：**一号一 sticky**；同 egress 承载有上限（见配置 `proxy_binding_max_accounts`，Panda 生产 **2**，2026-07-25 起）；观察期仍优先独立节点
 
 ### 3. 检查（不通过不注册）
 
@@ -191,6 +200,9 @@ account_service.set_account_scheduling(access_token, enabled=True)
 | Panda 终态 | `identity_isolated` | `verified_ready` |
 | 导入脚本 | `_tmp_panda_import_observe_blob.py` + reload API | `_tmp_panda_commit_import_blob.py` + reload API |
 | 证据 | `data/runlogs/outlook-camoufox-stable-20260723/` | `data/runlogs/outlook-recovery-20260723/` |
+| 晚间批次 | `blakekyle` / `haroldsunny`（0716 index 14/15）；`batch3/` | |
+| 2026-07-24 批次 | `gibsonarthur` / `ivorbrown`（index 16/17）；`batch1/`；`haroldsunny` 删号 | |
+| 2026-07-24 晚间批次 | `issacandrew` / `frasierandy`（index 20/22）；`batch2/`；index 18/19 弃用 | |
 
 ---
 
@@ -199,6 +211,7 @@ account_service.set_account_scheduling(access_token, enabled=True)
 | 路径 | 用途 |
 | --- | --- |
 | `scripts/outlook_camoufox_stable_register.py` | **Outlook 固定链路入口** |
+| `scripts/_tmp_probe_webshare_cf_ok.py` | live `probe_proxy_cf` 选注册用 Webshare |
 | `scripts/_tmp_panda_import_observe_blob.py` | 新号观察态 Panda 导入（`/me` 验 token） |
 | `scripts/_tmp_panda_commit_import_blob.py` | 死号恢复替换导入（升 `verified_ready`） |
 | `scripts/_tmp_reload_panda_accounts.py` | 提交后刷新 8012 内存 |

@@ -1,0 +1,27 @@
+{
+  "bench": "schedule_trace_emit_finish",
+  "python_fallback": {
+    "engine": "python",
+    "lib_path": "",
+    "iters": 5000,
+    "runs": 7,
+    "events_per_task": 17,
+    "wall_ms_mean": 996.107,
+    "wall_ms_p50": 995.71,
+    "per_task_us_mean": 199.221,
+    "per_event_us_mean": 11.719
+  },
+  "rust_engine": {
+    "engine": "rust",
+    "lib_path": "D:\\SelfMadeTool\\AutoRegister\\gptimage\\crates\\image_schedule_trace\\target\\release\\image_schedule_trace.dll",
+    "iters": 5000,
+    "runs": 7,
+    "events_per_task": 17,
+    "wall_ms_mean": 1227.131,
+    "wall_ms_p50": 1213.695,
+    "per_task_us_mean": 245.426,
+    "per_event_us_mean": 14.437
+  },
+  "rust_vs_python_task_us_ratio": 1.2319,
+  "note": "per_task includes begin+16 emits+finish+pop; hot path is emit only"
+}

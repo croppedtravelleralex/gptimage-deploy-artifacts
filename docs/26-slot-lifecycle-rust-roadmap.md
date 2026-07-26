@@ -1,6 +1,6 @@
 # 26 — 槽位生命周期、释槽路径与 Rust 演进路线
 
-最后更新：**2026-07-25**  
+最后更新：**2026-07-26**  
 状态：**权威**（槽位语义 + 2026-07-25 conc10 事故复盘 + Rust 价值评估）  
 关联：`21-image-scheduling-and-pipeline.md`、`14-rust-rewrite-plan.md`、`17-cf403-and-egress.md`、`captures/spa/PROD-conc10-20260725T*.md`
 
@@ -8,17 +8,26 @@
 
 ## 1. 2026-07-25 生产事实同步（全量）
 
-### 1.1 号池与 1IP1号
+### 1.1 号池与 CF 准入（2026-07-26）
 
 | 项 | 值 | 说明 |
 |----|-----|------|
 | `total` | 19 | Panda `chatgpt2api-local` |
-| `image_schedulable` | 16 | 3 个 `限流` quota=0 |
-| `unique_egress` | 19 | `_tmp_verify_egress_display.py` → `ok: true` |
-| 换绑脚本 | `scripts/panda_rebind_unique_proxies.py` | 按 binding∪egress 连通分量去重；`--apply` 写库 |
-| CF 探测 | `scripts/_tmp_cf_probe_failed_accounts.py` | 7 账号 sticky 出口 CF 探活 |
-| CF 换绑 | `scripts/_tmp_rebind_cf_bad_accounts.py` | **唯一 egress + CF 实测 + sticky 校验** 后写库（禁止 blind `swap_account_proxy_on_cf` 链式传递） |
-| CF failover 修复 | `services/proxy_cf_failover.py` | `pick_swap_proxy` 排除已占用 `egress_ip`；换绑须 CF 实测（待与 `_rebind_cf_bad` 逻辑合并进 failover） |
+| **进调度** | 17 | `status=正常` + `verified_ready` |
+| **生图可用** | 17 | `image_schedulable`；与 breakdown `schedulable` 桶一致 |
+| `proxy_cf_ok` | 19/19 | 账号级 CF 打标（`proxy_cf_ok_*`） |
+| `proxy_binding_max_accounts` | **2** | Panda `config.json`；单 egress 最多 2 号 |
+| 未进调度 | 2 | `philliphicks` 限流；`enrico` `identity_isolated` |
+| CF 坏号换绑 | `scripts/_tmp_rebind_cf_fail_shared_ip.py` | 9 号 → 7～8 个 CF-ok 节点，允许共 IP |
+| 隔离恢复 | `scripts/_tmp_recover_cf_quarantine.py` | 清在绑 endpoint 隔离 + 复探打标 |
+| **CF 准入（生图）** | `services/proxy_cf_eligibility.py` | `require_cf_ok_for_image=true`；**`proxy_cf_ok` 缓存优先于 `cf403_scan` 隔离**（2026-07-26） |
+| CF 扫描 | `services/webshare_cf_scan_service.py` | `auto_quarantine` 跳过已绑定 endpoint |
+| 换绑脚本 | `scripts/panda_rebind_unique_proxies.py` | binding∪egress 连通分量去重；`--apply` 写库 |
+| CF 打标 | `scripts/_tmp_stamp_accounts_cf_ok.py` | 部署后全量 CF 探活打标 |
+
+证据：`captures/spa/{S,T}-cf-*-20260725.json`；隔离事故与修复见 `17` §「批量 scan 隔离」。
+
+### 1.1b 号池与 1IP1号（2026-07-25 历史）
 
 **CF 探测结论（2026-07-25）**：conc10 失败 6 号中 5 个出口 CF 不通；`qaflowud630wbo2a` 出口 CF 通 → 225s 更宜查账号/调度侧。换绑后 **7/7 cf_ok=true**。
 

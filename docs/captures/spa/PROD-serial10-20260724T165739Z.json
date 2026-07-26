@@ -1,0 +1,382 @@
+{
+  "stamp": "20260724T165739Z",
+  "prompt_tag": "PROD-serial10-20260724T165739Z",
+  "account_email": "qaflowakjewai6ps@proton.me",
+  "runs_planned": 10,
+  "runs_executed": 10,
+  "ok_count": 10,
+  "pass": true,
+  "trace_engine": "rust",
+  "trace_event_count_mean": 17.2,
+  "http_results": [
+    {
+      "run": 1,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 43897,
+      "b64_len": 3555160,
+      "error": null
+    },
+    {
+      "run": 2,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 51273,
+      "b64_len": 3539128,
+      "error": null
+    },
+    {
+      "run": 3,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 52044,
+      "b64_len": 3369828,
+      "error": null
+    },
+    {
+      "run": 4,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 73057,
+      "b64_len": 3377976,
+      "error": null
+    },
+    {
+      "run": 5,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 43513,
+      "b64_len": 3574016,
+      "error": null
+    },
+    {
+      "run": 6,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 46106,
+      "b64_len": 3251756,
+      "error": null
+    },
+    {
+      "run": 7,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 43961,
+      "b64_len": 3223964,
+      "error": null
+    },
+    {
+      "run": 8,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 55377,
+      "b64_len": 3269156,
+      "error": null
+    },
+    {
+      "run": 9,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 68907,
+      "b64_len": 2888904,
+      "error": null
+    },
+    {
+      "run": 10,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 41391,
+      "b64_len": 3340016,
+      "error": null
+    }
+  ],
+  "http_latency_ms": {
+    "n": 10,
+    "min_ms": 41391.0,
+    "p50_ms": 46106.0,
+    "p95_ms": 73057.0,
+    "max_ms": 73057.0,
+    "mean_ms": 51952.6
+  },
+  "phase_rows": [
+    {
+      "time": "2026-07-25 00:58:26",
+      "status": "success",
+      "task_queue_ms": 21,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 2278,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 33799,
+      "poll_resolve_ms": 4039,
+      "download_ms": 1107,
+      "wall_clock_ms": 43616,
+      "trace_engine": "rust",
+      "trace_events": 16,
+      "prompt_tail": " side street at dusk, neon reflections, cinematic, no text, no watermark [run=1]"
+    },
+    {
+      "time": "2026-07-25 00:59:34",
+      "status": "success",
+      "task_queue_ms": 16,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 2895,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 39659,
+      "poll_resolve_ms": 4654,
+      "download_ms": 899,
+      "wall_clock_ms": 51118,
+      "trace_engine": "rust",
+      "trace_events": 16,
+      "prompt_tail": " side street at dusk, neon reflections, cinematic, no text, no watermark [run=2]"
+    },
+    {
+      "time": "2026-07-25 01:00:43",
+      "status": "success",
+      "task_queue_ms": 16,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 2105,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 41332,
+      "poll_resolve_ms": 4619,
+      "download_ms": 1278,
+      "wall_clock_ms": 51552,
+      "trace_engine": "rust",
+      "trace_events": 16,
+      "prompt_tail": " side street at dusk, neon reflections, cinematic, no text, no watermark [run=3]"
+    },
+    {
+      "time": "2026-07-25 01:02:14",
+      "status": "success",
+      "task_queue_ms": 20,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 18218,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 43353,
+      "poll_resolve_ms": 0,
+      "download_ms": 982,
+      "wall_clock_ms": 72729,
+      "trace_engine": "rust",
+      "trace_events": 28,
+      "prompt_tail": " side street at dusk, neon reflections, cinematic, no text, no watermark [run=4]"
+    },
+    {
+      "time": "2026-07-25 01:03:14",
+      "status": "success",
+      "task_queue_ms": 15,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 1316,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 34176,
+      "poll_resolve_ms": 5596,
+      "download_ms": 790,
+      "wall_clock_ms": 43333,
+      "trace_engine": "rust",
+      "trace_events": 16,
+      "prompt_tail": " side street at dusk, neon reflections, cinematic, no text, no watermark [run=5]"
+    },
+    {
+      "time": "2026-07-25 01:04:19",
+      "status": "success",
+      "task_queue_ms": 20,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 1296,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 36558,
+      "poll_resolve_ms": 5824,
+      "download_ms": 705,
+      "wall_clock_ms": 45795,
+      "trace_engine": "rust",
+      "trace_events": 16,
+      "prompt_tail": " side street at dusk, neon reflections, cinematic, no text, no watermark [run=6]"
+    },
+    {
+      "time": "2026-07-25 01:05:20",
+      "status": "success",
+      "task_queue_ms": 25,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 2388,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 33790,
+      "poll_resolve_ms": 4422,
+      "download_ms": 686,
+      "wall_clock_ms": 43765,
+      "trace_engine": "rust",
+      "trace_events": 16,
+      "prompt_tail": " side street at dusk, neon reflections, cinematic, no text, no watermark [run=7]"
+    },
+    {
+      "time": "2026-07-25 01:06:36",
+      "status": "success",
+      "task_queue_ms": 15,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 23,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 46547,
+      "poll_resolve_ms": 7478,
+      "download_ms": 966,
+      "wall_clock_ms": 55183,
+      "trace_engine": "rust",
+      "trace_events": 16,
+      "prompt_tail": " side street at dusk, neon reflections, cinematic, no text, no watermark [run=8]"
+    },
+    {
+      "time": "2026-07-25 01:08:02",
+      "status": "success",
+      "task_queue_ms": 15,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 1631,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 59658,
+      "poll_resolve_ms": 4992,
+      "download_ms": 480,
+      "wall_clock_ms": 68494,
+      "trace_engine": "rust",
+      "trace_events": 16,
+      "prompt_tail": " side street at dusk, neon reflections, cinematic, no text, no watermark [run=9]"
+    },
+    {
+      "time": "2026-07-25 01:09:01",
+      "status": "success",
+      "task_queue_ms": 14,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 2429,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 29837,
+      "poll_resolve_ms": 5327,
+      "download_ms": 1054,
+      "wall_clock_ms": 41193,
+      "trace_engine": "rust",
+      "trace_events": 16,
+      "prompt_tail": "side street at dusk, neon reflections, cinematic, no text, no watermark [run=10]"
+    }
+  ],
+  "phase_summary": {
+    "task_queue_ms": {
+      "n": 10,
+      "min": 14.0,
+      "p50": 16.0,
+      "p95": 25.0,
+      "max": 25.0,
+      "mean": 17.7
+    },
+    "admit_queue_ms": {
+      "n": 0
+    },
+    "ps_queue_ms": {
+      "n": 0
+    },
+    "account_queue_ms": {
+      "n": 10,
+      "min": 23.0,
+      "p50": 2105.0,
+      "p95": 18218.0,
+      "max": 18218.0,
+      "mean": 3457.9
+    },
+    "ss_queue_ms": {
+      "n": 0
+    },
+    "sse_stream_ms": {
+      "n": 10,
+      "min": 29837.0,
+      "p50": 36558.0,
+      "p95": 59658.0,
+      "max": 59658.0,
+      "mean": 39870.9
+    },
+    "poll_resolve_ms": {
+      "n": 9,
+      "min": 4039.0,
+      "p50": 4992.0,
+      "p95": 7478.0,
+      "max": 7478.0,
+      "mean": 5216.8
+    },
+    "download_ms": {
+      "n": 10,
+      "min": 480.0,
+      "p50": 899.0,
+      "p95": 1278.0,
+      "max": 1278.0,
+      "mean": 894.7
+    },
+    "wall_clock_ms": {
+      "n": 10,
+      "min": 41193.0,
+      "p50": 45795.0,
+      "p95": 72729.0,
+      "max": 72729.0,
+      "mean": 51677.8
+    }
+  },
+  "generated_at": "2026-07-24T17:09:10.043428+00:00",
+  "schedule_trace_overhead": {
+    "bench_panda": {
+      "bench": "schedule_trace_emit_finish",
+      "python_fallback": {
+        "engine": "python",
+        "lib_path": "",
+        "iters": 5000,
+        "runs": 7,
+        "events_per_task": 17,
+        "wall_ms_mean": 1318.618,
+        "wall_ms_p50": 1257.797,
+        "per_task_us_mean": 263.724,
+        "per_event_us_mean": 15.513
+      },
+      "rust_engine": {
+        "engine": "rust",
+        "lib_path": "/app/native/libimage_schedule_trace.so",
+        "iters": 5000,
+        "runs": 7,
+        "events_per_task": 17,
+        "wall_ms_mean": 1640.325,
+        "wall_ms_p50": 1641.547,
+        "per_task_us_mean": 328.065,
+        "per_event_us_mean": 19.298
+      },
+      "rust_vs_python_task_us_ratio": 1.244,
+      "note": "per_task includes begin+16 emits+finish+pop; hot path is emit only"
+    },
+    "bench_windows": {
+      "bench": "schedule_trace_emit_finish",
+      "python_fallback": {
+        "engine": "python",
+        "lib_path": "",
+        "iters": 5000,
+        "runs": 7,
+        "events_per_task": 17,
+        "wall_ms_mean": 996.107,
+        "wall_ms_p50": 995.71,
+        "per_task_us_mean": 199.221,
+        "per_event_us_mean": 11.719
+      },
+      "rust_engine": {
+        "engine": "rust",
+        "lib_path": "D:\\SelfMadeTool\\AutoRegister\\gptimage\\crates\\image_schedule_trace\\target\\release\\image_schedule_trace.dll",
+        "iters": 5000,
+        "runs": 7,
+        "events_per_task": 17,
+        "wall_ms_mean": 1227.131,
+        "wall_ms_p50": 1213.695,
+        "per_task_us_mean": 245.426,
+        "per_event_us_mean": 14.437
+      },
+      "rust_vs_python_task_us_ratio": 1.2319,
+      "note": "per_task includes begin+16 emits+finish+pop; hot path is emit only"
+    },
+    "estimated_trace_ms_per_task": 0.3281,
+    "estimated_pct_of_mean_http_wall": 0.000631,
+    "native_so_bytes": 531344
+  }
+}

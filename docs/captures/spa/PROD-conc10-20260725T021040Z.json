@@ -1,0 +1,374 @@
+{
+  "stamp": "20260725T021040Z",
+  "prompt_tag": "PROD-conc10-20260725T021040Z",
+  "runs_planned": 10,
+  "runs_executed": 10,
+  "ok_count": 0,
+  "pass": false,
+  "trace_engine": "rust",
+  "trace_event_count_mean": 17.5,
+  "conc_wall_ms": 102723,
+  "dispatch_emails": [
+    "emberevan8683@outlook.com",
+    "enricoalfred9264@outlook.com",
+    "felicitypamela2673@outlook.com",
+    "ivetterock54353@outlook.com",
+    "qaflowakjewai6ps@proton.me",
+    "qaflowgq5wyuxhe9@proton.me",
+    "qaflowud630wbo2a@proton.me",
+    "qaflowwrg2ptcd05@proton.me",
+    "qaflowyi59i282fx@proton.me"
+  ],
+  "http_results": [
+    {
+      "run": 1,
+      "account_email": "enricoalfred9264@outlook.com",
+      "http_code": 200,
+      "ok": false,
+      "elapsed_ms": 35247,
+      "b64_len": 0,
+      "error": null
+    },
+    {
+      "run": 2,
+      "account_email": "felicitypamela2673@outlook.com",
+      "http_code": 200,
+      "ok": false,
+      "elapsed_ms": 32585,
+      "b64_len": 0,
+      "error": null
+    },
+    {
+      "run": 3,
+      "account_email": "ivetterock54353@outlook.com",
+      "http_code": 200,
+      "ok": false,
+      "elapsed_ms": 54752,
+      "b64_len": 0,
+      "error": null
+    },
+    {
+      "run": 4,
+      "account_email": "qaflowakjewai6ps@proton.me",
+      "http_code": 200,
+      "ok": false,
+      "elapsed_ms": 55979,
+      "b64_len": 0,
+      "error": null
+    },
+    {
+      "run": 5,
+      "account_email": "qaflowgq5wyuxhe9@proton.me",
+      "http_code": 200,
+      "ok": false,
+      "elapsed_ms": 102712,
+      "b64_len": 0,
+      "error": null
+    },
+    {
+      "run": 6,
+      "account_email": "qaflowud630wbo2a@proton.me",
+      "http_code": 200,
+      "ok": false,
+      "elapsed_ms": 56892,
+      "b64_len": 0,
+      "error": null
+    },
+    {
+      "run": 7,
+      "account_email": "qaflowwrg2ptcd05@proton.me",
+      "http_code": 200,
+      "ok": false,
+      "elapsed_ms": 78498,
+      "b64_len": 0,
+      "error": null
+    },
+    {
+      "run": 8,
+      "account_email": "qaflowyi59i282fx@proton.me",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 562,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: sync admission seats full",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 83
+        },
+        "code": "image_service_busy"
+      }
+    },
+    {
+      "run": 9,
+      "account_email": "emberevan8683@outlook.com",
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 606,
+      "b64_len": 0,
+      "error": {
+        "message": "image service busy: sync admission seats full",
+        "type": "rate_limit_error",
+        "param": {
+          "estimated_wait_secs": 83
+        },
+        "code": "image_service_busy"
+      }
+    },
+    {
+      "run": 10,
+      "account_email": "enricoalfred9264@outlook.com",
+      "http_code": 200,
+      "ok": false,
+      "elapsed_ms": 32821,
+      "b64_len": 0,
+      "error": null
+    }
+  ],
+  "http_latency_ms": {
+    "n": 10,
+    "min_ms": 562.0,
+    "p50_ms": 35247.0,
+    "p95_ms": 102712.0,
+    "max_ms": 102712.0,
+    "mean_ms": 45065.4
+  },
+  "phase_rows": [
+    {
+      "time": "2026-07-25 10:11:19",
+      "account_email": "ivetterock54353@outlook.com",
+      "status": "success",
+      "task_queue_ms": 29,
+      "admit_queue_ms": 4,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 82,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 24175,
+      "poll_resolve_ms": 0,
+      "download_ms": 1381,
+      "wall_clock_ms": 32360,
+      "trace_engine": "rust",
+      "trace_events": 16
+    },
+    {
+      "time": "2026-07-25 10:11:19",
+      "account_email": "qaflowwrg2ptcd05@proton.me",
+      "status": "success",
+      "task_queue_ms": 50,
+      "admit_queue_ms": 5,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 60,
+      "ss_queue_ms": 2055,
+      "sse_stream_ms": 23196,
+      "poll_resolve_ms": 0,
+      "download_ms": 854,
+      "wall_clock_ms": 31834,
+      "trace_engine": "rust",
+      "trace_events": 16
+    },
+    {
+      "time": "2026-07-25 10:11:21",
+      "account_email": "qaflowakjewai6ps@proton.me",
+      "status": "success",
+      "task_queue_ms": 29,
+      "admit_queue_ms": 4,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 87,
+      "ss_queue_ms": 0,
+      "sse_stream_ms": 24670,
+      "poll_resolve_ms": 0,
+      "download_ms": 1398,
+      "wall_clock_ms": 34822,
+      "trace_engine": "rust",
+      "trace_events": 16
+    },
+    {
+      "time": "2026-07-25 10:11:41",
+      "account_email": "qaflowgq5wyuxhe9@proton.me",
+      "status": "success",
+      "task_queue_ms": 54,
+      "admit_queue_ms": 0,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 65,
+      "ss_queue_ms": 23123,
+      "sse_stream_ms": 47184,
+      "poll_resolve_ms": 0,
+      "download_ms": 477,
+      "wall_clock_ms": 53933,
+      "trace_engine": "rust",
+      "trace_events": 16
+    },
+    {
+      "time": "2026-07-25 10:11:42",
+      "account_email": "qaflowakjewai6ps@proton.me",
+      "status": "success",
+      "task_queue_ms": 59,
+      "admit_queue_ms": 22,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 6744,
+      "ss_queue_ms": 16766,
+      "sse_stream_ms": 39056,
+      "poll_resolve_ms": 0,
+      "download_ms": 840,
+      "wall_clock_ms": 55576,
+      "trace_engine": "rust",
+      "trace_events": 22
+    },
+    {
+      "time": "2026-07-25 10:11:43",
+      "account_email": "emberevan8683@outlook.com",
+      "status": "success",
+      "task_queue_ms": 56,
+      "admit_queue_ms": 8,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 182,
+      "ss_queue_ms": 22791,
+      "sse_stream_ms": 43972,
+      "poll_resolve_ms": 0,
+      "download_ms": 561,
+      "wall_clock_ms": 56259,
+      "trace_engine": "rust",
+      "trace_events": 22
+    },
+    {
+      "time": "2026-07-25 10:12:05",
+      "account_email": "qaflowakjewai6ps@proton.me",
+      "status": "success",
+      "task_queue_ms": 16045,
+      "admit_queue_ms": 43,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 42,
+      "ss_queue_ms": 31176,
+      "sse_stream_ms": 53833,
+      "poll_resolve_ms": 0,
+      "download_ms": 720,
+      "wall_clock_ms": 61666,
+      "trace_engine": "rust",
+      "trace_events": 16
+    },
+    {
+      "time": "2026-07-25 10:12:29",
+      "account_email": "qaflowgq5wyuxhe9@proton.me",
+      "status": "success",
+      "task_queue_ms": 16832,
+      "admit_queue_ms": 17,
+      "ps_queue_ms": 0,
+      "account_queue_ms": 41,
+      "ss_queue_ms": 52971,
+      "sse_stream_ms": 76048,
+      "poll_resolve_ms": 0,
+      "download_ms": 615,
+      "wall_clock_ms": 85044,
+      "trace_engine": "rust",
+      "trace_events": 16
+    }
+  ],
+  "phase_summary": {
+    "task_queue_ms": {
+      "n": 8,
+      "min_ms": 29.0,
+      "p50_ms": 56.0,
+      "p95_ms": 16832.0,
+      "max_ms": 16832.0,
+      "mean_ms": 4144.2
+    },
+    "admit_queue_ms": {
+      "n": 8,
+      "min_ms": 0.0,
+      "p50_ms": 8.0,
+      "p95_ms": 43.0,
+      "max_ms": 43.0,
+      "mean_ms": 12.9
+    },
+    "ps_queue_ms": {
+      "n": 8,
+      "min_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 0.0,
+      "mean_ms": 0.0
+    },
+    "account_queue_ms": {
+      "n": 8,
+      "min_ms": 41.0,
+      "p50_ms": 82.0,
+      "p95_ms": 6744.0,
+      "max_ms": 6744.0,
+      "mean_ms": 912.9
+    },
+    "ss_queue_ms": {
+      "n": 8,
+      "min_ms": 0.0,
+      "p50_ms": 22791.0,
+      "p95_ms": 52971.0,
+      "max_ms": 52971.0,
+      "mean_ms": 18610.2
+    },
+    "sse_stream_ms": {
+      "n": 8,
+      "min_ms": 23196.0,
+      "p50_ms": 43972.0,
+      "p95_ms": 76048.0,
+      "max_ms": 76048.0,
+      "mean_ms": 41516.8
+    },
+    "poll_resolve_ms": {
+      "n": 8,
+      "min_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 0.0,
+      "mean_ms": 0.0
+    },
+    "download_ms": {
+      "n": 8,
+      "min_ms": 477.0,
+      "p50_ms": 840.0,
+      "p95_ms": 1398.0,
+      "max_ms": 1398.0,
+      "mean_ms": 855.8
+    },
+    "wall_clock_ms": {
+      "n": 8,
+      "min_ms": 31834.0,
+      "p50_ms": 55576.0,
+      "p95_ms": 85044.0,
+      "max_ms": 85044.0,
+      "mean_ms": 51436.8
+    }
+  },
+  "wall_share_pct": {
+    "task_queue_ms": 8.1,
+    "admit_queue_ms": 0.0,
+    "ps_queue_ms": 0.0,
+    "account_queue_ms": 1.8,
+    "ss_queue_ms": 36.2,
+    "sse_stream_ms": 80.7,
+    "poll_resolve_ms": 0.0,
+    "download_ms": 1.7
+  },
+  "serial_compare": {
+    "serial10_ref": "PROD-serial10-20260724T143921Z.json",
+    "serial10": {
+      "task_queue_ms": 0.0,
+      "admit_queue_ms": 0.0,
+      "ps_queue_ms": 0.0,
+      "account_queue_ms": 5.9,
+      "ss_queue_ms": 0.0,
+      "sse_stream_ms": 79.1,
+      "poll_resolve_ms": 6.3,
+      "download_ms": 1.8
+    },
+    "conc10": {
+      "task_queue_ms": 8.1,
+      "admit_queue_ms": 0.0,
+      "ps_queue_ms": 0.0,
+      "account_queue_ms": 1.8,
+      "ss_queue_ms": 36.2,
+      "sse_stream_ms": 80.7,
+      "poll_resolve_ms": 0.0,
+      "download_ms": 1.7
+    }
+  },
+  "generated_at": "2026-07-25T02:12:56.399220+00:00"
+}

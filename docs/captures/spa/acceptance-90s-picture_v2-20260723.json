@@ -1,0 +1,3024 @@
+{
+  "suite_id": "acceptance-90s-picture_v2-20260723",
+  "started_at": "2026-07-23T07:09:21.963996+00:00",
+  "account_email": "qaflowakjewai6ps@proton.me",
+  "protocol": "picture_v2",
+  "image_gen_deadline_secs": 90.0,
+  "sse_diagnostic_read_secs": 120.0,
+  "host_out": "/root/gptimage/data/runlogs/spa_repro/acceptance-90s-picture_v2-20260723",
+  "container_out": "/app/data/runlogs/spa_repro/acceptance-90s-picture_v2-20260723",
+  "serial5": {
+    "evidence_path": "/root/gptimage/data/runlogs/spa_repro/acceptance-90s-picture_v2-20260723/serial5.json",
+    "summary": {
+      "planned": 5,
+      "attempted": 5,
+      "ok": 5,
+      "failed": 0,
+      "not_run": 0,
+      "no_image_gen": 0,
+      "cf403_propagated": 0,
+      "stopped_early": false,
+      "stop_reason": null,
+      "serial5_passed": true,
+      "failure_classes": {
+        "tool_args_as_text": 0,
+        "late_image_gen_after_gate": 0,
+        "no_image_gen_quiet_stream": 0,
+        "no_image_gen_within_gate": 0
+      }
+    },
+    "identity": {
+      "account_email": "qaflowakjewai6ps@proton.me",
+      "proxy_hash": "49675fdabb54"
+    },
+    "constraints": {
+      "planned_requests": 5,
+      "image_gen_deadline_secs": 90.0,
+      "sse_diagnostic_read_secs": 120.0,
+      "round_gap_secs": 20.0,
+      "concurrency": 1
+    },
+    "per_round": [
+      {
+        "round": 1,
+        "ok": true,
+        "failure_class": null,
+        "error": "",
+        "total_ms": 41282,
+        "timings_ms": {
+          "egress_ms": 1084,
+          "requirements_ms": 1285,
+          "prepare_ms": 560,
+          "conversation_start_ms": 0,
+          "sse_gate_ms": 90000,
+          "sse_diagnostic_ms": 0,
+          "sse_total_ms": 27725,
+          "sse_ms": 27725,
+          "sse_image_gen_ms": 24388,
+          "sse_first_event_ms": 0,
+          "poll_resolve_ms": 6495,
+          "download_ms": 1041,
+          "total_ms": 41282
+        },
+        "traffic": {
+          "http_calls": 18,
+          "req_bytes": 9501,
+          "resp_bytes": 3163505,
+          "total_bytes": 3173006
+        },
+        "cf_layers": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        },
+        "image_bytes": null
+      },
+      {
+        "round": 2,
+        "ok": true,
+        "failure_class": null,
+        "error": "",
+        "total_ms": 43827,
+        "timings_ms": {
+          "egress_ms": 430,
+          "requirements_ms": 2139,
+          "prepare_ms": 202,
+          "conversation_start_ms": 0,
+          "sse_gate_ms": 90000,
+          "sse_diagnostic_ms": 0,
+          "sse_total_ms": 27639,
+          "sse_ms": 27639,
+          "sse_image_gen_ms": 24711,
+          "sse_first_event_ms": 0,
+          "poll_resolve_ms": 9760,
+          "download_ms": 1001,
+          "total_ms": 43827
+        },
+        "traffic": {
+          "http_calls": 18,
+          "req_bytes": 9165,
+          "resp_bytes": 3105330,
+          "total_bytes": 3114495
+        },
+        "cf_layers": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        },
+        "image_bytes": null
+      },
+      {
+        "round": 3,
+        "ok": true,
+        "failure_class": null,
+        "error": "",
+        "total_ms": 53904,
+        "timings_ms": {
+          "egress_ms": 248,
+          "requirements_ms": 1653,
+          "prepare_ms": 4508,
+          "conversation_start_ms": 0,
+          "sse_gate_ms": 90000,
+          "sse_diagnostic_ms": 0,
+          "sse_total_ms": 35487,
+          "sse_ms": 35487,
+          "sse_image_gen_ms": 30123,
+          "sse_first_event_ms": 0,
+          "poll_resolve_ms": 6537,
+          "download_ms": 464,
+          "total_ms": 53904
+        },
+        "traffic": {
+          "http_calls": 18,
+          "req_bytes": 9421,
+          "resp_bytes": 2869774,
+          "total_bytes": 2879195
+        },
+        "cf_layers": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        },
+        "image_bytes": null
+      },
+      {
+        "round": 4,
+        "ok": true,
+        "failure_class": null,
+        "error": "",
+        "total_ms": 47850,
+        "timings_ms": {
+          "egress_ms": 908,
+          "requirements_ms": 936,
+          "prepare_ms": 176,
+          "conversation_start_ms": 0,
+          "sse_gate_ms": 90000,
+          "sse_diagnostic_ms": 0,
+          "sse_total_ms": 33490,
+          "sse_ms": 33490,
+          "sse_image_gen_ms": 29575,
+          "sse_first_event_ms": 0,
+          "poll_resolve_ms": 6669,
+          "download_ms": 1101,
+          "total_ms": 47850
+        },
+        "traffic": {
+          "http_calls": 18,
+          "req_bytes": 9897,
+          "resp_bytes": 2921560,
+          "total_bytes": 2931457
+        },
+        "cf_layers": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        },
+        "image_bytes": null
+      },
+      {
+        "round": 5,
+        "ok": true,
+        "failure_class": null,
+        "error": "",
+        "total_ms": 82942,
+        "timings_ms": {
+          "egress_ms": 295,
+          "requirements_ms": 2018,
+          "prepare_ms": 587,
+          "conversation_start_ms": 0,
+          "sse_gate_ms": 90000,
+          "sse_diagnostic_ms": 0,
+          "sse_total_ms": 65564,
+          "sse_ms": 65564,
+          "sse_image_gen_ms": 58721,
+          "sse_first_event_ms": 0,
+          "poll_resolve_ms": 7331,
+          "download_ms": 3834,
+          "total_ms": 82942
+        },
+        "traffic": {
+          "http_calls": 18,
+          "req_bytes": 9072,
+          "resp_bytes": 3233283,
+          "total_bytes": 3242355
+        },
+        "cf_layers": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        },
+        "image_bytes": null
+      }
+    ],
+    "timing_total_ms": {
+      "n": 5,
+      "min": 41282.0,
+      "max": 82942.0,
+      "mean": 53961.0,
+      "p50": 47850.0,
+      "p95": 82942.0,
+      "p99": 82942.0,
+      "sum": 269805.0
+    },
+    "timing_phases_ms": {
+      "conversation_start_ms": {
+        "n": 5,
+        "min": 0.0,
+        "max": 0.0,
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "sum": 0.0
+      },
+      "download_ms": {
+        "n": 5,
+        "min": 464.0,
+        "max": 3834.0,
+        "mean": 1488.2,
+        "p50": 1041.0,
+        "p95": 3834.0,
+        "p99": 3834.0,
+        "sum": 7441.0
+      },
+      "egress_ms": {
+        "n": 5,
+        "min": 248.0,
+        "max": 1084.0,
+        "mean": 593.0,
+        "p50": 430.0,
+        "p95": 1084.0,
+        "p99": 1084.0,
+        "sum": 2965.0
+      },
+      "poll_resolve_ms": {
+        "n": 5,
+        "min": 6495.0,
+        "max": 9760.0,
+        "mean": 7358.4,
+        "p50": 6669.0,
+        "p95": 9760.0,
+        "p99": 9760.0,
+        "sum": 36792.0
+      },
+      "prepare_ms": {
+        "n": 5,
+        "min": 176.0,
+        "max": 4508.0,
+        "mean": 1206.6,
+        "p50": 560.0,
+        "p95": 4508.0,
+        "p99": 4508.0,
+        "sum": 6033.0
+      },
+      "requirements_ms": {
+        "n": 5,
+        "min": 936.0,
+        "max": 2139.0,
+        "mean": 1606.2,
+        "p50": 1653.0,
+        "p95": 2139.0,
+        "p99": 2139.0,
+        "sum": 8031.0
+      },
+      "sse_diagnostic_ms": {
+        "n": 5,
+        "min": 0.0,
+        "max": 0.0,
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "sum": 0.0
+      },
+      "sse_first_event_ms": {
+        "n": 5,
+        "min": 0.0,
+        "max": 0.0,
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "sum": 0.0
+      },
+      "sse_gate_ms": {
+        "n": 5,
+        "min": 90000.0,
+        "max": 90000.0,
+        "mean": 90000.0,
+        "p50": 90000.0,
+        "p95": 90000.0,
+        "p99": 90000.0,
+        "sum": 450000.0
+      },
+      "sse_image_gen_ms": {
+        "n": 5,
+        "min": 24388.0,
+        "max": 58721.0,
+        "mean": 33503.6,
+        "p50": 29575.0,
+        "p95": 58721.0,
+        "p99": 58721.0,
+        "sum": 167518.0
+      },
+      "sse_ms": {
+        "n": 5,
+        "min": 27639.0,
+        "max": 65564.0,
+        "mean": 37981.0,
+        "p50": 33490.0,
+        "p95": 65564.0,
+        "p99": 65564.0,
+        "sum": 189905.0
+      },
+      "sse_total_ms": {
+        "n": 5,
+        "min": 27639.0,
+        "max": 65564.0,
+        "mean": 37981.0,
+        "p50": 33490.0,
+        "p95": 65564.0,
+        "p99": 65564.0,
+        "sum": 189905.0
+      },
+      "total_ms": {
+        "n": 5,
+        "min": 41282.0,
+        "max": 82942.0,
+        "mean": 53961.0,
+        "p50": 47850.0,
+        "p95": 82942.0,
+        "p99": 82942.0,
+        "sum": 269805.0
+      }
+    },
+    "traffic_req_bytes": {
+      "n": 5,
+      "min": 9072.0,
+      "max": 9897.0,
+      "mean": 9411.2,
+      "p50": 9421.0,
+      "p95": 9897.0,
+      "p99": 9897.0,
+      "sum": 47056.0
+    },
+    "traffic_resp_bytes": {
+      "n": 5,
+      "min": 2869774.0,
+      "max": 3233283.0,
+      "mean": 3058690.4,
+      "p50": 3105330.0,
+      "p95": 3233283.0,
+      "p99": 3233283.0,
+      "sum": 15293452.0
+    },
+    "traffic_total_bytes": {
+      "n": 5,
+      "min": 2879195.0,
+      "max": 3242355.0,
+      "mean": 3068101.6,
+      "p50": 3114495.0,
+      "p95": 3242355.0,
+      "p99": 3242355.0,
+      "sum": 15340508.0
+    },
+    "traffic_sse_bytes": {
+      "n": 5,
+      "min": 0.0,
+      "max": 0.0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "sum": 0.0
+    }
+  },
+  "conc10_rounds": [
+    {
+      "report_path": "/root/gptimage/data/runlogs/spa_repro/acceptance-90s-picture_v2-20260723/conc10-r1/pipe-conc10-20260723T071912Z.json",
+      "run_id": "pipe-conc10-20260723T071912Z",
+      "summary": {
+        "count": 10,
+        "submitted": 10,
+        "submit_ok": 10,
+        "wall_clock_ms": 115387.45,
+        "final_status_counts": {
+          "success": 10
+        }
+      },
+      "wall_clock_ms": {
+        "n": 1,
+        "min": 115387.45,
+        "max": 115387.45,
+        "mean": 115387.45,
+        "p50": 115387.45,
+        "p95": 115387.45,
+        "p99": 115387.45,
+        "sum": 115387.45
+      },
+      "task_wall_clock_ms": {
+        "n": 0,
+        "min": null,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "sum": null
+      },
+      "ss_queue_ms": {
+        "n": 0,
+        "min": null,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "sum": null
+      },
+      "ps_queue_ms": {
+        "n": 0,
+        "min": null,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "sum": null
+      },
+      "submit_ms": {
+        "n": 10,
+        "min": 45.09,
+        "max": 124.96,
+        "mean": 81.215,
+        "p50": 71.99,
+        "p95": 124.96,
+        "p99": 124.96,
+        "sum": 812.15
+      },
+      "phase_timings_ms": {},
+      "poll_duration_secs": {
+        "n": 24,
+        "min": 0.16,
+        "max": 115.39,
+        "mean": 57.788,
+        "p50": 60.3,
+        "p95": 110.38,
+        "p99": 115.39,
+        "sum": 1386.91
+      },
+      "pipeline_snapshot_before": {
+        "in_flight": 0,
+        "ps": {
+          "name": "ps",
+          "limit": 10,
+          "active": 0,
+          "queued": 0
+        },
+        "ss": {
+          "name": "ss",
+          "limit": 10,
+          "active": 0,
+          "queued": 0
+        },
+        "upload": {
+          "name": "upload",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "download": {
+          "name": "download",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "ready_buffer": {
+          "bytes": 0,
+          "items": 0,
+          "ss_paused": false,
+          "max_bytes": 536870912,
+          "max_items": 32
+        },
+        "segments": [
+          {
+            "task_key": "admin:sync-bs8dDDllatV7dhQ2YLW1Kg",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784789103.768759,
+            "ended_at": 1784789169.7910497
+          }
+        ]
+      },
+      "pipeline_snapshot_after": {
+        "in_flight": 0,
+        "ps": {
+          "name": "ps",
+          "limit": 10,
+          "active": 0,
+          "queued": 0
+        },
+        "ss": {
+          "name": "ss",
+          "limit": 10,
+          "active": 4,
+          "queued": 0
+        },
+        "upload": {
+          "name": "upload",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "download": {
+          "name": "download",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "ready_buffer": {
+          "bytes": 0,
+          "items": 0,
+          "ss_paused": false,
+          "max_bytes": 536870912,
+          "max_items": 32
+        },
+        "segments": [
+          {
+            "task_key": "admin:sync-bs8dDDllatV7dhQ2YLW1Kg",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784789103.768759,
+            "ended_at": 1784789169.7910497
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-00",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784791152.3164027,
+            "ended_at": 1784791190.4092412
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-01",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784791153.7417924,
+            "ended_at": 1784791199.9042406
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-03",
+            "stage": "sse",
+            "slot": 2,
+            "started_at": 1784791155.073152,
+            "ended_at": 1784791203.4778228
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-02",
+            "stage": "sse",
+            "slot": 3,
+            "started_at": 1784791156.5068204,
+            "ended_at": 1784791205.396453
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-05",
+            "stage": "sse",
+            "slot": 4,
+            "started_at": 1784791157.8988326,
+            "ended_at": 1784791161.4788904
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-04",
+            "stage": "sse",
+            "slot": 5,
+            "started_at": 1784791159.1992083,
+            "ended_at": 1784791227.6540818
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-06",
+            "stage": "sse",
+            "slot": 6,
+            "started_at": 1784791160.3922532,
+            "ended_at": 1784791164.623143
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-05",
+            "stage": "sse",
+            "slot": 4,
+            "started_at": 1784791161.4789379
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-08",
+            "stage": "sse",
+            "slot": 7,
+            "started_at": 1784791161.7990484,
+            "ended_at": 1784791235.3670084
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-07",
+            "stage": "sse",
+            "slot": 8,
+            "started_at": 1784791163.466195,
+            "ended_at": 1784791164.683594
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-06",
+            "stage": "sse",
+            "slot": 6,
+            "started_at": 1784791164.6231952
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-07",
+            "stage": "sse",
+            "slot": 8,
+            "started_at": 1784791164.6836505
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-09",
+            "stage": "sse",
+            "slot": 9,
+            "started_at": 1784791165.1138058,
+            "ended_at": 1784791230.1246896
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-05",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784791190.4094706
+          }
+        ]
+      },
+      "final_items": [
+        {
+          "id": "pipe-conc10-20260723T071912Z-conc10-00",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T071912Z-conc10-01",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T071912Z-conc10-02",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T071912Z-conc10-03",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T071912Z-conc10-04",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T071912Z-conc10-05",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T071912Z-conc10-06",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T071912Z-conc10-07",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T071912Z-conc10-08",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T071912Z-conc10-09",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        }
+      ],
+      "submits": [
+        {
+          "idx": 0,
+          "client_task_id": "pipe-conc10-20260723T071912Z-conc10-00",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 45.09,
+          "task_id": "pipe-conc10-20260723T071912Z-conc10-00",
+          "body_status": "queued"
+        },
+        {
+          "idx": 1,
+          "client_task_id": "pipe-conc10-20260723T071912Z-conc10-01",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 117.73,
+          "task_id": "pipe-conc10-20260723T071912Z-conc10-01",
+          "body_status": "queued"
+        },
+        {
+          "idx": 2,
+          "client_task_id": "pipe-conc10-20260723T071912Z-conc10-02",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 51.98,
+          "task_id": "pipe-conc10-20260723T071912Z-conc10-02",
+          "body_status": "queued"
+        },
+        {
+          "idx": 3,
+          "client_task_id": "pipe-conc10-20260723T071912Z-conc10-03",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 124.96,
+          "task_id": "pipe-conc10-20260723T071912Z-conc10-03",
+          "body_status": "queued"
+        },
+        {
+          "idx": 4,
+          "client_task_id": "pipe-conc10-20260723T071912Z-conc10-04",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 66.89,
+          "task_id": "pipe-conc10-20260723T071912Z-conc10-04",
+          "body_status": "queued"
+        },
+        {
+          "idx": 5,
+          "client_task_id": "pipe-conc10-20260723T071912Z-conc10-05",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 57.14,
+          "task_id": "pipe-conc10-20260723T071912Z-conc10-05",
+          "body_status": "queued"
+        },
+        {
+          "idx": 6,
+          "client_task_id": "pipe-conc10-20260723T071912Z-conc10-06",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 71.99,
+          "task_id": "pipe-conc10-20260723T071912Z-conc10-06",
+          "body_status": "queued"
+        },
+        {
+          "idx": 7,
+          "client_task_id": "pipe-conc10-20260723T071912Z-conc10-07",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 92.37,
+          "task_id": "pipe-conc10-20260723T071912Z-conc10-07",
+          "body_status": "queued"
+        },
+        {
+          "idx": 8,
+          "client_task_id": "pipe-conc10-20260723T071912Z-conc10-08",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 81.33,
+          "task_id": "pipe-conc10-20260723T071912Z-conc10-08",
+          "body_status": "queued"
+        },
+        {
+          "idx": 9,
+          "client_task_id": "pipe-conc10-20260723T071912Z-conc10-09",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 102.67,
+          "task_id": "pipe-conc10-20260723T071912Z-conc10-09",
+          "body_status": "queued"
+        }
+      ],
+      "poll_log": [
+        {
+          "t_secs": 0.16,
+          "counts": {
+            "running": 1,
+            "queued": 9
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 1,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 5.16,
+          "counts": {
+            "running": 4,
+            "queued": 6
+          },
+          "pipeline_in_flight": 4,
+          "ss_active": 4,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 10.18,
+          "counts": {
+            "running": 8,
+            "queued": 2
+          },
+          "pipeline_in_flight": 8,
+          "ss_active": 8,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 15.2,
+          "counts": {
+            "running": 10
+          },
+          "pipeline_in_flight": 10,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 20.21,
+          "counts": {
+            "running": 10
+          },
+          "pipeline_in_flight": 10,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 25.22,
+          "counts": {
+            "running": 10
+          },
+          "pipeline_in_flight": 10,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 30.24,
+          "counts": {
+            "running": 10
+          },
+          "pipeline_in_flight": 10,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 35.26,
+          "counts": {
+            "running": 10
+          },
+          "pipeline_in_flight": 10,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 40.27,
+          "counts": {
+            "success": 1,
+            "running": 9
+          },
+          "pipeline_in_flight": 9,
+          "ss_active": 10,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 45.28,
+          "counts": {
+            "success": 1,
+            "running": 9
+          },
+          "pipeline_in_flight": 9,
+          "ss_active": 10,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 50.29,
+          "counts": {
+            "success": 2,
+            "running": 8
+          },
+          "pipeline_in_flight": 8,
+          "ss_active": 9,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 55.3,
+          "counts": {
+            "success": 4,
+            "running": 6
+          },
+          "pipeline_in_flight": 6,
+          "ss_active": 7,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 60.3,
+          "counts": {
+            "success": 4,
+            "running": 6
+          },
+          "pipeline_in_flight": 6,
+          "ss_active": 7,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 65.31,
+          "counts": {
+            "success": 4,
+            "running": 6
+          },
+          "pipeline_in_flight": 6,
+          "ss_active": 7,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 70.32,
+          "counts": {
+            "success": 4,
+            "running": 6
+          },
+          "pipeline_in_flight": 6,
+          "ss_active": 7,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 75.33,
+          "counts": {
+            "success": 4,
+            "running": 6
+          },
+          "pipeline_in_flight": 6,
+          "ss_active": 7,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 80.33,
+          "counts": {
+            "success": 6,
+            "running": 4
+          },
+          "pipeline_in_flight": 4,
+          "ss_active": 5,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 85.34,
+          "counts": {
+            "success": 7,
+            "running": 3
+          },
+          "pipeline_in_flight": 3,
+          "ss_active": 4,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 90.35,
+          "counts": {
+            "success": 8,
+            "running": 2
+          },
+          "pipeline_in_flight": 2,
+          "ss_active": 4,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 95.36,
+          "counts": {
+            "success": 8,
+            "running": 2
+          },
+          "pipeline_in_flight": 2,
+          "ss_active": 4,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 100.36,
+          "counts": {
+            "success": 9,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 4,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 105.37,
+          "counts": {
+            "success": 9,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 4,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 110.38,
+          "counts": {
+            "success": 9,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 4,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 115.39,
+          "counts": {
+            "success": 10
+          },
+          "pipeline_in_flight": 0,
+          "ss_active": 4,
+          "ss_queued": 0
+        }
+      ],
+      "round": 1,
+      "exit_code": 0
+    },
+    {
+      "report_path": "/root/gptimage/data/runlogs/spa_repro/acceptance-90s-picture_v2-20260723/conc10-r2/pipe-conc10-20260723T072133Z.json",
+      "run_id": "pipe-conc10-20260723T072133Z",
+      "summary": {
+        "count": 10,
+        "submitted": 10,
+        "submit_ok": 10,
+        "wall_clock_ms": 105287.63,
+        "final_status_counts": {
+          "success": 10
+        }
+      },
+      "wall_clock_ms": {
+        "n": 1,
+        "min": 105287.63,
+        "max": 105287.63,
+        "mean": 105287.63,
+        "p50": 105287.63,
+        "p95": 105287.63,
+        "p99": 105287.63,
+        "sum": 105287.63
+      },
+      "task_wall_clock_ms": {
+        "n": 0,
+        "min": null,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "sum": null
+      },
+      "ss_queue_ms": {
+        "n": 0,
+        "min": null,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "sum": null
+      },
+      "ps_queue_ms": {
+        "n": 0,
+        "min": null,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "sum": null
+      },
+      "submit_ms": {
+        "n": 10,
+        "min": 34.43,
+        "max": 112.79,
+        "mean": 73.723,
+        "p50": 66.13,
+        "p95": 112.79,
+        "p99": 112.79,
+        "sum": 737.23
+      },
+      "phase_timings_ms": {},
+      "poll_duration_secs": {
+        "n": 22,
+        "min": 0.14,
+        "max": 105.29,
+        "mean": 52.716,
+        "p50": 50.21,
+        "p95": 100.28,
+        "p99": 105.29,
+        "sum": 1159.76
+      },
+      "pipeline_snapshot_before": {
+        "in_flight": 0,
+        "ps": {
+          "name": "ps",
+          "limit": 10,
+          "active": 0,
+          "queued": 0
+        },
+        "ss": {
+          "name": "ss",
+          "limit": 10,
+          "active": 4,
+          "queued": 0
+        },
+        "upload": {
+          "name": "upload",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "download": {
+          "name": "download",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "ready_buffer": {
+          "bytes": 0,
+          "items": 0,
+          "ss_paused": false,
+          "max_bytes": 536870912,
+          "max_items": 32
+        },
+        "segments": [
+          {
+            "task_key": "admin:sync-bs8dDDllatV7dhQ2YLW1Kg",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784789103.768759,
+            "ended_at": 1784789169.7910497
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-00",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784791152.3164027,
+            "ended_at": 1784791190.4092412
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-01",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784791153.7417924,
+            "ended_at": 1784791199.9042406
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-03",
+            "stage": "sse",
+            "slot": 2,
+            "started_at": 1784791155.073152,
+            "ended_at": 1784791203.4778228
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-02",
+            "stage": "sse",
+            "slot": 3,
+            "started_at": 1784791156.5068204,
+            "ended_at": 1784791205.396453
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-05",
+            "stage": "sse",
+            "slot": 4,
+            "started_at": 1784791157.8988326,
+            "ended_at": 1784791161.4788904
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-04",
+            "stage": "sse",
+            "slot": 5,
+            "started_at": 1784791159.1992083,
+            "ended_at": 1784791227.6540818
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-06",
+            "stage": "sse",
+            "slot": 6,
+            "started_at": 1784791160.3922532,
+            "ended_at": 1784791164.623143
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-05",
+            "stage": "sse",
+            "slot": 4,
+            "started_at": 1784791161.4789379
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-08",
+            "stage": "sse",
+            "slot": 7,
+            "started_at": 1784791161.7990484,
+            "ended_at": 1784791235.3670084
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-07",
+            "stage": "sse",
+            "slot": 8,
+            "started_at": 1784791163.466195,
+            "ended_at": 1784791164.683594
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-06",
+            "stage": "sse",
+            "slot": 6,
+            "started_at": 1784791164.6231952
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-07",
+            "stage": "sse",
+            "slot": 8,
+            "started_at": 1784791164.6836505
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-09",
+            "stage": "sse",
+            "slot": 9,
+            "started_at": 1784791165.1138058,
+            "ended_at": 1784791230.1246896
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-05",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784791190.4094706
+          }
+        ]
+      },
+      "pipeline_snapshot_after": {
+        "in_flight": 0,
+        "ps": {
+          "name": "ps",
+          "limit": 10,
+          "active": 0,
+          "queued": 0
+        },
+        "ss": {
+          "name": "ss",
+          "limit": 10,
+          "active": 5,
+          "queued": 0
+        },
+        "upload": {
+          "name": "upload",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "download": {
+          "name": "download",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "ready_buffer": {
+          "bytes": 0,
+          "items": 0,
+          "ss_paused": false,
+          "max_bytes": 536870912,
+          "max_items": 32
+        },
+        "segments": [
+          {
+            "task_key": "admin:sync-bs8dDDllatV7dhQ2YLW1Kg",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784789103.768759,
+            "ended_at": 1784789169.7910497
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-00",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784791152.3164027,
+            "ended_at": 1784791190.4092412
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-01",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784791153.7417924,
+            "ended_at": 1784791199.9042406
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-03",
+            "stage": "sse",
+            "slot": 2,
+            "started_at": 1784791155.073152,
+            "ended_at": 1784791203.4778228
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-02",
+            "stage": "sse",
+            "slot": 3,
+            "started_at": 1784791156.5068204,
+            "ended_at": 1784791205.396453
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-05",
+            "stage": "sse",
+            "slot": 4,
+            "started_at": 1784791157.8988326,
+            "ended_at": 1784791161.4788904
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-04",
+            "stage": "sse",
+            "slot": 5,
+            "started_at": 1784791159.1992083,
+            "ended_at": 1784791227.6540818
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-06",
+            "stage": "sse",
+            "slot": 6,
+            "started_at": 1784791160.3922532,
+            "ended_at": 1784791164.623143
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-05",
+            "stage": "sse",
+            "slot": 4,
+            "started_at": 1784791161.4789379
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-08",
+            "stage": "sse",
+            "slot": 7,
+            "started_at": 1784791161.7990484,
+            "ended_at": 1784791235.3670084
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-07",
+            "stage": "sse",
+            "slot": 8,
+            "started_at": 1784791163.466195,
+            "ended_at": 1784791164.683594
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-06",
+            "stage": "sse",
+            "slot": 6,
+            "started_at": 1784791164.6231952
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-07",
+            "stage": "sse",
+            "slot": 8,
+            "started_at": 1784791164.6836505
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-09",
+            "stage": "sse",
+            "slot": 9,
+            "started_at": 1784791165.1138058,
+            "ended_at": 1784791230.1246896
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-05",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784791190.4094706
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-02",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784791293.870365,
+            "ended_at": 1784791336.409185
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-01",
+            "stage": "sse",
+            "slot": 2,
+            "started_at": 1784791295.4000947,
+            "ended_at": 1784791347.3155334
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-00",
+            "stage": "sse",
+            "slot": 3,
+            "started_at": 1784791296.6066966,
+            "ended_at": 1784791334.7788703
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-04",
+            "stage": "sse",
+            "slot": 5,
+            "started_at": 1784791297.7703753,
+            "ended_at": 1784791335.5081873
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-06",
+            "stage": "sse",
+            "slot": 7,
+            "started_at": 1784791298.9650927,
+            "ended_at": 1784791345.0132608
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-03",
+            "stage": "sse",
+            "slot": 9,
+            "started_at": 1784791300.1724048,
+            "ended_at": 1784791344.695905
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-05",
+            "stage": "sse",
+            "slot": 3,
+            "started_at": 1784791334.7791262,
+            "ended_at": 1784791370.1650846
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-08",
+            "stage": "sse",
+            "slot": 5,
+            "started_at": 1784791335.5084224,
+            "ended_at": 1784791371.556614
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-07",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784791336.4094183,
+            "ended_at": 1784791380.2330756
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-09",
+            "stage": "sse",
+            "slot": 9,
+            "started_at": 1784791344.6961293,
+            "ended_at": 1784791346.7922122
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-09",
+            "stage": "sse",
+            "slot": 7,
+            "started_at": 1784791346.7922637
+          }
+        ]
+      },
+      "final_items": [
+        {
+          "id": "pipe-conc10-20260723T072133Z-conc10-00",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072133Z-conc10-01",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072133Z-conc10-02",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072133Z-conc10-03",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072133Z-conc10-04",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072133Z-conc10-05",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072133Z-conc10-06",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072133Z-conc10-07",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072133Z-conc10-08",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072133Z-conc10-09",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        }
+      ],
+      "submits": [
+        {
+          "idx": 0,
+          "client_task_id": "pipe-conc10-20260723T072133Z-conc10-00",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 54.88,
+          "task_id": "pipe-conc10-20260723T072133Z-conc10-00",
+          "body_status": "queued"
+        },
+        {
+          "idx": 1,
+          "client_task_id": "pipe-conc10-20260723T072133Z-conc10-01",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 45.24,
+          "task_id": "pipe-conc10-20260723T072133Z-conc10-01",
+          "body_status": "queued"
+        },
+        {
+          "idx": 2,
+          "client_task_id": "pipe-conc10-20260723T072133Z-conc10-02",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 34.43,
+          "task_id": "pipe-conc10-20260723T072133Z-conc10-02",
+          "body_status": "queued"
+        },
+        {
+          "idx": 3,
+          "client_task_id": "pipe-conc10-20260723T072133Z-conc10-03",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 78.42,
+          "task_id": "pipe-conc10-20260723T072133Z-conc10-03",
+          "body_status": "queued"
+        },
+        {
+          "idx": 4,
+          "client_task_id": "pipe-conc10-20260723T072133Z-conc10-04",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 60.28,
+          "task_id": "pipe-conc10-20260723T072133Z-conc10-04",
+          "body_status": "queued"
+        },
+        {
+          "idx": 5,
+          "client_task_id": "pipe-conc10-20260723T072133Z-conc10-05",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 87.43,
+          "task_id": "pipe-conc10-20260723T072133Z-conc10-05",
+          "body_status": "queued"
+        },
+        {
+          "idx": 6,
+          "client_task_id": "pipe-conc10-20260723T072133Z-conc10-06",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 66.13,
+          "task_id": "pipe-conc10-20260723T072133Z-conc10-06",
+          "body_status": "queued"
+        },
+        {
+          "idx": 7,
+          "client_task_id": "pipe-conc10-20260723T072133Z-conc10-07",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 104.86,
+          "task_id": "pipe-conc10-20260723T072133Z-conc10-07",
+          "body_status": "queued"
+        },
+        {
+          "idx": 8,
+          "client_task_id": "pipe-conc10-20260723T072133Z-conc10-08",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 92.77,
+          "task_id": "pipe-conc10-20260723T072133Z-conc10-08",
+          "body_status": "queued"
+        },
+        {
+          "idx": 9,
+          "client_task_id": "pipe-conc10-20260723T072133Z-conc10-09",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 112.79,
+          "task_id": "pipe-conc10-20260723T072133Z-conc10-09",
+          "body_status": "queued"
+        }
+      ],
+      "poll_log": [
+        {
+          "t_secs": 0.14,
+          "counts": {
+            "queued": 9,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 5,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 5.15,
+          "counts": {
+            "running": 4,
+            "queued": 6
+          },
+          "pipeline_in_flight": 4,
+          "ss_active": 8,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 10.16,
+          "counts": {
+            "running": 8,
+            "queued": 2
+          },
+          "pipeline_in_flight": 8,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 15.17,
+          "counts": {
+            "running": 10
+          },
+          "pipeline_in_flight": 10,
+          "ss_active": 10,
+          "ss_queued": 4
+        },
+        {
+          "t_secs": 20.17,
+          "counts": {
+            "running": 10
+          },
+          "pipeline_in_flight": 10,
+          "ss_active": 10,
+          "ss_queued": 4
+        },
+        {
+          "t_secs": 25.18,
+          "counts": {
+            "running": 10
+          },
+          "pipeline_in_flight": 10,
+          "ss_active": 10,
+          "ss_queued": 4
+        },
+        {
+          "t_secs": 30.19,
+          "counts": {
+            "running": 10
+          },
+          "pipeline_in_flight": 10,
+          "ss_active": 10,
+          "ss_queued": 4
+        },
+        {
+          "t_secs": 35.19,
+          "counts": {
+            "running": 10
+          },
+          "pipeline_in_flight": 10,
+          "ss_active": 10,
+          "ss_queued": 4
+        },
+        {
+          "t_secs": 40.2,
+          "counts": {
+            "running": 10
+          },
+          "pipeline_in_flight": 10,
+          "ss_active": 10,
+          "ss_queued": 4
+        },
+        {
+          "t_secs": 45.21,
+          "counts": {
+            "success": 3,
+            "running": 7
+          },
+          "pipeline_in_flight": 7,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 50.21,
+          "counts": {
+            "success": 3,
+            "running": 7
+          },
+          "pipeline_in_flight": 7,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 55.22,
+          "counts": {
+            "success": 6,
+            "running": 4
+          },
+          "pipeline_in_flight": 4,
+          "ss_active": 8,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 60.23,
+          "counts": {
+            "success": 6,
+            "running": 4
+          },
+          "pipeline_in_flight": 4,
+          "ss_active": 8,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 65.23,
+          "counts": {
+            "success": 6,
+            "running": 4
+          },
+          "pipeline_in_flight": 4,
+          "ss_active": 8,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 70.24,
+          "counts": {
+            "success": 6,
+            "running": 4
+          },
+          "pipeline_in_flight": 4,
+          "ss_active": 8,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 75.25,
+          "counts": {
+            "success": 6,
+            "running": 4
+          },
+          "pipeline_in_flight": 4,
+          "ss_active": 8,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 80.25,
+          "counts": {
+            "success": 8,
+            "running": 2
+          },
+          "pipeline_in_flight": 2,
+          "ss_active": 6,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 85.26,
+          "counts": {
+            "success": 8,
+            "running": 2
+          },
+          "pipeline_in_flight": 2,
+          "ss_active": 6,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 90.27,
+          "counts": {
+            "success": 9,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 5,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 95.27,
+          "counts": {
+            "success": 9,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 5,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 100.28,
+          "counts": {
+            "success": 9,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 5,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 105.29,
+          "counts": {
+            "success": 10
+          },
+          "pipeline_in_flight": 0,
+          "ss_active": 5,
+          "ss_queued": 0
+        }
+      ],
+      "round": 2,
+      "exit_code": 0
+    },
+    {
+      "report_path": "/root/gptimage/data/runlogs/spa_repro/acceptance-90s-picture_v2-20260723/conc10-r3/pipe-conc10-20260723T072340Z.json",
+      "run_id": "pipe-conc10-20260723T072340Z",
+      "summary": {
+        "count": 10,
+        "submitted": 10,
+        "submit_ok": 10,
+        "wall_clock_ms": 170437.44,
+        "final_status_counts": {
+          "success": 10
+        }
+      },
+      "wall_clock_ms": {
+        "n": 1,
+        "min": 170437.44,
+        "max": 170437.44,
+        "mean": 170437.44,
+        "p50": 170437.44,
+        "p95": 170437.44,
+        "p99": 170437.44,
+        "sum": 170437.44
+      },
+      "task_wall_clock_ms": {
+        "n": 0,
+        "min": null,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "sum": null
+      },
+      "ss_queue_ms": {
+        "n": 0,
+        "min": null,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "sum": null
+      },
+      "ps_queue_ms": {
+        "n": 0,
+        "min": null,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "sum": null
+      },
+      "submit_ms": {
+        "n": 10,
+        "min": 31.9,
+        "max": 131.91,
+        "mean": 74.366,
+        "p50": 67.54,
+        "p95": 131.91,
+        "p99": 131.91,
+        "sum": 743.66
+      },
+      "phase_timings_ms": {},
+      "poll_duration_secs": {
+        "n": 35,
+        "min": 0.16,
+        "max": 170.44,
+        "mean": 85.297,
+        "p50": 85.3,
+        "p95": 160.41,
+        "p99": 170.44,
+        "sum": 2985.41
+      },
+      "pipeline_snapshot_before": {
+        "in_flight": 0,
+        "ps": {
+          "name": "ps",
+          "limit": 10,
+          "active": 0,
+          "queued": 0
+        },
+        "ss": {
+          "name": "ss",
+          "limit": 10,
+          "active": 5,
+          "queued": 0
+        },
+        "upload": {
+          "name": "upload",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "download": {
+          "name": "download",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "ready_buffer": {
+          "bytes": 0,
+          "items": 0,
+          "ss_paused": false,
+          "max_bytes": 536870912,
+          "max_items": 32
+        },
+        "segments": [
+          {
+            "task_key": "admin:sync-bs8dDDllatV7dhQ2YLW1Kg",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784789103.768759,
+            "ended_at": 1784789169.7910497
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-00",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784791152.3164027,
+            "ended_at": 1784791190.4092412
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-01",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784791153.7417924,
+            "ended_at": 1784791199.9042406
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-03",
+            "stage": "sse",
+            "slot": 2,
+            "started_at": 1784791155.073152,
+            "ended_at": 1784791203.4778228
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-02",
+            "stage": "sse",
+            "slot": 3,
+            "started_at": 1784791156.5068204,
+            "ended_at": 1784791205.396453
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-05",
+            "stage": "sse",
+            "slot": 4,
+            "started_at": 1784791157.8988326,
+            "ended_at": 1784791161.4788904
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-04",
+            "stage": "sse",
+            "slot": 5,
+            "started_at": 1784791159.1992083,
+            "ended_at": 1784791227.6540818
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-06",
+            "stage": "sse",
+            "slot": 6,
+            "started_at": 1784791160.3922532,
+            "ended_at": 1784791164.623143
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-05",
+            "stage": "sse",
+            "slot": 4,
+            "started_at": 1784791161.4789379
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-08",
+            "stage": "sse",
+            "slot": 7,
+            "started_at": 1784791161.7990484,
+            "ended_at": 1784791235.3670084
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-07",
+            "stage": "sse",
+            "slot": 8,
+            "started_at": 1784791163.466195,
+            "ended_at": 1784791164.683594
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-06",
+            "stage": "sse",
+            "slot": 6,
+            "started_at": 1784791164.6231952
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-07",
+            "stage": "sse",
+            "slot": 8,
+            "started_at": 1784791164.6836505
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-09",
+            "stage": "sse",
+            "slot": 9,
+            "started_at": 1784791165.1138058,
+            "ended_at": 1784791230.1246896
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-05",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784791190.4094706
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-02",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784791293.870365,
+            "ended_at": 1784791336.409185
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-01",
+            "stage": "sse",
+            "slot": 2,
+            "started_at": 1784791295.4000947,
+            "ended_at": 1784791347.3155334
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-00",
+            "stage": "sse",
+            "slot": 3,
+            "started_at": 1784791296.6066966,
+            "ended_at": 1784791334.7788703
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-04",
+            "stage": "sse",
+            "slot": 5,
+            "started_at": 1784791297.7703753,
+            "ended_at": 1784791335.5081873
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-06",
+            "stage": "sse",
+            "slot": 7,
+            "started_at": 1784791298.9650927,
+            "ended_at": 1784791345.0132608
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-03",
+            "stage": "sse",
+            "slot": 9,
+            "started_at": 1784791300.1724048,
+            "ended_at": 1784791344.695905
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-05",
+            "stage": "sse",
+            "slot": 3,
+            "started_at": 1784791334.7791262,
+            "ended_at": 1784791370.1650846
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-08",
+            "stage": "sse",
+            "slot": 5,
+            "started_at": 1784791335.5084224,
+            "ended_at": 1784791371.556614
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-07",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784791336.4094183,
+            "ended_at": 1784791380.2330756
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-09",
+            "stage": "sse",
+            "slot": 9,
+            "started_at": 1784791344.6961293,
+            "ended_at": 1784791346.7922122
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-09",
+            "stage": "sse",
+            "slot": 7,
+            "started_at": 1784791346.7922637
+          }
+        ]
+      },
+      "pipeline_snapshot_after": {
+        "in_flight": 0,
+        "ps": {
+          "name": "ps",
+          "limit": 10,
+          "active": 0,
+          "queued": 0
+        },
+        "ss": {
+          "name": "ss",
+          "limit": 10,
+          "active": 6,
+          "queued": 0
+        },
+        "upload": {
+          "name": "upload",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "download": {
+          "name": "download",
+          "limit": 8,
+          "active": 0,
+          "queued": 0
+        },
+        "ready_buffer": {
+          "bytes": 0,
+          "items": 0,
+          "ss_paused": false,
+          "max_bytes": 536870912,
+          "max_items": 32
+        },
+        "segments": [
+          {
+            "task_key": "admin:sync-bs8dDDllatV7dhQ2YLW1Kg",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784789103.768759,
+            "ended_at": 1784789169.7910497
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-00",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784791152.3164027,
+            "ended_at": 1784791190.4092412
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-01",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784791153.7417924,
+            "ended_at": 1784791199.9042406
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-03",
+            "stage": "sse",
+            "slot": 2,
+            "started_at": 1784791155.073152,
+            "ended_at": 1784791203.4778228
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-02",
+            "stage": "sse",
+            "slot": 3,
+            "started_at": 1784791156.5068204,
+            "ended_at": 1784791205.396453
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-05",
+            "stage": "sse",
+            "slot": 4,
+            "started_at": 1784791157.8988326,
+            "ended_at": 1784791161.4788904
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-04",
+            "stage": "sse",
+            "slot": 5,
+            "started_at": 1784791159.1992083,
+            "ended_at": 1784791227.6540818
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-06",
+            "stage": "sse",
+            "slot": 6,
+            "started_at": 1784791160.3922532,
+            "ended_at": 1784791164.623143
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-05",
+            "stage": "sse",
+            "slot": 4,
+            "started_at": 1784791161.4789379
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-08",
+            "stage": "sse",
+            "slot": 7,
+            "started_at": 1784791161.7990484,
+            "ended_at": 1784791235.3670084
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-07",
+            "stage": "sse",
+            "slot": 8,
+            "started_at": 1784791163.466195,
+            "ended_at": 1784791164.683594
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-06",
+            "stage": "sse",
+            "slot": 6,
+            "started_at": 1784791164.6231952
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-07",
+            "stage": "sse",
+            "slot": 8,
+            "started_at": 1784791164.6836505
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-09",
+            "stage": "sse",
+            "slot": 9,
+            "started_at": 1784791165.1138058,
+            "ended_at": 1784791230.1246896
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T071912Z-conc10-05",
+            "stage": "sse",
+            "slot": 0,
+            "started_at": 1784791190.4094706
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-02",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784791293.870365,
+            "ended_at": 1784791336.409185
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-01",
+            "stage": "sse",
+            "slot": 2,
+            "started_at": 1784791295.4000947,
+            "ended_at": 1784791347.3155334
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-00",
+            "stage": "sse",
+            "slot": 3,
+            "started_at": 1784791296.6066966,
+            "ended_at": 1784791334.7788703
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-04",
+            "stage": "sse",
+            "slot": 5,
+            "started_at": 1784791297.7703753,
+            "ended_at": 1784791335.5081873
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-06",
+            "stage": "sse",
+            "slot": 7,
+            "started_at": 1784791298.9650927,
+            "ended_at": 1784791345.0132608
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-03",
+            "stage": "sse",
+            "slot": 9,
+            "started_at": 1784791300.1724048,
+            "ended_at": 1784791344.695905
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-05",
+            "stage": "sse",
+            "slot": 3,
+            "started_at": 1784791334.7791262,
+            "ended_at": 1784791370.1650846
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-08",
+            "stage": "sse",
+            "slot": 5,
+            "started_at": 1784791335.5084224,
+            "ended_at": 1784791371.556614
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-07",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784791336.4094183,
+            "ended_at": 1784791380.2330756
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-09",
+            "stage": "sse",
+            "slot": 9,
+            "started_at": 1784791344.6961293,
+            "ended_at": 1784791346.7922122
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072133Z-conc10-09",
+            "stage": "sse",
+            "slot": 7,
+            "started_at": 1784791346.7922637
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072340Z-conc10-03",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784791420.7004173,
+            "ended_at": 1784791451.186803
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072340Z-conc10-00",
+            "stage": "sse",
+            "slot": 2,
+            "started_at": 1784791421.7811668,
+            "ended_at": 1784791499.730804
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072340Z-conc10-06",
+            "stage": "sse",
+            "slot": 3,
+            "started_at": 1784791423.2468064,
+            "ended_at": 1784791425.9159658
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072340Z-conc10-01",
+            "stage": "sse",
+            "slot": 5,
+            "started_at": 1784791424.632474,
+            "ended_at": 1784791463.426281
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072340Z-conc10-09",
+            "stage": "sse",
+            "slot": 9,
+            "started_at": 1784791425.8666556,
+            "ended_at": 1784791521.753408
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072340Z-conc10-06",
+            "stage": "sse",
+            "slot": 3,
+            "started_at": 1784791425.9160151
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072340Z-conc10-02",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784791451.1870453,
+            "ended_at": 1784791485.1335537
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072340Z-conc10-07",
+            "stage": "sse",
+            "slot": 5,
+            "started_at": 1784791463.4265103,
+            "ended_at": 1784791516.0871787
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072340Z-conc10-04",
+            "stage": "sse",
+            "slot": 1,
+            "started_at": 1784791485.133799,
+            "ended_at": 1784791557.254471
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072340Z-conc10-05",
+            "stage": "sse",
+            "slot": 2,
+            "started_at": 1784791499.7310622,
+            "ended_at": 1784791533.5370667
+          },
+          {
+            "task_key": "admin:pipe-conc10-20260723T072340Z-conc10-08",
+            "stage": "sse",
+            "slot": 5,
+            "started_at": 1784791516.0874443,
+            "ended_at": 1784791565.8781247
+          }
+        ]
+      },
+      "final_items": [
+        {
+          "id": "pipe-conc10-20260723T072340Z-conc10-00",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072340Z-conc10-01",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072340Z-conc10-02",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072340Z-conc10-03",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072340Z-conc10-04",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072340Z-conc10-05",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072340Z-conc10-06",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072340Z-conc10-07",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072340Z-conc10-08",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        },
+        {
+          "id": "pipe-conc10-20260723T072340Z-conc10-09",
+          "status": "success",
+          "wall_clock_ms": null,
+          "phase_timings_ms": null,
+          "error": null
+        }
+      ],
+      "submits": [
+        {
+          "idx": 0,
+          "client_task_id": "pipe-conc10-20260723T072340Z-conc10-00",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 86.89,
+          "task_id": "pipe-conc10-20260723T072340Z-conc10-00",
+          "body_status": "queued"
+        },
+        {
+          "idx": 1,
+          "client_task_id": "pipe-conc10-20260723T072340Z-conc10-01",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 94.81,
+          "task_id": "pipe-conc10-20260723T072340Z-conc10-01",
+          "body_status": "queued"
+        },
+        {
+          "idx": 2,
+          "client_task_id": "pipe-conc10-20260723T072340Z-conc10-02",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 111.05,
+          "task_id": "pipe-conc10-20260723T072340Z-conc10-02",
+          "body_status": "queued"
+        },
+        {
+          "idx": 3,
+          "client_task_id": "pipe-conc10-20260723T072340Z-conc10-03",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 31.9,
+          "task_id": "pipe-conc10-20260723T072340Z-conc10-03",
+          "body_status": "queued"
+        },
+        {
+          "idx": 4,
+          "client_task_id": "pipe-conc10-20260723T072340Z-conc10-04",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 58.17,
+          "task_id": "pipe-conc10-20260723T072340Z-conc10-04",
+          "body_status": "queued"
+        },
+        {
+          "idx": 5,
+          "client_task_id": "pipe-conc10-20260723T072340Z-conc10-05",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 67.54,
+          "task_id": "pipe-conc10-20260723T072340Z-conc10-05",
+          "body_status": "queued"
+        },
+        {
+          "idx": 6,
+          "client_task_id": "pipe-conc10-20260723T072340Z-conc10-06",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 39.12,
+          "task_id": "pipe-conc10-20260723T072340Z-conc10-06",
+          "body_status": "queued"
+        },
+        {
+          "idx": 7,
+          "client_task_id": "pipe-conc10-20260723T072340Z-conc10-07",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 48.27,
+          "task_id": "pipe-conc10-20260723T072340Z-conc10-07",
+          "body_status": "queued"
+        },
+        {
+          "idx": 8,
+          "client_task_id": "pipe-conc10-20260723T072340Z-conc10-08",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 74.0,
+          "task_id": "pipe-conc10-20260723T072340Z-conc10-08",
+          "body_status": "queued"
+        },
+        {
+          "idx": 9,
+          "client_task_id": "pipe-conc10-20260723T072340Z-conc10-09",
+          "submit_ok": true,
+          "submit_status": 200,
+          "submit_ms": 131.91,
+          "task_id": "pipe-conc10-20260723T072340Z-conc10-09",
+          "body_status": "queued"
+        }
+      ],
+      "poll_log": [
+        {
+          "t_secs": 0.16,
+          "counts": {
+            "queued": 9,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 6,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 5.17,
+          "counts": {
+            "running": 4,
+            "queued": 6
+          },
+          "pipeline_in_flight": 4,
+          "ss_active": 9,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 10.18,
+          "counts": {
+            "running": 8,
+            "queued": 2
+          },
+          "pipeline_in_flight": 8,
+          "ss_active": 10,
+          "ss_queued": 3
+        },
+        {
+          "t_secs": 15.19,
+          "counts": {
+            "running": 10
+          },
+          "pipeline_in_flight": 10,
+          "ss_active": 10,
+          "ss_queued": 5
+        },
+        {
+          "t_secs": 20.19,
+          "counts": {
+            "running": 10
+          },
+          "pipeline_in_flight": 10,
+          "ss_active": 10,
+          "ss_queued": 5
+        },
+        {
+          "t_secs": 25.2,
+          "counts": {
+            "running": 10
+          },
+          "pipeline_in_flight": 10,
+          "ss_active": 10,
+          "ss_queued": 5
+        },
+        {
+          "t_secs": 30.21,
+          "counts": {
+            "running": 10
+          },
+          "pipeline_in_flight": 10,
+          "ss_active": 10,
+          "ss_queued": 5
+        },
+        {
+          "t_secs": 35.22,
+          "counts": {
+            "running": 9,
+            "success": 1
+          },
+          "pipeline_in_flight": 9,
+          "ss_active": 10,
+          "ss_queued": 4
+        },
+        {
+          "t_secs": 40.23,
+          "counts": {
+            "running": 9,
+            "success": 1
+          },
+          "pipeline_in_flight": 9,
+          "ss_active": 10,
+          "ss_queued": 4
+        },
+        {
+          "t_secs": 45.23,
+          "counts": {
+            "running": 8,
+            "success": 2
+          },
+          "pipeline_in_flight": 8,
+          "ss_active": 10,
+          "ss_queued": 3
+        },
+        {
+          "t_secs": 50.24,
+          "counts": {
+            "running": 8,
+            "success": 2
+          },
+          "pipeline_in_flight": 8,
+          "ss_active": 10,
+          "ss_queued": 3
+        },
+        {
+          "t_secs": 55.25,
+          "counts": {
+            "running": 8,
+            "success": 2
+          },
+          "pipeline_in_flight": 8,
+          "ss_active": 10,
+          "ss_queued": 3
+        },
+        {
+          "t_secs": 60.26,
+          "counts": {
+            "running": 8,
+            "success": 2
+          },
+          "pipeline_in_flight": 8,
+          "ss_active": 10,
+          "ss_queued": 3
+        },
+        {
+          "t_secs": 65.27,
+          "counts": {
+            "running": 8,
+            "success": 2
+          },
+          "pipeline_in_flight": 8,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 70.28,
+          "counts": {
+            "running": 7,
+            "success": 3
+          },
+          "pipeline_in_flight": 7,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 75.29,
+          "counts": {
+            "running": 7,
+            "success": 3
+          },
+          "pipeline_in_flight": 7,
+          "ss_active": 10,
+          "ss_queued": 2
+        },
+        {
+          "t_secs": 80.29,
+          "counts": {
+            "success": 4,
+            "running": 6
+          },
+          "pipeline_in_flight": 6,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 85.3,
+          "counts": {
+            "success": 4,
+            "running": 6
+          },
+          "pipeline_in_flight": 6,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 90.31,
+          "counts": {
+            "success": 4,
+            "running": 6
+          },
+          "pipeline_in_flight": 6,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 95.31,
+          "counts": {
+            "success": 4,
+            "running": 6
+          },
+          "pipeline_in_flight": 6,
+          "ss_active": 10,
+          "ss_queued": 1
+        },
+        {
+          "t_secs": 100.32,
+          "counts": {
+            "success": 5,
+            "running": 5
+          },
+          "pipeline_in_flight": 5,
+          "ss_active": 10,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 105.33,
+          "counts": {
+            "success": 6,
+            "running": 4
+          },
+          "pipeline_in_flight": 4,
+          "ss_active": 9,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 110.34,
+          "counts": {
+            "success": 6,
+            "running": 4
+          },
+          "pipeline_in_flight": 4,
+          "ss_active": 9,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 115.34,
+          "counts": {
+            "success": 7,
+            "running": 3
+          },
+          "pipeline_in_flight": 3,
+          "ss_active": 8,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 120.35,
+          "counts": {
+            "success": 7,
+            "running": 3
+          },
+          "pipeline_in_flight": 3,
+          "ss_active": 8,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 125.36,
+          "counts": {
+            "success": 7,
+            "running": 3
+          },
+          "pipeline_in_flight": 3,
+          "ss_active": 8,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 130.37,
+          "counts": {
+            "success": 7,
+            "running": 3
+          },
+          "pipeline_in_flight": 3,
+          "ss_active": 8,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 135.37,
+          "counts": {
+            "success": 7,
+            "running": 3
+          },
+          "pipeline_in_flight": 3,
+          "ss_active": 8,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 140.38,
+          "counts": {
+            "success": 8,
+            "running": 2
+          },
+          "pipeline_in_flight": 2,
+          "ss_active": 7,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 145.39,
+          "counts": {
+            "success": 8,
+            "running": 2
+          },
+          "pipeline_in_flight": 2,
+          "ss_active": 6,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 150.4,
+          "counts": {
+            "success": 9,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 6,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 155.4,
+          "counts": {
+            "success": 9,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 6,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 160.41,
+          "counts": {
+            "success": 9,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 6,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 165.43,
+          "counts": {
+            "success": 9,
+            "running": 1
+          },
+          "pipeline_in_flight": 1,
+          "ss_active": 6,
+          "ss_queued": 0
+        },
+        {
+          "t_secs": 170.44,
+          "counts": {
+            "success": 10
+          },
+          "pipeline_in_flight": 0,
+          "ss_active": 6,
+          "ss_queued": 0
+        }
+      ],
+      "round": 3,
+      "exit_code": 0
+    }
+  ],
+  "execution_log": [
+    {
+      "phase": "serial5",
+      "round": 1,
+      "exit_code": 0,
+      "wall_secs": 48.84,
+      "log_tail": "ite\n[storage] Using database storage: sqlite:////app/data/accounts.db\n{\"phase\": \"egress\", \"mode\": \"panda_webshare\", \"ok\": true, \"ip\": \"92.113.246.176\", \"elapsed_ms\": 1084}\n{\"phase\": \"requirements_ok\", \"mode\": \"panda_webshare\", \"ms\": 1285, \"attempt\": 1}\n{\"phase\": \"prepare_ok\", \"mode\": \"panda_webshare\", \"ms\": 560, \"conduit\": true}\n{\"phase\": \"sse_done\", \"mode\": \"panda_webshare\", \"ms\": 27725, \"cid\": \"6a61be71-f4e8-83ec-92e9-db7863356f25\", \"has_image_gen\": true, \"file_ids\": [], \"chunks\": 22, \"deadline_hit\": false, \"late_image_gen\": false}\n{\"phase\": \"urls_resolved\", \"mode\": \"panda_webshare\", \"ms\": 6495, \"urls\": 1}\n{\"phase\": \"download_done\", \"mode\": \"panda_webshare\", \"ms\": 1041, \"images\": [{\"index\": 0, \"bytes\": 2830858, \"format\": \"png\", \"width\": 1122, \"height\": 1402, \"sha256\": \"b6163f7a46f25ce05b49d45696b78c8c7935799735fc9a51214fa38552f4e57d\", \"path\": \"image_0.png\"}], \"ok\": true}\n{\"round\": 1, \"account_email\": \"qaflowakjewai6ps@proton.me\", \"ok\": true, \"failure_class\": null, \"error\": null, \"timings_ms\": {\"egress_ms\": 1084, \"requirements_ms\": 1285, \"prepare_ms\": 560, \"conversation_start_ms\": 0, \"sse_gate_ms\": 90000, \"sse_diagnostic_ms\": 0, \"sse_total_ms\": 27725, \"sse_ms\": 27725, \"sse_image_gen_ms\": 24388, \"sse_first_event_ms\": 0, \"poll_resolve_ms\": 6495, \"download_ms\": 1041, \"total_ms\": 41282}}\n{\"planned\": 5, \"attempted\": 1, \"ok\": 1, \"failed\": 0, \"not_run\": 4, \"no_image_gen\": 0, \"cf403_propagated\": 0, \"stopped_early\": false, \"stop_reason\": null, \"serial5_passed\": false, \"failure_classes\": {\"tool_args_as_text\": 0, \"late_image_gen_after_gate\": 0, \"no_image_gen_quiet_stream\": 0, \"no_image_gen_within_gate\": 0}}\nEXIT:0\n[INFO] {\"event\": \"image_resolve_poll_needed\", \"conversation_id\": \"6a61be71-f4e8-83ec-92e9-db7863356f25\", \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_00000000e57481faa38f91ad7aee0e10\"], \"poll_timeout_secs\": 180.0}\n[INFO] {\"event\": \"image_poll_start\", \"conversation_id\": \"6a61be71-f4e8-83ec-92e9-db7863356f25\", \"timeout_secs\": 180.0, \"initial_wait_secs\": 3.0, \"interval_secs\": 3.0, \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_00000000e57481faa38f91ad7aee0e10\"], \"poll_budget\": {\"attempt\": 0, \"conversation_gets\": 0, \"tasks_gets\": 0, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 180.0, \"exhausted_reason\": \"\"}}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61be71-f4e8-83ec-92e9-db7863356f25\", \"attempt\": 1, \"file_ids\": [\"file_00000000e57481faa38f91ad7aee0e10\"], \"sediment_ids\": [\"file_00000000e57481faa38f91ad7aee0e10\"], \"poll_budget\": {\"attempt\": 1, \"conversation_gets\": 1, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 177.05, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit_pending_settle\", \"conversation_id\": \"6a61be71-f4e8-83ec-92e9-db7863356f25\", \"file_ids\": [\"file_00000000e57481faa38f91ad7aee0e10\"], \"sediment_ids\": [\"file_00000000e57481faa38f91ad7aee0e10\"], \"settle_secs\": 2.0}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61be71-f4e8-83ec-92e9-db7863356f25\", \"attempt\": 2, \"file_ids\": [\"file_00000000e57481faa38f91ad7aee0e10\"], \"sediment_ids\": [\"file_00000000e57481faa38f91ad7aee0e10\"], \"poll_budget\": {\"attempt\": 2, \"conversation_gets\": 2, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 174.43, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit\", \"conversation_id\": \"6a61be71-f4e8-83ec-92e9-db7863356f25\", \"file_ids\": [\"file_00000000e57481faa38f91ad7aee0e10\"], \"sediment_ids\": [\"file_00000000e57481faa38f91ad7aee0e10\"]}\n[DEBUG] {\"event\": \"image_urls_resolved\", \"conversation_id\": \"6a61be71-f4e8-83ec-92e9-db7863356f25\", \"file_ids\": [\"file_00000000e57481faa38f91ad7aee0e10\"], \"sediment_ids\": [\"file_00000000e57481faa38f91ad7aee0e10\"], \"urls\": [\"https://chatgpt.com/backend-api/estuary/content?id=file_00000000e57481faa38f91ad7aee0e10&fn=Rainy+night+in+the+city.png&cd=attachment&ts=495775&p=fs&cid=1&sig=53a3f92e5957a7ff29eb60db9daaeba064b441875cc5cb2827c79197a9dccae9&v=0\"]}\n"
+    },
+    {
+      "phase": "serial5",
+      "round": 2,
+      "exit_code": 0,
+      "wall_secs": 54.24,
+      "log_tail": "torage] Using database storage: sqlite:////app/data/accounts.db\n{\"phase\": \"egress\", \"mode\": \"panda_webshare\", \"ok\": true, \"ip\": \"92.113.246.176\", \"elapsed_ms\": 430}\n{\"phase\": \"requirements_ok\", \"mode\": \"panda_webshare\", \"ms\": 2139, \"attempt\": 1}\n{\"phase\": \"prepare_ok\", \"mode\": \"panda_webshare\", \"ms\": 202, \"conduit\": true}\n{\"phase\": \"sse_done\", \"mode\": \"panda_webshare\", \"ms\": 27639, \"cid\": \"6a61beb9-8b2c-83ec-bdb5-1cbc189b3cae\", \"has_image_gen\": true, \"file_ids\": [], \"chunks\": 22, \"deadline_hit\": false, \"late_image_gen\": false}\n{\"phase\": \"urls_resolved\", \"mode\": \"panda_webshare\", \"ms\": 9760, \"urls\": 1}\n{\"phase\": \"download_done\", \"mode\": \"panda_webshare\", \"ms\": 1001, \"images\": [{\"index\": 0, \"bytes\": 2435354, \"format\": \"png\", \"width\": 1122, \"height\": 1402, \"sha256\": \"05516340c396691a43ca18c3a06a18d61b9d52009f0b14ed73acd6929e0fedf6\", \"path\": \"image_0.png\"}], \"ok\": true}\n{\"round\": 2, \"account_email\": \"qaflowakjewai6ps@proton.me\", \"ok\": true, \"failure_class\": null, \"error\": null, \"timings_ms\": {\"egress_ms\": 430, \"requirements_ms\": 2139, \"prepare_ms\": 202, \"conversation_start_ms\": 0, \"sse_gate_ms\": 90000, \"sse_diagnostic_ms\": 0, \"sse_total_ms\": 27639, \"sse_ms\": 27639, \"sse_image_gen_ms\": 24711, \"sse_first_event_ms\": 0, \"poll_resolve_ms\": 9760, \"download_ms\": 1001, \"total_ms\": 43827}}\n{\"planned\": 5, \"attempted\": 2, \"ok\": 2, \"failed\": 0, \"not_run\": 3, \"no_image_gen\": 0, \"cf403_propagated\": 0, \"stopped_early\": false, \"stop_reason\": null, \"serial5_passed\": false, \"failure_classes\": {\"tool_args_as_text\": 0, \"late_image_gen_after_gate\": 0, \"no_image_gen_quiet_stream\": 0, \"no_image_gen_within_gate\": 0}}\nEXIT:0\n[INFO] {\"event\": \"image_resolve_poll_needed\", \"conversation_id\": \"6a61beb9-8b2c-83ec-bdb5-1cbc189b3cae\", \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_0000000024dc81faa09bda9d8b2a6247\"], \"poll_timeout_secs\": 180.0}\n[INFO] {\"event\": \"image_poll_start\", \"conversation_id\": \"6a61beb9-8b2c-83ec-bdb5-1cbc189b3cae\", \"timeout_secs\": 180.0, \"initial_wait_secs\": 3.0, \"interval_secs\": 3.0, \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_0000000024dc81faa09bda9d8b2a6247\"], \"poll_budget\": {\"attempt\": 0, \"conversation_gets\": 0, \"tasks_gets\": 0, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 180.0, \"exhausted_reason\": \"\"}}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61beb9-8b2c-83ec-bdb5-1cbc189b3cae\", \"attempt\": 1, \"file_ids\": [\"file_0000000024dc81faa09bda9d8b2a6247\"], \"sediment_ids\": [\"file_0000000024dc81faa09bda9d8b2a6247\"], \"poll_budget\": {\"attempt\": 1, \"conversation_gets\": 1, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 176.95, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit_pending_settle\", \"conversation_id\": \"6a61beb9-8b2c-83ec-bdb5-1cbc189b3cae\", \"file_ids\": [\"file_0000000024dc81faa09bda9d8b2a6247\"], \"sediment_ids\": [\"file_0000000024dc81faa09bda9d8b2a6247\"], \"settle_secs\": 2.0}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61beb9-8b2c-83ec-bdb5-1cbc189b3cae\", \"attempt\": 2, \"file_ids\": [\"file_0000000024dc81faa09bda9d8b2a6247\"], \"sediment_ids\": [\"file_0000000024dc81faa09bda9d8b2a6247\"], \"poll_budget\": {\"attempt\": 2, \"conversation_gets\": 2, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 174.06, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit\", \"conversation_id\": \"6a61beb9-8b2c-83ec-bdb5-1cbc189b3cae\", \"file_ids\": [\"file_0000000024dc81faa09bda9d8b2a6247\"], \"sediment_ids\": [\"file_0000000024dc81faa09bda9d8b2a6247\"]}\n[DEBUG] {\"event\": \"image_urls_resolved\", \"conversation_id\": \"6a61beb9-8b2c-83ec-bdb5-1cbc189b3cae\", \"file_ids\": [\"file_0000000024dc81faa09bda9d8b2a6247\"], \"sediment_ids\": [\"file_0000000024dc81faa09bda9d8b2a6247\"], \"urls\": [\"https://chatgpt.com/backend-api/estuary/content?id=file_0000000024dc81faa09bda9d8b2a6247&fn=Rainy+city+alley+at+dusk%281%29.png&cd=attachment&ts=495775&p=fs&cid=1&sig=588edf194b5f4f502ad62d52b73dc5b7dc276d2d83f274c29c6985e31240ef08&v=0\"]}\n"
+    },
+    {
+      "phase": "serial5",
+      "round": 3,
+      "exit_code": 0,
+      "wall_secs": 66.36,
+      "log_tail": "ge] Using database storage: sqlite:////app/data/accounts.db\n{\"phase\": \"egress\", \"mode\": \"panda_webshare\", \"ok\": true, \"ip\": \"92.113.246.176\", \"elapsed_ms\": 248}\n{\"phase\": \"requirements_ok\", \"mode\": \"panda_webshare\", \"ms\": 1653, \"attempt\": 1}\n{\"phase\": \"prepare_ok\", \"mode\": \"panda_webshare\", \"ms\": 4508, \"conduit\": true}\n{\"phase\": \"sse_done\", \"mode\": \"panda_webshare\", \"ms\": 35487, \"cid\": \"6a61bf09-dbdc-83ec-bdc7-e24d5c74fa94\", \"has_image_gen\": true, \"file_ids\": [], \"chunks\": 22, \"deadline_hit\": false, \"late_image_gen\": false}\n{\"phase\": \"urls_resolved\", \"mode\": \"panda_webshare\", \"ms\": 6537, \"urls\": 1}\n{\"phase\": \"download_done\", \"mode\": \"panda_webshare\", \"ms\": 464, \"images\": [{\"index\": 0, \"bytes\": 2537043, \"format\": \"png\", \"width\": 1254, \"height\": 1254, \"sha256\": \"51380d3526f69d07c5a57cb1a0543f61a13fed8423e81626c6e88401b40e784d\", \"path\": \"image_0.png\"}], \"ok\": true}\n{\"round\": 3, \"account_email\": \"qaflowakjewai6ps@proton.me\", \"ok\": true, \"failure_class\": null, \"error\": null, \"timings_ms\": {\"egress_ms\": 248, \"requirements_ms\": 1653, \"prepare_ms\": 4508, \"conversation_start_ms\": 0, \"sse_gate_ms\": 90000, \"sse_diagnostic_ms\": 0, \"sse_total_ms\": 35487, \"sse_ms\": 35487, \"sse_image_gen_ms\": 30123, \"sse_first_event_ms\": 0, \"poll_resolve_ms\": 6537, \"download_ms\": 464, \"total_ms\": 53904}}\n{\"planned\": 5, \"attempted\": 3, \"ok\": 3, \"failed\": 0, \"not_run\": 2, \"no_image_gen\": 0, \"cf403_propagated\": 0, \"stopped_early\": false, \"stop_reason\": null, \"serial5_passed\": false, \"failure_classes\": {\"tool_args_as_text\": 0, \"late_image_gen_after_gate\": 0, \"no_image_gen_quiet_stream\": 0, \"no_image_gen_within_gate\": 0}}\nEXIT:0\n[INFO] {\"event\": \"image_resolve_poll_needed\", \"conversation_id\": \"6a61bf09-dbdc-83ec-bdc7-e24d5c74fa94\", \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_0000000040348207b9393f6e2adc5dee\"], \"poll_timeout_secs\": 180.0}\n[INFO] {\"event\": \"image_poll_start\", \"conversation_id\": \"6a61bf09-dbdc-83ec-bdc7-e24d5c74fa94\", \"timeout_secs\": 180.0, \"initial_wait_secs\": 3.0, \"interval_secs\": 3.0, \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_0000000040348207b9393f6e2adc5dee\"], \"poll_budget\": {\"attempt\": 0, \"conversation_gets\": 0, \"tasks_gets\": 0, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 180.0, \"exhausted_reason\": \"\"}}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61bf09-dbdc-83ec-bdc7-e24d5c74fa94\", \"attempt\": 1, \"file_ids\": [\"file_0000000040348207b9393f6e2adc5dee\"], \"sediment_ids\": [\"file_0000000040348207b9393f6e2adc5dee\"], \"poll_budget\": {\"attempt\": 1, \"conversation_gets\": 1, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 177.04, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit_pending_settle\", \"conversation_id\": \"6a61bf09-dbdc-83ec-bdc7-e24d5c74fa94\", \"file_ids\": [\"file_0000000040348207b9393f6e2adc5dee\"], \"sediment_ids\": [\"file_0000000040348207b9393f6e2adc5dee\"], \"settle_secs\": 2.0}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61bf09-dbdc-83ec-bdc7-e24d5c74fa94\", \"attempt\": 2, \"file_ids\": [\"file_0000000040348207b9393f6e2adc5dee\"], \"sediment_ids\": [\"file_0000000040348207b9393f6e2adc5dee\"], \"poll_budget\": {\"attempt\": 2, \"conversation_gets\": 2, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 174.34, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit\", \"conversation_id\": \"6a61bf09-dbdc-83ec-bdc7-e24d5c74fa94\", \"file_ids\": [\"file_0000000040348207b9393f6e2adc5dee\"], \"sediment_ids\": [\"file_0000000040348207b9393f6e2adc5dee\"]}\n[DEBUG] {\"event\": \"image_urls_resolved\", \"conversation_id\": \"6a61bf09-dbdc-83ec-bdc7-e24d5c74fa94\", \"file_ids\": [\"file_0000000040348207b9393f6e2adc5dee\"], \"sediment_ids\": [\"file_0000000040348207b9393f6e2adc5dee\"], \"urls\": [\"https://chatgpt.com/backend-api/estuary/content?id=file_0000000040348207b9393f6e2adc5dee&fn=Rainy+alley+beyond+the+lantern+glow.png&cd=attachment&ts=495775&p=fs&cid=1&sig=2df2b62a44587c26bea69796ed80030b16ee7317746592a70b5595e33e018a48&v=0\"]}\n"
+    },
+    {
+      "phase": "serial5",
+      "round": 4,
+      "exit_code": 0,
+      "wall_secs": 58.92,
+      "log_tail": "\n[storage] Using database storage: sqlite:////app/data/accounts.db\n{\"phase\": \"egress\", \"mode\": \"panda_webshare\", \"ok\": true, \"ip\": \"92.113.246.176\", \"elapsed_ms\": 908}\n{\"phase\": \"requirements_ok\", \"mode\": \"panda_webshare\", \"ms\": 936, \"attempt\": 1}\n{\"phase\": \"prepare_ok\", \"mode\": \"panda_webshare\", \"ms\": 176, \"conduit\": true}\n{\"phase\": \"sse_done\", \"mode\": \"panda_webshare\", \"ms\": 33490, \"cid\": \"6a61bf59-73b4-83ec-b737-6569e7e7da4a\", \"has_image_gen\": true, \"file_ids\": [], \"chunks\": 22, \"deadline_hit\": false, \"late_image_gen\": false}\n{\"phase\": \"urls_resolved\", \"mode\": \"panda_webshare\", \"ms\": 6669, \"urls\": 1}\n{\"phase\": \"download_done\", \"mode\": \"panda_webshare\", \"ms\": 1101, \"images\": [{\"index\": 0, \"bytes\": 2583951, \"format\": \"png\", \"width\": 1122, \"height\": 1402, \"sha256\": \"af290409541e3d3bcdfe1dcac9e2bb918285724a175001c9dfb0128c751c210d\", \"path\": \"image_0.png\"}], \"ok\": true}\n{\"round\": 4, \"account_email\": \"qaflowakjewai6ps@proton.me\", \"ok\": true, \"failure_class\": null, \"error\": null, \"timings_ms\": {\"egress_ms\": 908, \"requirements_ms\": 936, \"prepare_ms\": 176, \"conversation_start_ms\": 0, \"sse_gate_ms\": 90000, \"sse_diagnostic_ms\": 0, \"sse_total_ms\": 33490, \"sse_ms\": 33490, \"sse_image_gen_ms\": 29575, \"sse_first_event_ms\": 0, \"poll_resolve_ms\": 6669, \"download_ms\": 1101, \"total_ms\": 47850}}\n{\"planned\": 5, \"attempted\": 4, \"ok\": 4, \"failed\": 0, \"not_run\": 1, \"no_image_gen\": 0, \"cf403_propagated\": 0, \"stopped_early\": false, \"stop_reason\": null, \"serial5_passed\": false, \"failure_classes\": {\"tool_args_as_text\": 0, \"late_image_gen_after_gate\": 0, \"no_image_gen_quiet_stream\": 0, \"no_image_gen_within_gate\": 0}}\nEXIT:0\n[INFO] {\"event\": \"image_resolve_poll_needed\", \"conversation_id\": \"6a61bf59-73b4-83ec-b737-6569e7e7da4a\", \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_00000000aa108206a8d10d3a75e051ad\"], \"poll_timeout_secs\": 180.0}\n[INFO] {\"event\": \"image_poll_start\", \"conversation_id\": \"6a61bf59-73b4-83ec-b737-6569e7e7da4a\", \"timeout_secs\": 180.0, \"initial_wait_secs\": 3.0, \"interval_secs\": 3.0, \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_00000000aa108206a8d10d3a75e051ad\"], \"poll_budget\": {\"attempt\": 0, \"conversation_gets\": 0, \"tasks_gets\": 0, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 180.0, \"exhausted_reason\": \"\"}}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61bf59-73b4-83ec-b737-6569e7e7da4a\", \"attempt\": 1, \"file_ids\": [\"file_00000000aa108206a8d10d3a75e051ad\"], \"sediment_ids\": [\"file_00000000aa108206a8d10d3a75e051ad\"], \"poll_budget\": {\"attempt\": 1, \"conversation_gets\": 1, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 176.99, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit_pending_settle\", \"conversation_id\": \"6a61bf59-73b4-83ec-b737-6569e7e7da4a\", \"file_ids\": [\"file_00000000aa108206a8d10d3a75e051ad\"], \"sediment_ids\": [\"file_00000000aa108206a8d10d3a75e051ad\"], \"settle_secs\": 2.0}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61bf59-73b4-83ec-b737-6569e7e7da4a\", \"attempt\": 2, \"file_ids\": [\"file_00000000aa108206a8d10d3a75e051ad\"], \"sediment_ids\": [\"file_00000000aa108206a8d10d3a75e051ad\"], \"poll_budget\": {\"attempt\": 2, \"conversation_gets\": 2, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 174.32, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit\", \"conversation_id\": \"6a61bf59-73b4-83ec-b737-6569e7e7da4a\", \"file_ids\": [\"file_00000000aa108206a8d10d3a75e051ad\"], \"sediment_ids\": [\"file_00000000aa108206a8d10d3a75e051ad\"]}\n[DEBUG] {\"event\": \"image_urls_resolved\", \"conversation_id\": \"6a61bf59-73b4-83ec-b737-6569e7e7da4a\", \"file_ids\": [\"file_00000000aa108206a8d10d3a75e051ad\"], \"sediment_ids\": [\"file_00000000aa108206a8d10d3a75e051ad\"], \"urls\": [\"https://chatgpt.com/backend-api/estuary/content?id=file_00000000aa108206a8d10d3a75e051ad&fn=Rainy+evening+in+a+quiet+alley.png&cd=attachment&ts=495775&p=fs&cid=1&sig=b452350517a6fecc867d19b7d6972807ba95d59955e21cb6f662c77ebab78ccb&v=0\"]}\n"
+    },
+    {
+      "phase": "serial5",
+      "round": 5,
+      "exit_code": 0,
+      "wall_secs": 88.95,
+      "log_tail": "lite\n[storage] Using database storage: sqlite:////app/data/accounts.db\n{\"phase\": \"egress\", \"mode\": \"panda_webshare\", \"ok\": true, \"ip\": \"92.113.246.176\", \"elapsed_ms\": 295}\n{\"phase\": \"requirements_ok\", \"mode\": \"panda_webshare\", \"ms\": 2018, \"attempt\": 1}\n{\"phase\": \"prepare_ok\", \"mode\": \"panda_webshare\", \"ms\": 587, \"conduit\": true}\n{\"phase\": \"sse_done\", \"mode\": \"panda_webshare\", \"ms\": 65564, \"cid\": \"6a61bfa5-4644-83ec-87e1-d070a982bb2c\", \"has_image_gen\": true, \"file_ids\": [], \"chunks\": 22, \"deadline_hit\": false, \"late_image_gen\": false}\n{\"phase\": \"urls_resolved\", \"mode\": \"panda_webshare\", \"ms\": 7331, \"urls\": 1}\n{\"phase\": \"download_done\", \"mode\": \"panda_webshare\", \"ms\": 3834, \"images\": [{\"index\": 0, \"bytes\": 2566842, \"format\": \"png\", \"width\": 1122, \"height\": 1402, \"sha256\": \"29665e81f7d41ee6cfafdf4a7cca982087c7fdd6c81360eccc29d4f98c525096\", \"path\": \"image_0.png\"}], \"ok\": true}\n{\"round\": 5, \"account_email\": \"qaflowakjewai6ps@proton.me\", \"ok\": true, \"failure_class\": null, \"error\": null, \"timings_ms\": {\"egress_ms\": 295, \"requirements_ms\": 2018, \"prepare_ms\": 587, \"conversation_start_ms\": 0, \"sse_gate_ms\": 90000, \"sse_diagnostic_ms\": 0, \"sse_total_ms\": 65564, \"sse_ms\": 65564, \"sse_image_gen_ms\": 58721, \"sse_first_event_ms\": 0, \"poll_resolve_ms\": 7331, \"download_ms\": 3834, \"total_ms\": 82942}}\n{\"planned\": 5, \"attempted\": 5, \"ok\": 5, \"failed\": 0, \"not_run\": 0, \"no_image_gen\": 0, \"cf403_propagated\": 0, \"stopped_early\": false, \"stop_reason\": null, \"serial5_passed\": true, \"failure_classes\": {\"tool_args_as_text\": 0, \"late_image_gen_after_gate\": 0, \"no_image_gen_quiet_stream\": 0, \"no_image_gen_within_gate\": 0}}\nEXIT:0\n[INFO] {\"event\": \"image_resolve_poll_needed\", \"conversation_id\": \"6a61bfa5-4644-83ec-87e1-d070a982bb2c\", \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_000000000bf881f4ad1e2239a3eb31d5\"], \"poll_timeout_secs\": 180.0}\n[INFO] {\"event\": \"image_poll_start\", \"conversation_id\": \"6a61bfa5-4644-83ec-87e1-d070a982bb2c\", \"timeout_secs\": 180.0, \"initial_wait_secs\": 3.0, \"interval_secs\": 3.0, \"initial_file_ids\": [], \"initial_sediment_ids\": [\"file_000000000bf881f4ad1e2239a3eb31d5\"], \"poll_budget\": {\"attempt\": 0, \"conversation_gets\": 0, \"tasks_gets\": 0, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 180.0, \"exhausted_reason\": \"\"}}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61bfa5-4644-83ec-87e1-d070a982bb2c\", \"attempt\": 1, \"file_ids\": [\"file_000000000bf881f4ad1e2239a3eb31d5\"], \"sediment_ids\": [\"file_000000000bf881f4ad1e2239a3eb31d5\"], \"poll_budget\": {\"attempt\": 1, \"conversation_gets\": 1, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 177.05, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit_pending_settle\", \"conversation_id\": \"6a61bfa5-4644-83ec-87e1-d070a982bb2c\", \"file_ids\": [\"file_000000000bf881f4ad1e2239a3eb31d5\"], \"sediment_ids\": [\"file_000000000bf881f4ad1e2239a3eb31d5\"], \"settle_secs\": 2.0}\n[DEBUG] {\"event\": \"image_poll_check\", \"conversation_id\": \"6a61bfa5-4644-83ec-87e1-d070a982bb2c\", \"attempt\": 2, \"file_ids\": [\"file_000000000bf881f4ad1e2239a3eb31d5\"], \"sediment_ids\": [\"file_000000000bf881f4ad1e2239a3eb31d5\"], \"poll_budget\": {\"attempt\": 2, \"conversation_gets\": 2, \"tasks_gets\": 1, \"max_conversation_gets\": 24, \"max_tasks_gets\": 4, \"remaining_wall_secs\": 174.32, \"exhausted_reason\": \"\"}}\n[INFO] {\"event\": \"image_poll_hit\", \"conversation_id\": \"6a61bfa5-4644-83ec-87e1-d070a982bb2c\", \"file_ids\": [\"file_000000000bf881f4ad1e2239a3eb31d5\"], \"sediment_ids\": [\"file_000000000bf881f4ad1e2239a3eb31d5\"]}\n[DEBUG] {\"event\": \"image_urls_resolved\", \"conversation_id\": \"6a61bfa5-4644-83ec-87e1-d070a982bb2c\", \"file_ids\": [\"file_000000000bf881f4ad1e2239a3eb31d5\"], \"sediment_ids\": [\"file_000000000bf881f4ad1e2239a3eb31d5\"], \"urls\": [\"https://chatgpt.com/backend-api/estuary/content?id=file_000000000bf881f4ad1e2239a3eb31d5&fn=Rainy+urban+alley+at+dusk.png&cd=attachment&ts=495775&p=fs&cid=1&sig=4aacad5817bdef6c0b085c1afca308b3ed8b3b7db9d8682b3913282c64510a81&v=0\"]}\n"
+    },
+    {
+      "phase": "pipeline_conc10",
+      "round": 1,
+      "exit_code": 0,
+      "wall_secs": 125.41,
+      "log_tail": "{\"ok\": true, \"report\": \"/app/data/runlogs/spa_repro/acceptance-90s-picture_v2-20260723/conc10-r1/pipe-conc10-20260723T071912Z.json\", \"summary\": {\"wall_clock_ms\": 115387.45, \"completed\": 10, \"failed\": 0, \"ss_queue_p50\": null, \"ss_queue_p95\": null, \"task_wall_p50\": null}}\nEXIT:0\n"
+    },
+    {
+      "phase": "pipeline_conc10",
+      "round": 2,
+      "exit_code": 0,
+      "wall_secs": 108.52,
+      "log_tail": "{\"ok\": true, \"report\": \"/app/data/runlogs/spa_repro/acceptance-90s-picture_v2-20260723/conc10-r2/pipe-conc10-20260723T072133Z.json\", \"summary\": {\"wall_clock_ms\": 105287.63, \"completed\": 10, \"failed\": 0, \"ss_queue_p50\": null, \"ss_queue_p95\": null, \"task_wall_p50\": null}}\nEXIT:0\n"
+    },
+    {
+      "phase": "pipeline_conc10",
+      "round": 3,
+      "exit_code": 0,
+      "wall_secs": 173.29,
+      "log_tail": "{\"ok\": true, \"report\": \"/app/data/runlogs/spa_repro/acceptance-90s-picture_v2-20260723/conc10-r3/pipe-conc10-20260723T072340Z.json\", \"summary\": {\"wall_clock_ms\": 170437.44, \"completed\": 10, \"failed\": 0, \"ss_queue_p50\": null, \"ss_queue_p95\": null, \"task_wall_p50\": null}}\nEXIT:0\n"
+    }
+  ],
+  "outcome": "all_passed",
+  "finished_at": "2026-07-23T07:26:45.532919+00:00",
+  "total_wall_secs": 1043.57
+}

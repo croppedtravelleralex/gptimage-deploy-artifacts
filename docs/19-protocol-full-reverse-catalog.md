@@ -1,7 +1,7 @@
 # 19 — ChatGPT Web 协议全量逆向目录（可执行）
 
-最后更新：2026-07-21  
-状态：已立项（用户认可：代理长期多为机房 IP；目标是把协议挖全，而非赌高质量代理）
+最后更新：2026-07-24  
+状态：挖矿 Now/Next **已完成**；工程改造见 `04` **PROTO-REFACTOR**
 
 ## 0. 定位与硬边界
 
@@ -13,7 +13,20 @@
 | 证据法 | HAR → 字段表 → HTTP 复现（同出口上 **Camoufox vs curl_cffi**）→ 最小改代码 → 文档 |
 | 成功标准 | **覆盖率 + 复现率**（见 §8）；CF 通过率只作观测，不作「挖全」验收 |
 
-相关：`12`（差距）、`17`（CF）、`18`（反代任务书）、`docs/captures/spa/`（已有 HAR/三轮/SOCKS 实验）。
+相关：`12`（差距）、`17`（CF）、`18`（反代任务书）、`docs/captures/spa/`（HAR + 专页）。
+
+### 0.1 主证据链（Camoufox 抓包 → HTTP 复现）
+
+> 读逆向应从此链入手；`acceptance-*` / `P-sentinel-*` 等是**验收/实验记录**，不是协议第一手来源。
+
+| 层 | 证据 | 说明 |
+|----|------|------|
+| 抓包 | `spa-camoufox-20260721T044906Z.har`（文本）、`spa-image-20260721T*.har`（生图 UI） | Camoufox `record_har`；脚本见 `captures/spa/README.md` §Camoufox |
+| 字段表 | `field-diff-20260721.md` | HAR vs 本地协议 diff；驱动 `conversation.py` / OAI 版本号对齐 |
+| HTTP 复现 | `_tmp_spa_camoufox_image_http_repro.py` | 同账号 curl_cffi 闭环 |
+| 出口矩阵 | `bench3-20260721.md` | Clash OK / panda 直连 CF403 / Webshare OK |
+| 栈矩阵 | `panda-socks-camoufox-20260721.md` | 同 IP：Camoufox 过 prepare，curl_cffi 不过 |
+| 分层专页 | `A-*` … `G-*` | 暖机、上传 sediment、错误面等 |
 
 ---
 

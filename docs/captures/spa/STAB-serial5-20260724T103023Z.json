@@ -1,0 +1,52 @@
+{
+  "phase": "STAB-A1",
+  "account_email": "qaflowakjewai6ps@proton.me",
+  "runs": 5,
+  "ok_count": 5,
+  "pass": true,
+  "timeout_secs": 540,
+  "gap_secs": 60.0,
+  "results": [
+    {
+      "run": 1,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 62939,
+      "b64_len": 3653932,
+      "error": null
+    },
+    {
+      "run": 2,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 56723,
+      "b64_len": 3231512,
+      "error": null
+    },
+    {
+      "run": 3,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 95925,
+      "b64_len": 3464396,
+      "error": null
+    },
+    {
+      "run": 4,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 50516,
+      "b64_len": 3140648,
+      "error": null
+    },
+    {
+      "run": 5,
+      "http_code": 200,
+      "ok": true,
+      "elapsed_ms": 74044,
+      "b64_len": 3459588,
+      "error": null
+    }
+  ],
+  "generated_at": "2026-07-24T10:30:23.933228+00:00"
+}

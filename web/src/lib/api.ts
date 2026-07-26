@@ -1,4 +1,7 @@
 import { httpRequest, request } from "@/lib/request";
+import type { ImagePhaseTimingsMs } from "@/lib/image-gantt-segments";
+
+export type { ImagePhaseTimingsMs } from "@/lib/image-gantt-segments";
 
 export type AccountType = string;
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
@@ -23,6 +26,9 @@ export type Account = {
   status: AccountStatus;
   quota: number;
   image_quota_unknown?: boolean;
+  image_schedulable?: boolean;
+  image_quota_state?: string;
+  available_image_quota?: number;
   email?: string | null;
   user_id?: string | null;
   limits_progress?: Array<{
@@ -143,6 +149,16 @@ type AccountListResponse = {
       panda_verified_count?: number;
       panda_rejected_count?: number;
       schedulable?: number;
+      scheduling_enabled?: number;
+      image_schedulable?: number;
+      verified_total_quota?: number;
+      available_image_quota?: number;
+      latest_quota_refresh_at?: string | null;
+      verified_quota_count?: number;
+      stale_quota_count?: number;
+      dispatchable_candidate_count?: number;
+      ready_candidate_count?: number;
+      available_candidate_count?: number;
       tainted_count?: number;
       total_success?: number;
       total_fail?: number;
@@ -620,6 +636,28 @@ export type ImageTask = {
   progress?: string;
   elapsed_secs?: number;
   duration_ms?: number;
+  wall_clock_ms?: number;
+  total_wall_ms?: number;
+  task_queue_ms?: number;
+  worker_duration_ms?: number;
+  phase_timings_ms?: ImagePhaseTimingsMs;
+};
+
+export type ImagePipelineSnapshot = {
+  in_flight: number;
+  ps: { name: string; limit: number; active: number; queued: number };
+  ss: { name: string; limit: number; active: number; queued: number };
+  upload: { name: string; limit: number; active: number; queued: number };
+  download: { name: string; limit: number; active: number; queued: number };
+  ready_buffer?: { bytes: number; items: number; ss_paused: boolean; max_bytes: number; max_items: number };
+  segments?: Array<{ task_key: string; stage: string; slot: number | null; started_at: number; ended_at?: number }>;
+};
+
+export type ImageTaskSubmitOptions = {
+  n?: number;
+  promptEnhance?: boolean;
+  promptEnhanceLocale?: string;
+  multiImageMode?: "fast" | "diverse";
 };
 
 type ImageTaskListResponse = {
@@ -705,12 +743,20 @@ export async function login(authKey: string) {
   });
 }
 
-export async function fetchAccounts(options: { offset?: number; limit?: number } = {}) {
+export async function fetchAccounts(options: { offset?: number; limit?: number; bustCache?: boolean } = {}) {
   const params = new URLSearchParams();
   if (typeof options.offset === "number") params.set("offset", String(options.offset));
   if (typeof options.limit === "number") params.set("limit", String(options.limit));
+  if (options.bustCache) params.set("_", String(Date.now()));
   const query = params.toString();
   return httpRequest<AccountListResponse>(`/api/accounts${query ? `?${query}` : ""}`);
+}
+
+export async function reloadAccountsFromStorage() {
+  return httpRequest<{ ok: boolean; total: number; stats?: AccountListResponse["stats"] }>(
+    "/api/accounts/reload-from-storage",
+    { method: "POST", body: {} },
+  );
 }
 
 export async function syncAccountsToPanda() {
@@ -966,7 +1012,14 @@ export async function editImage(files: File | File[], prompt: string, model?: Im
   );
 }
 
-export async function createImageGenerationTask(clientTaskId: string, prompt: string, model?: ImageModel, size?: string, quality = "auto") {
+export async function createImageGenerationTask(
+  clientTaskId: string,
+  prompt: string,
+  model?: ImageModel,
+  size?: string,
+  quality = "auto",
+  options: ImageTaskSubmitOptions = {},
+) {
   return httpRequest<ImageTask>("/api/image-tasks/generations", {
     method: "POST",
     body: {
@@ -975,8 +1028,16 @@ export async function createImageGenerationTask(clientTaskId: string, prompt: st
       ...(model ? { model } : {}),
       ...(size ? { size } : {}),
       quality,
+      ...(options.n ? { n: options.n } : {}),
+      ...(options.promptEnhance ? { prompt_enhance: true } : {}),
+      ...(options.promptEnhanceLocale ? { prompt_enhance_locale: options.promptEnhanceLocale } : {}),
+      ...(options.multiImageMode ? { multi_image_mode: options.multiImageMode } : {}),
     },
   });
+}
+
+export async function fetchImagePipelineSnapshot() {
+  return httpRequest<ImagePipelineSnapshot>("/api/ops/image-pipeline/snapshot");
 }
 
 export async function createImageEditTask(
@@ -1173,11 +1234,21 @@ export async function deleteToTarget(targetFreeMb: number) {
   );
 }
 
-export async function fetchSystemLogs(filters: { type?: string; start_date?: string; end_date?: string }) {
+export async function fetchSystemLogs(filters: {
+  type?: string;
+  start_date?: string;
+  end_date?: string;
+  source?: string;
+  outcome?: string;
+  limit?: number;
+}) {
   const params = new URLSearchParams();
   if (filters.type) params.set("type", filters.type);
   if (filters.start_date) params.set("start_date", filters.start_date);
   if (filters.end_date) params.set("end_date", filters.end_date);
+  if (filters.source) params.set("source", filters.source);
+  if (filters.outcome) params.set("outcome", filters.outcome);
+  if (typeof filters.limit === "number") params.set("limit", String(filters.limit));
   return httpRequest<{ items: SystemLog[] }>(`/api/logs${params.toString() ? `?${params.toString()}` : ""}`);
 }
 
@@ -1308,6 +1379,66 @@ export async function processNurtureOne(
   }>("/api/ops/nurture/process-one", {
     method: "POST",
     body,
+  });
+}
+
+export type WebshareCfEndpoint = {
+  endpoint: string;
+  host: string;
+  reason?: string;
+  former_account?: string | null;
+  last_scan_at?: string | null;
+  home_status?: number | null;
+  requirements_status?: number | null;
+  cf_classification?: string | null;
+  egress_ip?: string | null;
+  error?: string | null;
+  quarantined?: boolean;
+  last_probe_ok?: boolean | null;
+};
+
+export type WebshareCfInventory = {
+  pool_total: number;
+  available_count: number;
+  cf403_count: number;
+  quarantine_total: number;
+  quarantine_in_pool_count: number;
+  quarantine_outside_pool_count: number;
+  available_endpoints: WebshareCfEndpoint[];
+  cf403_nodes: WebshareCfEndpoint[];
+  quarantine_outside_pool: WebshareCfEndpoint[];
+};
+
+export type WebshareCfScanStatus = {
+  enabled: boolean;
+  running: boolean;
+  last_scan_at: string | null;
+  next_scan_at: string | null;
+  last_error: string;
+  counts: {
+    pool_total: number;
+    available_count: number;
+    cf403_count: number;
+    quarantine_total: number;
+    quarantine_in_pool_count: number;
+    quarantine_outside_pool_count: number;
+  };
+  inventory: WebshareCfInventory;
+  latest_report?: { generated_at?: string; summary?: Record<string, unknown> };
+};
+
+export async function fetchWebshareCfScanStatus() {
+  return httpRequest<WebshareCfScanStatus>("/api/ops/webshare-cf-scan/status");
+}
+
+export async function fetchWebshareCfScanInventory() {
+  return httpRequest<WebshareCfInventory>("/api/ops/webshare-cf-scan/inventory");
+}
+
+export async function runWebshareCfScanOnce() {
+  return httpRequest<Record<string, unknown>>("/api/ops/webshare-cf-scan/run-once", {
+    method: "POST",
+    body: {},
   });
 }
 

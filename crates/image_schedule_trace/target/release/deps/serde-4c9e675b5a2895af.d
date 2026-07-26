@@ -1,0 +1,14 @@
+/mnt/d/SelfMadeTool/AutoRegister/gptimage/crates/image_schedule_trace/target/release/deps/serde-4c9e675b5a2895af.d: /home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /mnt/d/SelfMadeTool/AutoRegister/gptimage/crates/image_schedule_trace/target/release/build/serde-147353a390178aed/out/private.rs
+
+/mnt/d/SelfMadeTool/AutoRegister/gptimage/crates/image_schedule_trace/target/release/deps/libserde-4c9e675b5a2895af.rlib: /home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /mnt/d/SelfMadeTool/AutoRegister/gptimage/crates/image_schedule_trace/target/release/build/serde-147353a390178aed/out/private.rs
+
+/mnt/d/SelfMadeTool/AutoRegister/gptimage/crates/image_schedule_trace/target/release/deps/libserde-4c9e675b5a2895af.rmeta: /home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /mnt/d/SelfMadeTool/AutoRegister/gptimage/crates/image_schedule_trace/target/release/build/serde-147353a390178aed/out/private.rs
+
+/home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs:
+/home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs:
+/home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs:
+/home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs:
+/home/lenovo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs:
+/mnt/d/SelfMadeTool/AutoRegister/gptimage/crates/image_schedule_trace/target/release/build/serde-147353a390178aed/out/private.rs:
+
+# env-dep:OUT_DIR=/mnt/d/SelfMadeTool/AutoRegister/gptimage/crates/image_schedule_trace/target/release/build/serde-147353a390178aed/out

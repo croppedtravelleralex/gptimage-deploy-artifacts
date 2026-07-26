@@ -1,8 +1,13 @@
+import type { NextConfig } from 'next'
+import bundleAnalyzer from '@next/bundle-analyzer'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { NextConfig } from 'next'
 import { parseChangelog } from './src/lib/release'
+
+const withBundleAnalyzer = bundleAnalyzer({
+    enabled: process.env.ANALYZE === 'true',
+})
 
 const projectRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -37,4 +42,4 @@ const nextConfig: NextConfig = {
     },
 }
 
-export default nextConfig
+export default withBundleAnalyzer(nextConfig)

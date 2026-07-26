@@ -1,0 +1,20 @@
+{
+  "release": "nurture-webshare-cf-scan-20260723",
+  "files": {
+    "services/ip_nurture_schedule.py": "1b068b15d0e7bc04aba57d2629a9bf2d75bc8574070e90a2882d943026322de1",
+    "services/text_nurture_service.py": "c366c0d0499ad17adc4d0493a24f48b3cf68cdb447bebf1736a2d20a22998e5c",
+    "services/config.py": "9cfc5cce537f0460ed67bbaf7bc2497966907539ac59111368c2fa9dd43ad41b",
+    "services/account_service.py": "443eefcf27a8eddc1c59c285b8cf45ad635857b889ac1994c755c52211fab156",
+    "services/risk_dashboard_service.py": "c94a306f2ab76faabb1e237b8fdb88cc0461c130fb7d19ac4c8f50d057723757",
+    "services/proxy_cf_probe.py": "02b60c0644676badbd3fe99c389ad7ab921d9dd3138ae27394e43dc571527c54",
+    "services/webshare_cf_scan_service.py": "8eff19a7b5700d9b78238a68ac34eb3a4d5e37ec7d4170edf5e45f8f43055288",
+    "services/proxy_quarantine.py": "9b617906bcc34e73c77708637b440c6a62ca7c6b58862d0c48b35701c3854408",
+    "services/proxy_cf_failover.py": "31df28554b5b16b2586e869375e3971a75c6c894b2935981664c69de0f5c936d",
+    "api/ops.py": "f5edd649d16329b89147fc827051a0c47016ecaf141195f7b6b614d751d9a91d",
+    "api/app.py": "bb15231df6e9bd361a8909e5fa02cceb0fbacb456605d586f8828ae93b7190d1",
+    "api/support.py": "5fcdc4259b55107e55f2822ec8fdafa692f9c2c1ed4e6fe643ec2161bbf83856",
+    "web_dist.tgz": "6a28b6a1c58e922fd3bc1d44d09d6d6083d5326fe347b466a10813ea05b5b62f",
+    "deploy_panda_nurture.sh": "926d3abea08dfff259fd6834c27b855b16ffdb5cd2bc0592eb6ee4ad86ab4b0d",
+    "README.md": "ff8adc19e1e8e8349e11f0ab13c551a15d795d9c654de44975b9682b27f4c8ca"
+  }
+}

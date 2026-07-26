@@ -1,0 +1,180 @@
+{
+  "stamp": "20260724T142654Z",
+  "prompt_tag": "PROD-serial10-20260724T142654Z",
+  "account_email": "qaflowakjewai6ps@proton.me",
+  "runs_planned": 10,
+  "runs_executed": 10,
+  "ok_count": 0,
+  "pass": false,
+  "http_results": [
+    {
+      "run": 1,
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 43,
+      "b64_len": 0,
+      "error": {
+        "message": "image pool starved: dispatchable=0 < 2",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "rate_limit_exceeded"
+      }
+    },
+    {
+      "run": 2,
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 42,
+      "b64_len": 0,
+      "error": {
+        "message": "image pool starved: dispatchable=0 < 2",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "rate_limit_exceeded"
+      }
+    },
+    {
+      "run": 3,
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 81,
+      "b64_len": 0,
+      "error": {
+        "message": "image pool starved: dispatchable=0 < 2",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "rate_limit_exceeded"
+      }
+    },
+    {
+      "run": 4,
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 43,
+      "b64_len": 0,
+      "error": {
+        "message": "image pool starved: dispatchable=0 < 2",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "rate_limit_exceeded"
+      }
+    },
+    {
+      "run": 5,
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 41,
+      "b64_len": 0,
+      "error": {
+        "message": "image pool starved: dispatchable=0 < 2",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "rate_limit_exceeded"
+      }
+    },
+    {
+      "run": 6,
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 41,
+      "b64_len": 0,
+      "error": {
+        "message": "image pool starved: dispatchable=0 < 2",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "rate_limit_exceeded"
+      }
+    },
+    {
+      "run": 7,
+      "http_code": 502,
+      "ok": false,
+      "elapsed_ms": 226076,
+      "b64_len": 0,
+      "error": {
+        "message": "image task hard timeout before upstream completion (225.0s); no conversation_id captured",
+        "type": "server_error",
+        "param": null,
+        "code": "upstream_error"
+      }
+    },
+    {
+      "run": 8,
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 64,
+      "b64_len": 0,
+      "error": {
+        "message": "image pool starved: dispatchable=0 < 2",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "rate_limit_exceeded"
+      }
+    },
+    {
+      "run": 9,
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 41,
+      "b64_len": 0,
+      "error": {
+        "message": "image pool starved: dispatchable=0 < 2",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "rate_limit_exceeded"
+      }
+    },
+    {
+      "run": 10,
+      "http_code": 429,
+      "ok": false,
+      "elapsed_ms": 42,
+      "b64_len": 0,
+      "error": {
+        "message": "image pool starved: dispatchable=0 < 2",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "rate_limit_exceeded"
+      }
+    }
+  ],
+  "http_latency_ms": {
+    "n": 10,
+    "min_ms": 41.0,
+    "p50_ms": 42.0,
+    "p95_ms": 226076.0,
+    "max_ms": 226076.0,
+    "mean_ms": 22651.4
+  },
+  "phase_rows": [],
+  "phase_summary": {
+    "task_queue_ms": {
+      "n": 0
+    },
+    "admit_queue_ms": {
+      "n": 0
+    },
+    "ps_queue_ms": {
+      "n": 0
+    },
+    "account_queue_ms": {
+      "n": 0
+    },
+    "ss_queue_ms": {
+      "n": 0
+    },
+    "sse_stream_ms": {
+      "n": 0
+    },
+    "poll_resolve_ms": {
+      "n": 0
+    },
+    "download_ms": {
+      "n": 0
+    },
+    "wall_clock_ms": {
+      "n": 0
+    }
+  },
+  "generated_at": "2026-07-24T14:35:39.543602+00:00"
+}

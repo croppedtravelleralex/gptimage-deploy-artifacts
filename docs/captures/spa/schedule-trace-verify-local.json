@@ -1,0 +1,110 @@
+{
+  "account_email": "trace@local.test",
+  "checkpoints": {
+    "account_acquired": 10559300,
+    "account_wait_start": 162800,
+    "download_end": 41284200,
+    "download_start": 30829100,
+    "pipeline_admit": 136900,
+    "pipeline_finish": 41305100,
+    "poll_resolve_end": 30816000,
+    "ss_queue_enter": 10592100,
+    "ss_slot_acquired": 30786700,
+    "sse_stream_end": 30803000,
+    "task_queued": 73400,
+    "task_terminal": 41322100,
+    "task_worker_start": 110800
+  },
+  "engine": "rust",
+  "event_count": 13,
+  "events": [
+    {
+      "aux": 0,
+      "kind": "task_queued",
+      "mono_ns": 73400
+    },
+    {
+      "aux": 0,
+      "kind": "task_worker_start",
+      "mono_ns": 110800
+    },
+    {
+      "aux": 0,
+      "kind": "pipeline_admit",
+      "mono_ns": 136900
+    },
+    {
+      "aux": 0,
+      "kind": "account_wait_start",
+      "mono_ns": 162800
+    },
+    {
+      "aux": 0,
+      "kind": "account_acquired",
+      "mono_ns": 10559300
+    },
+    {
+      "aux": 196609,
+      "kind": "ss_queue_enter",
+      "mono_ns": 10592100,
+      "pool_active": 3,
+      "pool_queued": 1
+    },
+    {
+      "aux": 262146,
+      "kind": "ss_slot_acquired",
+      "mono_ns": 30786700,
+      "pool_active": 4,
+      "pool_queued": 2,
+      "slot": 2
+    },
+    {
+      "aux": 0,
+      "kind": "sse_stream_end",
+      "mono_ns": 30803000
+    },
+    {
+      "aux": 0,
+      "kind": "poll_resolve_end",
+      "mono_ns": 30816000
+    },
+    {
+      "aux": 0,
+      "kind": "download_start",
+      "mono_ns": 30829100
+    },
+    {
+      "aux": 0,
+      "kind": "download_end",
+      "mono_ns": 41284200
+    },
+    {
+      "aux": 0,
+      "kind": "pipeline_finish",
+      "mono_ns": 41305100
+    },
+    {
+      "aux": 0,
+      "kind": "task_terminal",
+      "mono_ns": 41322100
+    }
+  ],
+  "explanations": [
+    "ss_queue 20ms: pool active=3 queued=1 at queue enter"
+  ],
+  "phases_ms": {
+    "account_queue_ms": 10,
+    "admit_queue_ms": 0,
+    "download_ms": 10,
+    "global_concurrency_wait_ms": 0,
+    "poll_resolve_ms": 0,
+    "ps_queue_ms": 0,
+    "ready_buffer_wait_ms": 0,
+    "ss_queue_ms": 20,
+    "sse_stream_ms": 20,
+    "task_queue_ms": 0,
+    "wall_clock_ms": 41
+  },
+  "task_key": "verify-local-001",
+  "version": "0.1.0"
+}

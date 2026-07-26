@@ -1,0 +1,251 @@
+{
+  "suite_id": "acceptance-20260723T065722Z",
+  "started_at": "2026-07-23T06:57:22.952431+00:00",
+  "account_email": "qaflowakjewai6ps@proton.me",
+  "host_out": "/root/gptimage/data/runlogs/spa_repro/acceptance-20260723T065722Z",
+  "container_out": "/app/data/runlogs/spa_repro/acceptance-20260723T065722Z",
+  "serial5": {
+    "evidence_path": "/root/gptimage/data/runlogs/spa_repro/acceptance-20260723T065722Z/serial5.json",
+    "summary": {
+      "planned": 5,
+      "attempted": 1,
+      "ok": 0,
+      "failed": 1,
+      "not_run": 4,
+      "no_image_gen": 1,
+      "cf403_propagated": 0,
+      "stopped_early": true,
+      "stop_reason": "round1_no_image_gen",
+      "serial5_passed": false,
+      "failure_classes": {
+        "tool_args_as_text": 0,
+        "late_image_gen_after_gate": 1,
+        "no_image_gen_quiet_stream": 0,
+        "no_image_gen_within_gate": 0
+      }
+    },
+    "identity": {
+      "account_email": "qaflowakjewai6ps@proton.me",
+      "proxy_hash": "49675fdabb54"
+    },
+    "constraints": {
+      "planned_requests": 5,
+      "image_gen_deadline_secs": 65.0,
+      "sse_diagnostic_read_secs": 90.0,
+      "round_gap_secs": 20.0,
+      "concurrency": 1
+    },
+    "per_round": [
+      {
+        "round": 1,
+        "ok": false,
+        "failure_class": "late_image_gen_after_gate",
+        "error": "no_image_gen_within_65s(chunks=22, protocol=spa_tool, failure_class=late_image_gen_after_gate)",
+        "total_ms": 83333,
+        "timings_ms": {
+          "egress_ms": 269,
+          "requirements_ms": 1622,
+          "prepare_ms": 303,
+          "conversation_start_ms": 0,
+          "sse_gate_ms": 74371,
+          "sse_diagnostic_ms": 3669,
+          "sse_total_ms": 78041,
+          "sse_ms": 78041,
+          "sse_image_gen_ms": 74372,
+          "sse_first_event_ms": 0,
+          "total_ms": 83333
+        },
+        "traffic": {
+          "http_calls": 6,
+          "req_bytes": 9213,
+          "resp_bytes": 310380,
+          "total_bytes": 319593
+        },
+        "cf_layers": {
+          "home_403_soft_fail": false,
+          "home_status": 200,
+          "requirements_cf403": 0,
+          "start_cf403": 0,
+          "tasks_cf403": 0,
+          "propagated_cf": 0
+        },
+        "image_bytes": null
+      }
+    ],
+    "timing_total_ms": {
+      "n": 0,
+      "min": null,
+      "max": null,
+      "mean": null,
+      "p50": null,
+      "p95": null,
+      "p99": null,
+      "sum": null
+    },
+    "timing_phases_ms": {
+      "conversation_start_ms": {
+        "n": 1,
+        "min": 0.0,
+        "max": 0.0,
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "sum": 0.0
+      },
+      "egress_ms": {
+        "n": 1,
+        "min": 269.0,
+        "max": 269.0,
+        "mean": 269.0,
+        "p50": 269.0,
+        "p95": 269.0,
+        "p99": 269.0,
+        "sum": 269.0
+      },
+      "prepare_ms": {
+        "n": 1,
+        "min": 303.0,
+        "max": 303.0,
+        "mean": 303.0,
+        "p50": 303.0,
+        "p95": 303.0,
+        "p99": 303.0,
+        "sum": 303.0
+      },
+      "requirements_ms": {
+        "n": 1,
+        "min": 1622.0,
+        "max": 1622.0,
+        "mean": 1622.0,
+        "p50": 1622.0,
+        "p95": 1622.0,
+        "p99": 1622.0,
+        "sum": 1622.0
+      },
+      "sse_diagnostic_ms": {
+        "n": 1,
+        "min": 3669.0,
+        "max": 3669.0,
+        "mean": 3669.0,
+        "p50": 3669.0,
+        "p95": 3669.0,
+        "p99": 3669.0,
+        "sum": 3669.0
+      },
+      "sse_first_event_ms": {
+        "n": 1,
+        "min": 0.0,
+        "max": 0.0,
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "sum": 0.0
+      },
+      "sse_gate_ms": {
+        "n": 1,
+        "min": 74371.0,
+        "max": 74371.0,
+        "mean": 74371.0,
+        "p50": 74371.0,
+        "p95": 74371.0,
+        "p99": 74371.0,
+        "sum": 74371.0
+      },
+      "sse_image_gen_ms": {
+        "n": 1,
+        "min": 74372.0,
+        "max": 74372.0,
+        "mean": 74372.0,
+        "p50": 74372.0,
+        "p95": 74372.0,
+        "p99": 74372.0,
+        "sum": 74372.0
+      },
+      "sse_ms": {
+        "n": 1,
+        "min": 78041.0,
+        "max": 78041.0,
+        "mean": 78041.0,
+        "p50": 78041.0,
+        "p95": 78041.0,
+        "p99": 78041.0,
+        "sum": 78041.0
+      },
+      "sse_total_ms": {
+        "n": 1,
+        "min": 78041.0,
+        "max": 78041.0,
+        "mean": 78041.0,
+        "p50": 78041.0,
+        "p95": 78041.0,
+        "p99": 78041.0,
+        "sum": 78041.0
+      },
+      "total_ms": {
+        "n": 1,
+        "min": 83333.0,
+        "max": 83333.0,
+        "mean": 83333.0,
+        "p50": 83333.0,
+        "p95": 83333.0,
+        "p99": 83333.0,
+        "sum": 83333.0
+      }
+    },
+    "traffic_req_bytes": {
+      "n": 1,
+      "min": 9213.0,
+      "max": 9213.0,
+      "mean": 9213.0,
+      "p50": 9213.0,
+      "p95": 9213.0,
+      "p99": 9213.0,
+      "sum": 9213.0
+    },
+    "traffic_resp_bytes": {
+      "n": 1,
+      "min": 310380.0,
+      "max": 310380.0,
+      "mean": 310380.0,
+      "p50": 310380.0,
+      "p95": 310380.0,
+      "p99": 310380.0,
+      "sum": 310380.0
+    },
+    "traffic_total_bytes": {
+      "n": 1,
+      "min": 319593.0,
+      "max": 319593.0,
+      "mean": 319593.0,
+      "p50": 319593.0,
+      "p95": 319593.0,
+      "p99": 319593.0,
+      "sum": 319593.0
+    },
+    "traffic_sse_bytes": {
+      "n": 1,
+      "min": 0.0,
+      "max": 0.0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "sum": 0.0
+    }
+  },
+  "conc10_rounds": [],
+  "execution_log": [
+    {
+      "phase": "serial5",
+      "round": 1,
+      "exit_code": 2,
+      "wall_secs": 93.17,
+      "log_tail": "[storage] Initializing storage backend: sqlite\n[storage] Using database storage: sqlite:////app/data/accounts.db\n{\"phase\": \"egress\", \"mode\": \"panda_webshare\", \"ok\": true, \"ip\": \"92.113.246.176\", \"elapsed_ms\": 269}\n{\"phase\": \"requirements_ok\", \"mode\": \"panda_webshare\", \"ms\": 1622, \"attempt\": 1}\n{\"phase\": \"prepare_ok\", \"mode\": \"panda_webshare\", \"ms\": 303, \"conduit\": true}\n{\"phase\": \"sse_done\", \"mode\": \"panda_webshare\", \"ms\": 78041, \"cid\": \"6a61bb80-ae18-83ec-91a8-a931a96f9ac5\", \"has_image_gen\": false, \"file_ids\": [], \"chunks\": 22, \"deadline_hit\": true, \"late_image_gen\": true}\n{\"phase\": \"attempt_fail\", \"mode\": \"panda_webshare\", \"attempt\": 1, \"error\": \"no_image_gen_within_65s(chunks=22, protocol=spa_tool, failure_class=late_image_gen_after_gate)\", \"retryable\": false}\n{\"round\": 1, \"account_email\": \"qaflowakjewai6ps@proton.me\", \"ok\": false, \"failure_class\": \"late_image_gen_after_gate\", \"error\": \"no_image_gen_within_65s(chunks=22, protocol=spa_tool, failure_class=late_image_gen_after_gate)\", \"timings_ms\": {\"egress_ms\": 269, \"requirements_ms\": 1622, \"prepare_ms\": 303, \"conversation_start_ms\": 0, \"sse_gate_ms\": 74371, \"sse_diagnostic_ms\": 3669, \"sse_total_ms\": 78041, \"sse_ms\": 78041, \"sse_image_gen_ms\": 74372, \"sse_first_event_ms\": 0, \"total_ms\": 83333}}\n{\"planned\": 5, \"attempted\": 1, \"ok\": 0, \"failed\": 1, \"not_run\": 4, \"no_image_gen\": 1, \"cf403_propagated\": 0, \"stopped_early\": true, \"stop_reason\": \"round1_no_image_gen\", \"serial5_passed\": false, \"failure_classes\": {\"tool_args_as_text\": 0, \"late_image_gen_after_gate\": 1, \"no_image_gen_quiet_stream\": 0, \"no_image_gen_within_gate\": 0}}\nEXIT:2\n"
+    }
+  ],
+  "outcome": "serial5_failed_round_1",
+  "finished_at": "2026-07-23T06:59:52.303231+00:00",
+  "total_wall_secs": 149.35
+}

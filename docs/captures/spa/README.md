@@ -1,5 +1,29 @@
 # SPA captures (ChatGPT Web reverse)
 
+## Camoufox 全链路抓包（主证据链）
+
+**2026-07-21 批次**：用 Camoufox 登录 → 浏览器内发消息/生图 → HAR 落盘 → `curl_cffi` HTTP 复现 → bench3 下载闭环。这是协议改造的**第一手来源**（不是验收记录专页）。
+
+| 步骤 | 脚本 | 产物 |
+|------|------|------|
+| 登录 + 文本聊天 HAR | `scripts/_tmp_spa_camoufox_har.py` | `spa-camoufox-20260721T044906Z.har` + `.meta.json` |
+| Create Image UI HAR | `scripts/_tmp_spa_image_har.py` | `spa-image-20260721T074733Z.har` 等 |
+| 字段 diff（HAR→代码） | 手工 + `field-diff-20260721.md` | 对齐 `/f/conversation`、OAI 版本号、sentinel 头 |
+| HTTP 复现生图+下载 | `scripts/_tmp_spa_camoufox_image_http_repro.py` | `data/runlogs/spa_repro/` |
+| 三轮出口对照 | `_tmp_spa_image_bench3.py` | `bench3-20260721.md` |
+| 同 IP 栈对照 | `scripts/_tmp_spa_camoufox_via_panda_socks.py` | `panda-socks-camoufox-20260721.md` |
+
+```text
+Camoufox 登录/发 prompt（抓 HAR）
+  → field-diff 提取 prepare/sentinel/SSE/下载链
+  → curl_cffi HTTP repro（同账号同出口）
+  → bench3 计时+流量+PNG 魔数校验
+```
+
+账号固定：`qaflow0ytb7bbp0z@proton.me`（Clash `127.0.0.1:7897`）。HAR 含 cookie，**gitignore**；可提交的是 `.meta.json` 与专页 md。
+
+任务书与分层目录：[`docs/19-protocol-full-reverse-catalog.md`](../../19-protocol-full-reverse-catalog.md)。
+
 ## Layout
 
 | Path | Commit? | Notes |
@@ -34,8 +58,30 @@
 | [`N-panda-serial5-observability-20260722.json`](./N-panda-serial5-observability-20260722.json) | P4-D 观测 harness 串行 5：`2/5`，第 2 轮 `late_image_gen_after_gate` @64.5s |
 | [`N-panda-cf-scan5-webshare-20260722.json`](./N-panda-cf-scan5-webshare-20260722.json) | Webshare 池前 5 节点 CF 预扫：`1 ok / 4 cf403` |
 | [`N-panda-serial5-round2-analysis-20260722.md`](./N-panda-serial5-round2-analysis-20260722.md) | 第 2 轮 SSE 慢速归因：非出口漂移，建议 gate 65s |
+| [`O-panda-serial5-quota-account-postfix-20260723.md`](./O-panda-serial5-quota-account-postfix-20260723.md) | P4-7 后串行 5 + 额度扣减；验收账号改邮箱展示 |
+| [`acceptance-90s-picture_v2-20260723.md`](./acceptance-90s-picture_v2-20260723.md) | 90s gate + `picture_v2`：serial5 5/5 + 单账号 conc10 3×10/10 |
+| [`acceptance-90s-multiacct-20260723.md`](./acceptance-90s-multiacct-20260723.md) | 同上 gate；`preferred_account_email` 多账号轮询 conc10 4/10（CF403 @ init） |
 | [`field-diff-20260721.md`](./field-diff-20260721.md) / [`bench3-20260721.md`](./bench3-20260721.md) | 字段 diff / 三轮 bench |
-| → 修复执行单 | [`docs/20-pure-http-image-sentinel-todo.md`](../../20-pure-http-image-sentinel-todo.md)（P1–P3、P4 正式发布/单单元下载已完成；串行 5 在 2/5 止损，并发未做） |
+| [`STAB-serial5-20260724T103023Z.md`](./STAB-serial5-20260724T103023Z.md) | STAB-A1 公平 API serial5 **5/5** |
+| [`STAB-conc10-20260724T110344Z.md`](./STAB-conc10-20260724T110344Z.md) | multiacct conc10 **10/10**（热号-only 后） |
+| [`PROD-serial10-20260724T143921Z.md`](./PROD-serial10-20260724T143921Z.md) | 同步 API serial10 **10/10**；阶段分解 sS 0% / SSE 79% |
+| [`PROD-conc10-20260724T150152Z.md`](./PROD-conc10-20260724T150152Z.md) | 同步 API conc10 **10/10**；与 serial10 占墙钟比对比 |
+| [`BASELINE-pre-slotledger-20260725T072257Z.md`](./BASELINE-pre-slotledger-20260725T072257Z.md) | **SlotLedger 前横评基线**（RSS / inflight / dispatchable / conc10 参考）；`source=static_docs_26` |
+| [`S-cf-ok-spare-webshare-20260725.json`](./S-cf-ok-spare-webshare-20260725.json) | 100 池 CF 探活：空闲 CF-ok 节点盘点（换绑前） |
+| [`T-cf-fail-rebind-shared-ip-20260725.json`](./T-cf-fail-rebind-shared-ip-20260725.json) | 9 个 cf_fail 号换绑 + 单 IP 2 号分配表 |
+
+## SlotLedger 横评基线
+
+采集脚本：`scripts/capture_performance_baseline.py`
+
+- 在线：拉 `/health?format=json` +（有 auth 时）`/api/ops/image-pipeline/snapshot`
+- 离线：回退 `docs/26` 静态值
+- 产物：`BASELINE-pre-slotledger-*.{json,md}`；Layer 1 完成后对照 `BASELINE-post-slotledger-*`
+
+```bash
+python scripts/capture_performance_baseline.py
+PANDA_BASE_URL=http://127.0.0.1:8012 python scripts/capture_performance_baseline.py
+```
 
 ## Scripts
 
@@ -45,4 +91,5 @@ python scripts/_tmp_spa_next_de_har.py
 python scripts/_tmp_spa_search_har.py
 python scripts/_tmp_spa_http_search_smoke.py
 python scripts/_tmp_spa_webshare_stack_probe.py
+python scripts/capture_performance_baseline.py
 ```

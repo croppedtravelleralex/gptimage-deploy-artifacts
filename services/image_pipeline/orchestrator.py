@@ -85,6 +85,7 @@ class ImagePipelineScheduler:
             segments = [dict(item) for item in self._segments[-200:]]
         base["ready_buffer"] = ready_buffer_tracker.snapshot()
         base["segments"] = segments
+        base["total_queue_depth"] = base.get("ss_queue_depth", 0) + base.get("ps_queue_depth", 0)
         return base
 
     def begin_run(

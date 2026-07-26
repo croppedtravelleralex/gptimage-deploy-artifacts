@@ -1,0 +1,27 @@
+{
+  "bench": "schedule_trace_emit_finish",
+  "python_fallback": {
+    "engine": "python",
+    "lib_path": "",
+    "iters": 5000,
+    "runs": 7,
+    "events_per_task": 17,
+    "wall_ms_mean": 1318.618,
+    "wall_ms_p50": 1257.797,
+    "per_task_us_mean": 263.724,
+    "per_event_us_mean": 15.513
+  },
+  "rust_engine": {
+    "engine": "rust",
+    "lib_path": "/app/native/libimage_schedule_trace.so",
+    "iters": 5000,
+    "runs": 7,
+    "events_per_task": 17,
+    "wall_ms_mean": 1640.325,
+    "wall_ms_p50": 1641.547,
+    "per_task_us_mean": 328.065,
+    "per_event_us_mean": 19.298
+  },
+  "rust_vs_python_task_us_ratio": 1.244,
+  "note": "per_task includes begin+16 emits+finish+pop; hot path is emit only"
+}

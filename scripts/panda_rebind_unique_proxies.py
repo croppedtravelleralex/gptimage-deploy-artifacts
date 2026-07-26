@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""给号池账号换独立 Webshare 代理绑定（1 账号 : 1 binding）。
+"""给号池账号换独立 Webshare 代理（1 账号 : 1 binding + 1 egress IP）。
 
 默认 --dry-run；加 --apply 才写库。
 
 策略：
-- 已独占 binding 的账号保留现有代理
-- 共享 binding 组内保留 1 个（优先 canary kevin / 最高额度正常号），其余换新代理
-- identity_isolated 在成功换到独立 binding 后清为 verified_ready
-- rejected/禁用 也尽量独占绑定，但不自动改 receive_state
+- 按 proxy_binding_hash **与** proxy_egress_ip 建连通分量，组内只保留 1 个账号
+- 换绑时实测 egress，确保 endpoint 与 egress IP 均不与池内其他号冲突
+- identity_isolated 在成功换到独立出口后清为 verified_ready
 """
 from __future__ import annotations
 
@@ -86,21 +85,11 @@ def _parse_pool_line(line: str) -> str:
 
 
 def load_proxy_pool(path: Path) -> list[str]:
-    from services.proxy_quarantine import is_gpt_unavailable_proxy
+    from services.proxy_cf_failover import load_proxy_pool as load_pool
 
-    urls: list[str] = []
-    seen: set[str] = set()
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        url = _parse_pool_line(line)
-        if not url:
-            continue
-        key = _endpoint_key(url)
-        if not key or key in seen:
-            continue
-        if is_gpt_unavailable_proxy(url):
-            continue
-        seen.add(key)
-        urls.append(url)
+    urls = load_pool(path, include_quarantined=False)
+    if not urls:
+        urls = load_pool(path, include_quarantined=True)
     return urls
 
 
@@ -119,39 +108,77 @@ def _keep_score(account: dict[str, Any]) -> tuple:
     )
 
 
-def plan_rebinds(accounts: list[dict[str, Any]], pool: list[str]) -> dict[str, Any]:
-    by_binding: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    no_proxy: list[dict[str, Any]] = []
-    for acc in accounts:
+def _egress_key_acc(account: dict[str, Any]) -> str:
+    return str(account.get("proxy_egress_ip") or account.get("proxy_egress_hash") or "").strip()
+
+
+def _union_groups(accounts: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Merge accounts sharing proxy_binding_hash OR egress IP into components."""
+    parent = list(range(len(accounts)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    by_binding: dict[str, list[int]] = defaultdict(list)
+    by_egress: dict[str, list[int]] = defaultdict(list)
+    for idx, acc in enumerate(accounts):
         proxy = str(acc.get("proxy") or "").strip()
         binding = str(acc.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(proxy)
-        if not proxy or not binding:
-            no_proxy.append(acc)
-            continue
-        by_binding[binding].append(acc)
+        egress = _egress_key_acc(acc)
+        if binding:
+            by_binding[binding].append(idx)
+        if egress:
+            by_egress[egress].append(idx)
+
+    for indices in by_binding.values():
+        if len(indices) > 1:
+            head = indices[0]
+            for other in indices[1:]:
+                union(head, other)
+    for indices in by_egress.values():
+        if len(indices) > 1:
+            head = indices[0]
+            for other in indices[1:]:
+                union(head, other)
+
+    components: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for idx, acc in enumerate(accounts):
+        components[find(idx)].append(acc)
+    return list(components.values())
+
+
+def plan_rebinds(accounts: list[dict[str, Any]], pool: list[str]) -> dict[str, Any]:
+    with_proxy = [acc for acc in accounts if str(acc.get("proxy") or "").strip()]
+    no_proxy = [acc for acc in accounts if not str(acc.get("proxy") or "").strip()]
 
     keep: list[dict[str, Any]] = []
     rebind: list[dict[str, Any]] = []
     used_endpoints: set[str] = set()
+    used_egress: set[str] = set()
 
-    for binding, group in by_binding.items():
+    for group in _union_groups(with_proxy):
         ordered = sorted(group, key=_keep_score)
         keeper = ordered[0]
         keep.append(keeper)
         used_endpoints.add(_endpoint_key(keeper.get("proxy")))
+        egress = _egress_key_acc(keeper)
+        if egress:
+            used_egress.add(egress)
         for peer in ordered[1:]:
             rebind.append(peer)
 
-    for acc in no_proxy:
-        rebind.append(acc)
-
-    available = [url for url in pool if _endpoint_key(url) not in used_endpoints]
-    # also exclude endpoints already held by keepers (already in used)
-    if len(available) < len(rebind):
-        raise RuntimeError(f"not enough free proxies: need={len(rebind)} free={len(available)} pool={len(pool)}")
+    rebind.extend(no_proxy)
 
     assignments = []
-    for acc, new_proxy in zip(sorted(rebind, key=lambda a: str(a.get("email") or "").lower()), available):
+    for acc in sorted(rebind, key=lambda a: str(a.get("email") or "").lower()):
         assignments.append(
             {
                 "email": str(acc.get("email") or ""),
@@ -160,12 +187,9 @@ def plan_rebinds(accounts: list[dict[str, Any]], pool: list[str]) -> dict[str, A
                 "quota": acc.get("quota"),
                 "old_panda": acc.get("panda_receive_state"),
                 "old_binding": (acc.get("proxy_binding_hash") or proxy_binding_hash(acc.get("proxy")))[:12],
+                "old_egress": _egress_key_acc(acc),
                 "old_proxy_masked": _mask_proxy(acc.get("proxy")),
                 "old_endpoint": _endpoint_key(acc.get("proxy")),
-                "new_proxy": new_proxy,
-                "new_proxy_masked": _mask_proxy(new_proxy),
-                "new_endpoint": _endpoint_key(new_proxy),
-                "new_binding": proxy_binding_hash(new_proxy),
                 "access_token": acc.get("access_token"),
                 "clear_isolation": str(acc.get("panda_receive_state") or "").strip().lower() == "identity_isolated",
             }
@@ -174,7 +198,9 @@ def plan_rebinds(accounts: list[dict[str, Any]], pool: list[str]) -> dict[str, A
     return {
         "keep_count": len(keep),
         "rebind_count": len(assignments),
-        "free_proxies_after": len(available) - len(assignments),
+        "pool_size": len(pool),
+        "used_endpoints": sorted(used_endpoints),
+        "used_egress": sorted(used_egress),
         "keepers": [
             {
                 "email_masked": _mask_email(a.get("email")),
@@ -182,6 +208,7 @@ def plan_rebinds(accounts: list[dict[str, Any]], pool: list[str]) -> dict[str, A
                 "quota": a.get("quota"),
                 "panda": a.get("panda_receive_state"),
                 "binding": (a.get("proxy_binding_hash") or "")[:12],
+                "egress": _egress_key_acc(a),
                 "endpoint": _endpoint_key(a.get("proxy")),
             }
             for a in sorted(keep, key=_keep_score)
@@ -190,36 +217,101 @@ def plan_rebinds(accounts: list[dict[str, Any]], pool: list[str]) -> dict[str, A
     }
 
 
-def apply_one(item: dict[str, Any], *, validate: bool, timeout: float) -> dict[str, Any]:
+def _pick_unique_proxy(
+    pool: list[str],
+    *,
+    used_endpoints: set[str],
+    used_egress: set[str],
+    timeout: float,
+    require_cf: bool = True,
+) -> tuple[str, str, str] | None:
+    from services.proxy_cf_eligibility import pick_cf_verified_proxy, require_cf_ok_for_image
+
+    if require_cf and require_cf_ok_for_image():
+        picked = pick_cf_verified_proxy(
+            pool,
+            exclude=used_endpoints,
+            exclude_egress=used_egress,
+            probe_timeout=timeout,
+        )
+        if not picked:
+            return None
+        url, probe = picked
+        egress = probe.get("egress") if isinstance(probe.get("egress"), dict) else {}
+        egress_ip = str(egress.get("ip") or "").strip()
+        egress_hash = str(egress.get("egress_hash") or "").strip()
+        if not egress_ip or not egress_hash:
+            sample = measure_proxy_egress_ip(url, timeout=timeout)
+            if not sample.get("ok"):
+                return None
+            egress_ip = str(sample.get("ip") or "").strip()
+            egress_hash = str(sample.get("egress_hash") or "").strip()
+        if egress_ip and egress_ip in used_egress:
+            return None
+        return url, egress_ip, egress_hash
+
+    for url in pool:
+        ep = _endpoint_key(url)
+        if not ep or ep in used_endpoints:
+            continue
+        sample = measure_proxy_egress_ip(url, timeout=timeout)
+        if not sample.get("ok"):
+            continue
+        egress_ip = str(sample.get("ip") or "").strip()
+        egress_hash = str(sample.get("egress_hash") or "").strip()
+        if egress_ip and egress_ip in used_egress:
+            continue
+        return url, egress_ip, egress_hash
+    return None
+
+
+def apply_one(
+    item: dict[str, Any],
+    *,
+    pool: list[str],
+    used_endpoints: set[str],
+    used_egress: set[str],
+    validate: bool,
+    timeout: float,
+) -> dict[str, Any]:
     token = str(item.get("access_token") or "")
-    new_proxy = str(item.get("new_proxy") or "")
     row = {
         "email_masked": item.get("email_masked"),
         "ok": False,
         "old_binding": item.get("old_binding"),
-        "new_binding": (item.get("new_binding") or "")[:12],
-        "new_endpoint": item.get("new_endpoint"),
-        "clear_isolation": bool(item.get("clear_isolation")),
+        "old_egress": item.get("old_egress"),
     }
+    picked = _pick_unique_proxy(pool, used_endpoints=used_endpoints, used_egress=used_egress, timeout=timeout)
+    if not picked:
+        row["error"] = "no_unique_egress_proxy"
+        return row
+    new_proxy, egress_ip, egress_hash = picked
     if validate:
         check = validate_http_proxy(new_proxy, timeout=timeout, require_sticky=True, sticky_gap_sec=1.5)
         row["validate_ok"] = bool(check.get("ok"))
         if not check.get("ok"):
             row["error"] = str(check.get("error") or "proxy_validate_failed")[:200]
             return row
-        egress_hash = str(check.get("egress_hash") or "")
-        egress_ip = str(check.get("ip") or check.get("egress_ip") or "")
-    else:
-        sample = measure_proxy_egress_ip(new_proxy, timeout=timeout)
-        if not sample.get("ok"):
-            row["error"] = str(sample.get("error") or "egress_failed")[:200]
-            return row
-        egress_hash = str(sample.get("egress_hash") or "")
-        egress_ip = str(sample.get("ip") or "")
+        egress_hash = str(check.get("egress_hash") or egress_hash)
+        egress_ip = str(check.get("ip") or check.get("egress_ip") or egress_ip)
 
     if not egress_hash:
         row["error"] = "missing_egress_hash"
         return row
+
+    from services.proxy_cf_eligibility import cf_probe_account_fields, require_cf_ok_for_image
+
+    if require_cf_ok_for_image():
+        from services.proxy_cf_eligibility import assert_proxy_cf_ok_for_image
+
+        try:
+            cf_probe = assert_proxy_cf_ok_for_image(new_proxy, probe_timeout=timeout)
+            updates_cf = cf_probe_account_fields(new_proxy, cf_probe)
+        except RuntimeError as exc:
+            row["error"] = str(exc)[:200]
+            return row
+    else:
+        updates_cf = {}
 
     updates = {
         "proxy": new_proxy,
@@ -232,6 +324,7 @@ def apply_one(item: dict[str, Any], *, validate: bool, timeout: float) -> dict[s
         "registration_proxy_hash": proxy_binding_hash(new_proxy),
         "registration_egress_hash": egress_hash,
     }
+    updates.update(updates_cf)
     clear_isolation = bool(item.get("clear_isolation"))
     if clear_isolation:
         updates["panda_receive_state"] = "verified_ready"
@@ -243,12 +336,18 @@ def apply_one(item: dict[str, Any], *, validate: bool, timeout: float) -> dict[s
         quiet=False,
         clear_isolation=clear_isolation,
     )
+    account_service._clear_image_preflight_failure(token)
     after = updated or account_service.get_account(token) or {}
     normalized = normalize_account_identity(dict(after))
+    used_endpoints.add(_endpoint_key(new_proxy))
+    if egress_ip:
+        used_egress.add(egress_ip)
     row.update(
         {
             "ok": True,
-            "after_binding": str(normalized.get("proxy_binding_hash") or "")[:12],
+            "new_binding": str(normalized.get("proxy_binding_hash") or "")[:12],
+            "new_egress": egress_ip,
+            "new_endpoint": _endpoint_key(new_proxy),
             "after_panda": normalized.get("panda_receive_state"),
             "after_sched": account_service._is_image_account_schedulable(normalized),
             "egress_hash": egress_hash[:12],
@@ -258,19 +357,21 @@ def apply_one(item: dict[str, Any], *, validate: bool, timeout: float) -> dict[s
 
 
 def binding_uniqueness_report(accounts: list[dict[str, Any]]) -> dict[str, Any]:
-    groups: dict[str, list[str]] = defaultdict(list)
+    by_binding: dict[str, list[str]] = defaultdict(list)
+    by_egress: dict[str, list[str]] = defaultdict(list)
     for acc in accounts:
+        email = _mask_email(acc.get("email"))
         binding = str(acc.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(acc.get("proxy"))
-        if not binding:
-            groups["<empty>"].append(_mask_email(acc.get("email")))
-            continue
-        groups[binding].append(_mask_email(acc.get("email")))
-    shared = {k[:12]: v for k, v in groups.items() if k != "<empty>" and len(v) > 1}
+        egress = _egress_key_acc(acc)
+        if binding:
+            by_binding[binding[:12]].append(email)
+        if egress:
+            by_egress[egress].append(email)
     return {
         "account_count": len(accounts),
-        "unique_bindings": sum(1 for k, v in groups.items() if k != "<empty>" and len(v) == 1),
-        "shared_bindings": shared,
-        "empty_proxy": groups.get("<empty>", []),
+        "unique_bindings": sum(1 for v in by_binding.values() if len(v) == 1),
+        "shared_bindings": {k: v for k, v in by_binding.items() if len(v) > 1},
+        "shared_egress": {k: v for k, v in by_egress.items() if len(v) > 1},
         "schedulable": [
             _mask_email(a.get("email"))
             for a in accounts
@@ -294,6 +395,11 @@ def main() -> int:
         raise SystemExit(f"proxy pool missing: {pool_path}")
 
     accounts = [dict(a) for a in account_service.list_accounts()]
+    try:
+        account_service.reload_from_storage()
+        accounts = [dict(a) for a in account_service.list_accounts()]
+    except Exception:
+        pass
     pool = load_proxy_pool(pool_path)
     plan = plan_rebinds(accounts, pool)
     if args.limit and args.limit > 0:
@@ -306,14 +412,10 @@ def main() -> int:
     # scrub tokens from saved plan
     safe_plan = {
         **plan,
-        "assignments": [
-            {k: v for k, v in item.items() if k not in {"access_token", "new_proxy"}}
-            | {"new_proxy_masked": item.get("new_proxy_masked")}
-            for item in plan["assignments"]
-        ],
+        "assignments": [{k: v for k, v in item.items() if k != "access_token"} for item in plan["assignments"]],
     }
     (out_dir / "plan.json").write_text(json.dumps(safe_plan, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"mode": "dry-run" if not args.apply else "apply", "out": str(out_dir), **{k: plan[k] for k in ("keep_count", "rebind_count", "free_proxies_after")}}, ensure_ascii=False, indent=2))
+    print(json.dumps({"mode": "dry-run" if not args.apply else "apply", "out": str(out_dir), **{k: plan[k] for k in ("keep_count", "rebind_count", "pool_size")}}, ensure_ascii=False, indent=2))
     print(json.dumps({"keepers": plan["keepers"], "assignment_preview": safe_plan["assignments"][:20]}, ensure_ascii=False, indent=2))
 
     if not args.apply:
@@ -322,11 +424,20 @@ def main() -> int:
         print(json.dumps({"before": before}, ensure_ascii=False, indent=2))
         return 0
 
+    used_endpoints = set(plan.get("used_endpoints") or [])
+    used_egress = set(plan.get("used_egress") or [])
     results = []
     for idx, item in enumerate(plan["assignments"], start=1):
         print(json.dumps({"event": "rebind_progress", "index": idx, "total": len(plan["assignments"]), "email": item.get("email_masked")}, ensure_ascii=False), flush=True)
         try:
-            row = apply_one(item, validate=bool(args.validate_proxy), timeout=float(args.timeout))
+            row = apply_one(
+                item,
+                pool=pool,
+                used_endpoints=used_endpoints,
+                used_egress=used_egress,
+                validate=bool(args.validate_proxy),
+                timeout=float(args.timeout),
+            )
         except Exception as exc:
             row = {"email_masked": item.get("email_masked"), "ok": False, "error": f"{type(exc).__name__}:{exc}"[:240]}
         results.append(row)
@@ -341,8 +452,22 @@ def main() -> int:
     }
     (out_dir / "results.json").write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        import urllib.request
+
+        auth = __import__("json").load(open("/app/config.json"))["auth-key"]
+        urllib.request.urlopen(
+            urllib.request.Request(
+                "http://127.0.0.1:80/api/accounts/reload-from-storage",
+                method="POST",
+                headers={"Authorization": f"Bearer {auth}"},
+            ),
+            timeout=30,
+        ).read()
+    except Exception:
+        pass
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-    return 0 if summary["fail"] == 0 and not after.get("shared_bindings") else 1
+    return 0 if summary["fail"] == 0 and not after.get("shared_bindings") and not after.get("shared_egress") else 1
 
 
 if __name__ == "__main__":

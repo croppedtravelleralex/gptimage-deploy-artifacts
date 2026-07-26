@@ -38,6 +38,11 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
         cancel_event=body.get("cancel_event"),
         poll_timeout_secs=poll_timeout_secs,
         queue_coordinated=bool(body.get("queue_coordinated")),
+        prompt_enhance=bool(body.get("prompt_enhance")),
+        prompt_enhance_locale=str(body.get("prompt_enhance_locale") or "en"),
+        multi_image_mode=str(body.get("multi_image_mode") or "fast"),
+        pipeline_run=body.get("pipeline_run"),
+        preferred_account_email=str(body.get("preferred_account_email") or "").strip(),
     ))
     if body.get("stream"):
         return stream_image_chunks(outputs)

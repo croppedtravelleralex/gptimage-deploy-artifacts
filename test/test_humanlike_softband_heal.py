@@ -26,6 +26,7 @@ class SoftBandStatusTests(unittest.TestCase):
             "enabled": True,
             "daily_usage_ratio": 0.70,
             "new_account_usage_cap": 0.40,
+            "unrestricted": False,
         }):
             # remaining=5/peak=25 → used=0.8 ≥ 0.70 → soft_capped
             out = svc._apply_humanlike_quota_fields(dict(account))
@@ -49,32 +50,53 @@ class SoftBandStatusTests(unittest.TestCase):
             "enabled": True,
             "daily_usage_ratio": 0.70,
             "new_account_usage_cap": 0.40,
+            "unrestricted": False,
         }):
             out = svc._apply_humanlike_quota_fields(dict(account))
         self.assertFalse(out.get("image_soft_capped"))
         self.assertEqual(out.get("status"), "正常")
 
     def test_available_respects_soft_flag_not_false_limited(self) -> None:
-        self.assertFalse(
-            AccountService._is_image_account_available(
-                {
-                    "status": "正常",
-                    "quota": 10,
-                    "image_soft_capped": True,
-                    "restore_at": "2099-01-01T00:00:00+00:00",
-                }
+        with patch(
+            "services.config.config.get_scheduler_settings",
+            return_value={"unrestricted": False},
+        ):
+            self.assertFalse(
+                AccountService._is_image_account_available(
+                    {
+                        "status": "正常",
+                        "quota": 10,
+                        "image_soft_capped": True,
+                        "restore_at": "2099-01-01T00:00:00+00:00",
+                    }
+                )
             )
-        )
-        self.assertTrue(
-            AccountService._is_image_account_available(
-                {
-                    "status": "正常",
-                    "quota": 10,
-                    "image_soft_capped": True,
-                    "restore_at": "2020-01-01T00:00:00+00:00",
-                }
+            self.assertTrue(
+                AccountService._is_image_account_available(
+                    {
+                        "status": "正常",
+                        "quota": 10,
+                        "image_soft_capped": True,
+                        "restore_at": "2020-01-01T00:00:00+00:00",
+                    }
+                )
             )
-        )
+
+    def test_unrestricted_ignores_soft_cap(self) -> None:
+        with patch(
+            "services.config.config.get_scheduler_settings",
+            return_value={"unrestricted": True},
+        ):
+            self.assertTrue(
+                AccountService._is_image_account_available(
+                    {
+                        "status": "正常",
+                        "quota": 10,
+                        "image_soft_capped": True,
+                        "restore_at": "2099-01-01T00:00:00+00:00",
+                    }
+                )
+            )
 
 
 class RateLimitMatchTests(unittest.TestCase):
