@@ -606,6 +606,62 @@ class AccountService:
         account["image_last_gap_sec"] = gap
         return account
 
+    def _stamp_image_dispatch_locked(self, access_token: str) -> dict | None:
+        """占位成功的**那一刻**就钉住下一次可提交时刻（A4-1）。
+
+        必须在持 `_image_slot_condition`（其底层就是 `_lock`）且与 `_image_inflight`
+        自增处于**同一个临界区**内调用。否则两个取号线程会先后通过
+        `_is_image_interval_ready()` 再各自打戳，间隔闸门形同虚设（TOCTOU）。
+
+        改动原因（docs/28-scheduling-queue-slot-audit-20260726.md §4）：戳原先只在
+        `mark_image_result` 里打，即**任务完成之后**才开始算冷却，于是单账号服务周期
+        是 `T_exec + gap` 而不是 `max(T_exec, gap)`。gap 期望 71s，7 个可派发账号时
+        冷却受限吞吐（≈8.9 img/min）比并发上限（12 img/min）**更紧** —— 池子不是
+        瓶颈，"完成后才计时"的冷却才是真天花板。移到派发时后冷却与执行重叠，
+        `T_exec > gap` 时冷却被完全吸收。
+
+        语义也更正确：gap 的本意是「同一账号两次**提交**之间的人类化间隔」。
+        派发时打戳量的正是提交→提交；完成时打戳量的是完成→提交，口径本就是错的。
+
+        取舍（刻意不回滚）：占位后又被 workload gate / preflight 拒绝并
+        `release_image_slot()` 的账号同样吃掉一个 gap 的冷却。这些分支里账号本来
+        就被别的闸门挡着（已判定不可派发，或已进 `_image_preflight_failed_until`
+        退避，退避远长于 gap），额外冷却是惰性的；换来的是「间隔闸门与占位严格
+        原子」，比省下这点冷却重要得多。
+        """
+        if not access_token:
+            return None
+        current = self._accounts.get(access_token)
+        if not isinstance(current, dict):
+            return None
+        stamped = self._stamp_image_next_ok(dict(current))
+        # scheduler 关闭时 _stamp_image_next_ok 原样返回，但这一位仍要写：
+        # 它是 _ensure_image_next_ok_stamped() 判断"这一路是否走过派发侧打戳"的唯一依据。
+        stamped["image_last_dispatch_ts"] = time.time()
+        self._accounts[access_token] = stamped
+        return stamped
+
+    def _ensure_image_next_ok_stamped(self, account: dict) -> dict:
+        """兜底：仅当这一路从未被派发侧打过戳时才补打（A4-1）。
+
+        正常路径下 `_stamp_image_dispatch_locked()` 已在占位瞬间写过
+        `image_last_dispatch_ts` + `image_next_ok_ts`，此处必须**保持原样** ——
+        一旦无条件重打就等于把冷却重新挪回完成时，A4-1 等于白修。
+
+        只在 `image_last_dispatch_ts` 缺失（说明调用方没经过取号占位，例如外部
+        直接调 `mark_image_result()`）时退回旧行为，避免快速失败的账号在毫无间隔
+        保护的情况下被立刻重取。
+        """
+        if not isinstance(account, dict):
+            return account
+        try:
+            dispatched_at = float(account.get("image_last_dispatch_ts") or 0)
+        except (TypeError, ValueError):
+            dispatched_at = 0.0
+        if dispatched_at > 0:
+            return account
+        return self._stamp_image_next_ok(account)
+
     def _stamp_text_next_ok(self, account: dict) -> dict:
         from services.humanlike_scheduler import compute_submit_gap_seconds
 
@@ -707,7 +763,24 @@ class AccountService:
             return 5
 
     def _image_binding_inflight_max(self) -> int:
-        """同一 proxy_binding 同时生图路上限，降低共享出口 CF 暴死。"""
+        """同一 proxy_binding 上**同时活跃的账号数**上限，降低共享出口 CF 暴死。
+
+        A4-3 口径修正：本值原先被当作「同一 binding 的在途**请求**数」，而
+        `_binding_image_inflight_locked()` 把账号自己的在途也计进自己的 binding
+        总数。生产实测 19 号分布在 16 个 binding 上、**无空 binding**，闸门对所有
+        账号生效，于是 `image_binding_inflight_max = 1` 让单账号有效并发恒为 1，
+        `image_account_concurrency = 2` 永远吃不到（docs/28 §B5）。
+
+        现口径 = 「一个共享出口上同时暴露几个**身份**」，这正是 CF 关联风险的
+        载体；单身份自身的并发由 `image_account_concurrency` 负责。两者相乘才是
+        单出口的在途请求上限：
+
+            per-egress in-flight ≤ image_binding_inflight_max × image_account_concurrency
+
+        默认 1 × 2 = 2。运维若要把单出口在途压回 1，请把
+        `image_account_concurrency` 设为 1，而不是压 `image_binding_inflight_max`
+        —— 后者管的是身份数，压它只会重新造出 A4-3。
+        """
         try:
             return max(1, int(getattr(config, "image_binding_inflight_max", 1) or 1))
         except (TypeError, ValueError):
@@ -746,6 +819,13 @@ class AccountService:
         return str(item.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(item.get("proxy"))
 
     def _binding_image_inflight_locked(self, binding: str) -> int:
+        """同一 binding 上的在途生图**请求**总数（含被查询账号自己）。
+
+        仅供观测/统计使用。**不要**再拿它做准入闸门 —— 那正是 A4-3：它把账号
+        自己的在途计进自己的 binding 总数，`binding_max=1` 时任何账号一有在途
+        就把自己挡死，`image_account_concurrency` 永远吃不到。
+        闸门请用 `_binding_image_account_seats_locked()`。
+        """
         if not binding:
             return 0
         total = 0
@@ -756,6 +836,37 @@ class AccountService:
             if self._account_binding_hash(account) == binding:
                 total += int(count or 0)
         return total
+
+    def _binding_image_account_seats_locked(
+        self,
+        binding: str,
+        *,
+        exclude_token: str = "",
+    ) -> int:
+        """同一 binding 上当前持有在途生图的**账号数**（席位数），可排除某个 token。
+
+        A4-3 的闸门口径。判定式是 `seats_excluding_self >= binding_limit`：占位
+        成功后被查询账号必然占着一个席位（它原本就有在途，或这次新占一个），所以
+        占位后的总席位恒为 `seats_excluding_self + 1`，要求它不超过上限即得该判定。
+
+        由此：
+        - 独占 binding 的账号可以一路涨到 `image_account_concurrency`（席位始终 1）；
+        - 同 binding 的**第二个**账号在第一个还有在途时被挡住（`binding_limit=1`）；
+        - `binding_limit=2` 时允许两个身份并行，与配置字面一致。
+        """
+        if not binding:
+            return 0
+        exclude = str(exclude_token or "")
+        seats = 0
+        for token, count in self._image_inflight.items():
+            if int(count or 0) <= 0:
+                continue
+            if exclude and token == exclude:
+                continue
+            account = self._accounts.get(token) or {}
+            if self._account_binding_hash(account) == binding:
+                seats += 1
+        return seats
 
     def _image_slot_available_locked(
             self,
@@ -773,7 +884,9 @@ class AccountService:
             return False
         account = self._accounts.get(token) or {}
         binding = self._account_binding_hash(account)
-        if binding and self._binding_image_inflight_locked(binding) >= binding_limit:
+        # A4-3：按 binding 上的**账号席位数**判定，且排除自己 —— 否则账号自己的在途
+        # 会计进自己的 binding 总数，binding_max=1 时把 image_account_concurrency 锁死成 1。
+        if binding and self._binding_image_account_seats_locked(binding, exclude_token=token) >= binding_limit:
             return False
         if not skip_global_limit:
             ready_count = len(self._list_ready_candidate_tokens())
@@ -2118,7 +2231,8 @@ class AccountService:
                     continue
                 account = self._accounts.get(token) or {}
                 binding = self._account_binding_hash(account)
-                if binding and self._binding_image_inflight_locked(binding) >= binding_limit:
+                # A4-3：与 _image_slot_available_locked() 保持同一口径（席位数 + 排除自己）。
+                if binding and self._binding_image_account_seats_locked(binding, exclude_token=token) >= binding_limit:
                     continue
                 available.append(token)
             return self._order_tokens_warmup_hot_first(available)
@@ -2340,6 +2454,9 @@ class AccountService:
                     access_token = tokens[self._index % len(tokens)]
                     self._index += 1
                     self._image_inflight[access_token] = int(self._image_inflight.get(access_token, 0)) + 1
+                    # A4-1：与自增同一临界区内打冷却戳。下一轮 _list_ready_candidate_tokens()
+                    # 会看到新戳并把该号从 ready 面剔除，两个并发提交无法双双穿过间隔闸门。
+                    self._stamp_image_dispatch_locked(access_token)
                     return access_token
                 self._image_slot_condition.wait(timeout=1.0)
 
@@ -2392,6 +2509,10 @@ class AccountService:
                     while not acquired:
                         if self._image_slot_available_locked(prefer_token, skip_global_limit=skip_global_limit):
                             self._image_inflight[prefer_token] = int(self._image_inflight.get(prefer_token, 0)) + 1
+                            # A4-1：sticky 路径同样在占位瞬间打戳（本路径按设计不查间隔
+                            # 闸门 —— preferred_email 是运维显式指定的粘滞覆写），戳仍要打，
+                            # 否则该号完成后 _ensure_image_next_ok_stamped() 会误判成"未派发"。
+                            self._stamp_image_dispatch_locked(prefer_token)
                             acquired = True
                             break
                         if not skip_global_limit:
@@ -2432,6 +2553,8 @@ class AccountService:
                                 self.release_image_slot(prefer_token)
                                 with self._image_slot_condition:
                                     self._image_inflight[resolved] = int(self._image_inflight.get(resolved, 0)) + 1
+                                    # token rotation 后在途迁到新 token，冷却戳也要跟着落到新号上。
+                                    self._stamp_image_dispatch_locked(resolved)
                                 prefer_token = resolved
                             if self._is_image_account_schedulable(account or {}):
                                 return prefer_token
@@ -3628,7 +3751,9 @@ class AccountService:
                         next_item["status"] = "正常"
                 elif next_item.get("status") == "限流":
                     next_item["status"] = "正常"
-                next_item = self._stamp_image_next_ok(next_item)
+                # A4-1：冷却戳已在派发时打过，这里**不再重打**（重打等于把冷却挪回完成时，
+                # 单账号服务周期又变成 T_exec + gap）。只在完全没走过派发侧打戳时兜底。
+                next_item = self._ensure_image_next_ok_stamped(next_item)
                 next_item = self._apply_humanlike_quota_fields(next_item)
             else:
                 next_item["fail"] = int(next_item.get("fail") or 0) + 1
@@ -3643,7 +3768,9 @@ class AccountService:
                         max_sec=float(settings.get("fail_cooldown_max_sec") or 5400),
                     )
                     next_item["image_fail_cooldown_until"] = time.time() + cool
-                next_item = self._stamp_image_next_ok(next_item)
+                # A4-1：同上。失败路径的额外保护是 image_fail_cooldown_until（fail streak
+                # 到阈值后 1800~5400s），远强于 gap；快速失败仍受派发戳的 gap 约束。
+                next_item = self._ensure_image_next_ok_stamped(next_item)
             account = self._normalize_account(next_item)
             if account is None:
                 return None
