@@ -29,6 +29,26 @@ from services.storage.base import StorageBackend
 from utils.helper import anonymize_token
 
 
+def inflight_token_fingerprint(token: object) -> str:
+    """漂移上报用的稳定、不可逆 token 标识。
+
+    与 `services/image_pipeline/pipeline_watchdog._token_fingerprint`
+    **算法完全一致**（blake2b digest_size=6 hexdigest，与 slot_ledger.`_token_hash`
+    同属 blake2b 家族；那边取 digest_size=8 的整数是为了 Rust FFI，做 JSON key
+    需要的是十六进制串）。逐字符相等是刻意的：watchdog 的 `_over_counted` key 与
+    `reconcile_inflight` 的 drift key 因此可以直接交叉引用。
+
+    原实现用 `token[:12] + "..."`：生产 access token 是 JWT，全池共享同一段
+    base64 header 前缀（`eyJhbGciOiJS...`），于是**所有账号塌成同一个 key**，
+    drift / drift_count 系统性少报 —— 正好废掉它唯一要暴露的那个泄漏。
+
+    刻意做成模块级函数而非 AccountService 方法：`reconcile_inflight` 会被测试
+    替身以 `reconcile_inflight = AccountService.reconcile_inflight` 的方式借用，
+    走 `self.` 查找会要求每个替身都补绑这个辅助函数。
+    """
+    return hashlib.blake2b(str(token or "").encode("utf-8"), digest_size=6).hexdigest()
+
+
 class AccountService:
     """账号池服务，使用 token -> account 的 dict 保存账号。"""
 
@@ -398,6 +418,61 @@ class AccountService:
         if eligible_at is None:
             return False
         return datetime.now(timezone.utc) >= eligible_at
+
+    @staticmethod
+    def _heal_hard_quota_limited_status(account: dict) -> dict:
+        """把「硬额度归零」写死的 status=限流 翻译回 flag 语义（A2-4 单向门）。
+
+        限流 是 quota==0 的**派生态**，不是终态；但它经 _persist_upsert_accounts
+        落库，而 _quota_window_due_for_lazy_refresh() 第一条就要求 status==正常，
+        于是专门为救这类账号写的懒刷新逃生口被自己关死：账号耗尽一次即永久退池，
+        重启也不恢复。此处与 _apply_humanlike_quota_fields 的软熔断同规
+        （「软熔断只用 flag，禁止改 status=限流」）：改用 image_soft_capped +
+        restore_at 表达「当前不可派发」，restore_at 过期后由懒刷新自然复活。
+
+        只处理**计量**账号（有明确数值额度）：
+        - 真无限额（Pro/ProLite）与 image_quota_unknown 不参与硬额度扣减，
+          不属于本条的漂移链路，状态保持原样以免扩大改动面。
+        - 运维显式开启 auto_remove_rate_limited_accounts 时保持原语义，
+          让调用方的删除分支仍能识别（该模式下账号被删除而非搁死）。
+        """
+        if not isinstance(account, dict):
+            return account
+        if str(account.get("status") or "") != "限流":
+            return account
+        try:
+            if config.auto_remove_rate_limited_accounts:
+                return account
+        except Exception:
+            pass
+        if AccountService._is_true_unlimited_image_account(account):
+            return account
+        if bool(account.get("image_quota_unknown")):
+            return account
+        account["status"] = "正常"
+        try:
+            quota = int(account.get("quota") or 0)
+        except (TypeError, ValueError):
+            quota = 0
+        if quota <= 0 and AccountService._has_quota_window_anchor(account):
+            # 仍然耗尽：用 flag 维持「不可派发」，由 restore_at 决定何时放行，
+            # 绝不在额度窗口真正重置前把账号放回派发面（否则换来上游 429 风暴）。
+            account["image_soft_capped"] = True
+        return account
+
+    @staticmethod
+    def _has_quota_window_anchor(account: dict) -> bool:
+        """是否存在可解析的额度窗口时间锚点（restore_at / 窗口重置时间）。
+
+        没有锚点时**禁止**打 image_soft_capped：`_is_image_account_available()`
+        对「soft_capped 且 restore_at 不可解析」直接 return False，而该 flag 只能
+        由 remaining>0 的 limits_progress 清掉 —— 账号没有 limits_progress 时
+        就换来另一个永久沉底（用饥饿换饥饿）。此时 quota<=0 本身已经足够挡住派发
+        （懒刷新同样需要 restore_at），把 status 治好就能让它重新被刷新链路覆盖到。
+        """
+        return AccountService._parse_time(
+            (account or {}).get("restore_at") or (account or {}).get("image_gen_window_reset_at")
+        ) is not None
 
     @staticmethod
     def _scheduler_unrestricted() -> bool:
@@ -856,6 +931,15 @@ class AccountService:
             return False
         if self._active_proxy_egress_duplicate(account):
             return False
+        proxy = str(account.get("proxy") or "").strip()
+        if proxy:
+            try:
+                from services.proxy_cf_eligibility import is_proxy_cf_ok_for_image, require_cf_ok_for_image
+
+                if require_cf_ok_for_image() and not is_proxy_cf_ok_for_image(proxy, account=account):
+                    return False
+            except Exception:
+                return False
         return True
 
     @staticmethod
@@ -1126,6 +1210,10 @@ class AccountService:
         normalized["source_type"] = self._normalize_source_type(source_type)
         limits_progress = normalized.get("limits_progress")
         normalized["limits_progress"] = limits_progress if isinstance(limits_progress, list) else []
+        # A2-4：先把历史/远端写来的硬额度 限流 翻译成 flag，再让下面的 limits_progress
+        # 覆盖分支生效。否则 status=限流 且 remaining==0 时既不写回 quota/restore_at，
+        # 也不清 status，restore_at 会永远停在过期值上（活体已抓到该状态）。
+        normalized = self._heal_hard_quota_limited_status(normalized)
         derived_quota_state = self._extract_image_quota_state(normalized["limits_progress"])
         if (
             derived_quota_state is not None
@@ -1226,6 +1314,13 @@ class AccountService:
             normalized["cf_daily"] = cleaned_cf[-7:]
         else:
             normalized["cf_daily"] = []
+        normalized["proxy_cf_ok"] = bool(normalized.get("proxy_cf_ok"))
+        try:
+            normalized["proxy_cf_ok_at"] = float(normalized.get("proxy_cf_ok_at") or 0)
+        except (TypeError, ValueError):
+            normalized["proxy_cf_ok_at"] = 0.0
+        normalized["proxy_cf_probe_endpoint"] = str(normalized.get("proxy_cf_probe_endpoint") or "").strip().lower()
+        normalized["proxy_cf_classification"] = str(normalized.get("proxy_cf_classification") or "").strip()
         return normalized
 
     @staticmethod
@@ -2862,10 +2957,17 @@ class AccountService:
         *,
         expected_by_token: dict[str, int],
         force: bool = False,
+        tokens: set[str] | tuple[str, ...] | list[str] | None = None,
     ) -> dict[str, object]:
-        """Compare memory ``_image_inflight`` vs tasks actually holding account slots."""
-        drift: dict[str, dict[str, int]] = {}
+        """Compare memory ``_image_inflight`` vs tasks actually holding account slots.
+
+        `force` 打开纠正权；`tokens` 省略时保持原「全池纠正」语义，给出时只纠正
+        白名单内的 token（调用方已逐个确认过的 stale 子集）。漂移**观测**始终覆盖
+        全池，否则 /health 会跟着瞎掉 —— 白名单只收窄写，不收窄看。
+        """
+        drift: dict[str, dict[str, object]] = {}
         corrected = 0
+        allow: set[str] | None = None if tokens is None else {str(t) for t in tokens}
         with self._image_slot_condition:
             reported = {k: int(v or 0) for k, v in self._image_inflight.items()}
             all_tokens = set(reported) | set(expected_by_token)
@@ -2873,8 +2975,15 @@ class AccountService:
                 memory = int(reported.get(token, 0))
                 expected = int(expected_by_token.get(token, 0))
                 if memory != expected:
-                    drift[token[:12] + "..."] = {"memory": memory, "expected": expected}
-                    if force and memory > expected:
+                    account = self._accounts.get(token) or {}
+                    drift[inflight_token_fingerprint(token)] = {
+                        "memory": memory,
+                        "expected": expected,
+                        # 只有指纹的话运维无法定位到账号；email 与 watchdog
+                        # `_over_counted` / schedulable_breakdown samples 的口径一致。
+                        "email": str(account.get("email") or "") or None,
+                    }
+                    if force and memory > expected and (allow is None or token in allow):
                         if expected <= 0:
                             self._image_inflight.pop(token, None)
                         else:
@@ -2882,6 +2991,10 @@ class AccountService:
                         corrected += 1
             total_memory = self._total_image_inflight_locked()
             total_expected = sum(max(0, int(v)) for v in expected_by_token.values())
+            if corrected:
+                # 回收的槽位必须立刻唤醒 _acquire_next_candidate_token() 里 wait 的
+                # 取号线程，否则要等下一个无关的 release/notify 才醒 —— 等于白回收。
+                self._image_slot_condition.notify_all()
         return {
             "drift_count": len(drift),
             "drift": drift,
@@ -3352,11 +3465,17 @@ class AccountService:
                 account = dict(account)
                 account["cf_daily"] = []
                 account["egress_daily"] = []
+                account["proxy_cf_ok"] = False
+                account["proxy_cf_ok_at"] = 0
+                account["proxy_cf_probe_endpoint"] = ""
+                account["proxy_cf_classification"] = ""
                 account = self._normalize_account(account)
                 if account is None:
                     return None
             self._accounts[access_token] = account
-            if account != current:
+            cf_meta_keys = ("proxy_cf_ok", "proxy_cf_ok_at", "proxy_cf_probe_endpoint", "proxy_cf_classification")
+            force_persist = any(key in incoming for key in cf_meta_keys)
+            if account != current or force_persist:
                 self._persist_upsert_accounts([account])
             if not quiet:
                 log_service.add(
@@ -3493,8 +3612,20 @@ class AccountService:
                 if not is_true_unlimited and not image_quota_unknown:
                     next_item = self._decrement_stored_image_quota(next_item)
                 if not is_true_unlimited and not image_quota_unknown and next_item["quota"] == 0:
-                    next_item["status"] = "限流"
+                    # A2-4：硬额度归零与软熔断同规（见 _apply_humanlike_quota_fields 内注释
+                    # 「软熔断只用 flag，禁止改 status=限流」）。写 status 会落库，并关死
+                    # _quota_window_due_for_lazy_refresh() 的懒刷新逃生口 → 耗尽一次即永久退池。
+                    # 这里只打 flag + 保留 restore_at：窗口未到仍不可派发，窗口一过自动复活。
                     next_item["restore_at"] = next_item.get("restore_at") or None
+                    if self._has_quota_window_anchor(next_item):
+                        # 无时间锚点时不打 flag，否则会换来另一个永久沉底；
+                        # quota==0 本身已挡住派发（见 _has_quota_window_anchor 注释）。
+                        next_item["image_soft_capped"] = True
+                    if config.auto_remove_rate_limited_accounts:
+                        # 运维显式要求「自动移除限流账号」：保留旧语义供下方删除分支识别。
+                        next_item["status"] = "限流"
+                    elif next_item.get("status") == "限流":
+                        next_item["status"] = "正常"
                 elif next_item.get("status") == "限流":
                     next_item["status"] = "正常"
                 next_item = self._stamp_image_next_ok(next_item)
