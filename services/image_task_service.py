@@ -19,6 +19,8 @@ from services.content_filter import request_text
 from services.humanlike_scheduler import compute_resume_delay_seconds, compute_submit_interval_ms
 from services.log_service import LOG_TYPE_CALL, log_service
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
+from services.image_pipeline import ImagePoolStarvedError, image_pipeline_scheduler
+from services.image_pipeline import schedule_trace
 
 TASK_STATUS_QUEUED = "queued"
 TASK_STATUS_RUNNING = "running"
@@ -32,6 +34,79 @@ _SUCCESS_DURATION_EWMA_INITIAL_SECS = 60.0
 _SUCCESS_DURATION_EWMA_MIN_SECS = 30.0
 _SUCCESS_DURATION_EWMA_MAX_SECS = 180.0
 _SUCCESS_DURATION_EWMA_ALPHA = 0.2
+
+# --- stuck-RUNNING reaper (audit 28 §B10) ---------------------------------------
+# A task is set to RUNNING and persisted *before* its worker starts executing it, so a
+# worker that dies mid-task used to strand the row in RUNNING forever: startup recovery
+# runs once behind a latch and _cleanup_locked() only evicts TERMINAL_STATUSES. Each
+# stranded row permanently consumed global / per-user / per-owner dispatch capacity.
+# The reaper's bound is derived from _task_hard_timeout_secs() — the legitimate per-mode
+# ceiling (~225s generation / ~435s single-ref edit / ~495s multi-ref) — plus a margin,
+# rather than a fresh magic number.
+_REAP_INTERVAL_SECS = 15.0
+_STUCK_RUNNING_MARGIN_RATIO = 0.25
+_STUCK_RUNNING_MARGIN_MIN_SECS = 60.0
+_STUCK_RUNNING_MARGIN_MAX_SECS = 180.0
+# Backoff after a worker-loop escape, so a persistently failing dependency (locked DB,
+# full disk, vanished data dir) cannot turn the now-immortal loop into a hot spin.
+# Doubles per consecutive crash on the same worker and resets after a clean iteration.
+_WORKER_CRASH_BACKOFF_SECS = 0.2
+_WORKER_CRASH_BACKOFF_MAX_SECS = 5.0
+
+# --- sync resume-ladder budget (audit 28 §B7) -----------------------------------
+# A sync caller waits `newapi_image_sync_wait_timeout_secs` (540s) and then gets an
+# ImageTaskWaitTimeoutError; nothing used to cancel the server-side work. The ladder
+# (first attempt + up to `timeout_pending_max_attempts` resume polls, each with its own
+# hard timeout) summed to ~1395s nominal, and `resume_deadline_ts` was only checked at
+# dispatch, so an attempt started at `deadline - ε` still ran its full hard timeout.
+# 1–4 background resume polls therefore kept hitting upstream with the same access token
+# for a request nobody was waiting for, burning account quota and poll-worker capacity.
+#
+# Everything below is derived from the *client* budget so the invariant survives a
+# retune of newapi_image_sync_wait_timeout_secs:
+#   ladder budget L = C - reserve(C)      reserve covers queue wait + delivery + CDN
+# and every wait in the ladder is clamped to `sync_ladder_deadline_ts = attach + L`.
+# Async (detached) tasks never get that field, so their ladder is untouched.
+_SYNC_LADDER_RESERVE_RATIO = 0.10
+_SYNC_LADDER_RESERVE_MIN_SECS = 20.0
+_SYNC_LADDER_RESERVE_MAX_SECS = 120.0
+# A resume attempt shorter than this cannot finish a conversation GET + URL resolve +
+# download, so dispatching one only spends quota. Used as the "is another attempt worth
+# it" gate for sync-attached tasks.
+_SYNC_LADDER_MIN_ATTEMPT_SECS = 20.0
+# ``wait_for_result`` is also used for short polling reads, whose documented contract is
+# "the task keeps running in the background" (ImageTaskWaitTimeoutError). Only a budget
+# large enough to hold the reserve plus one useful attempt counts as *the* client bound;
+# anything shorter is a poll, not a deadline, and must not shorten the ladder.
+# `_sync_client_budget_secs` clamps the real sync budget to >= 60s, so the sync adapter
+# path always qualifies.
+_SYNC_LADDER_MIN_BINDING_BUDGET_SECS = _SYNC_LADDER_RESERVE_MIN_SECS + _SYNC_LADDER_MIN_ATTEMPT_SECS
+# Reserve may never eat more than this share of a budget, so a small budget still leaves
+# a usable ladder instead of a negative one.
+_SYNC_LADDER_RESERVE_MAX_SHARE = 0.5
+# Margin `_resume_poll_hard_timeout_secs` adds on top of the poll budget for the final
+# URL resolve + download. Shared so the dispatch clamp and the wait clamp cannot drift.
+_RESUME_POLL_OVERHEAD_SECS = 60.0
+# The ladder deadline is re-read in slices while an attempt runs, so a sync waiter that
+# attaches *after* dispatch still bounds the attempt already in flight.
+_SYNC_LADDER_RECHECK_INTERVAL_SECS = 5.0
+
+# --- per-owner submit fairness (audit 28 §A4-7) ---------------------------------
+# `relaxed_per_user_running` used to short-circuit `_effective_per_user_running_max`
+# to `sse_slots`, silently dead-configuring per_user_running_max / _base / _burst and
+# the burst_min_* keys. It now only applies when the operator has configured none of
+# them, so un-tuned deployments keep the old ceiling while explicit config binds.
+_PER_USER_RUNNING_CONFIG_KEYS = (
+    "per_user_running_max",
+    "per_user_running_base",
+    "per_user_running_burst",
+)
+# `_run_task` holds its submit worker for the whole end-to-end task (requirements →
+# SSE → poll → download; it is *not* released during I/O wait), so a per-user ceiling
+# equal to `submit_workers` let one owner pin every worker for up to ~495s each. When
+# other owners have queued work, an owner is additionally capped by a fair share of the
+# pool and by a reserve that keeps the pool from ever being fully consumed by one owner.
+_OWNER_RESERVE_RATIO = 0.25
 
 
 class ImageTaskQueueFullError(RuntimeError):
@@ -126,6 +201,99 @@ def _collect_image_urls(data: list[Any]) -> list[str]:
     return urls
 
 
+def _positive_int(value: object) -> int | None:
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _call_log_usage_fields(usage: object) -> dict[str, Any]:
+    if not isinstance(usage, dict):
+        return {}
+    fields: dict[str, Any] = {"usage": dict(usage)}
+    prompt_tokens = _positive_int(usage.get("prompt_tokens"))
+    if prompt_tokens is None:
+        prompt_tokens = _positive_int(usage.get("input_tokens"))
+    completion_tokens = _positive_int(usage.get("completion_tokens"))
+    if completion_tokens is None:
+        completion_tokens = _positive_int(usage.get("output_tokens"))
+    if prompt_tokens is not None:
+        fields["prompt_tokens"] = prompt_tokens
+    if completion_tokens is not None:
+        fields["completion_tokens"] = completion_tokens
+    total_tokens = _positive_int(usage.get("total_tokens"))
+    if total_tokens is not None:
+        fields["total_tokens"] = total_tokens
+    return fields
+
+
+def _completion_tokens_from_usage(usage: object) -> int:
+    if not isinstance(usage, dict):
+        return 0
+    for key in ("completion_tokens", "output_tokens"):
+        value = _positive_int(usage.get(key))
+        if value is not None:
+            return value
+    return 0
+
+
+def _tokens_per_sec_from_sources(
+    usage: object,
+    *,
+    sse_stream_ms: int = 0,
+    total_wall_ms: int = 0,
+) -> float | None:
+    completion_tokens = _completion_tokens_from_usage(usage)
+    if completion_tokens <= 0:
+        return None
+    denom_ms = sse_stream_ms if sse_stream_ms > 0 else total_wall_ms
+    if denom_ms <= 0:
+        return None
+    return round(completion_tokens / (denom_ms / 1000.0), 2)
+
+
+def _traffic_field_from_source(source: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = _positive_int(source.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _call_log_traffic_fields(*sources: object) -> dict[str, int]:
+    upload: int | None = None
+    download: int | None = None
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        if upload is None:
+            upload = _traffic_field_from_source(
+                source,
+                "upload_bytes",
+                "uploaded_bytes",
+                "traffic_upload_bytes",
+                "traffic_uploaded_bytes",
+            )
+        if download is None:
+            download = _traffic_field_from_source(
+                source,
+                "download_bytes",
+                "downloaded_bytes",
+                "traffic_download_bytes",
+                "traffic_downloaded_bytes",
+            )
+    fields: dict[str, int] = {}
+    if upload is not None:
+        fields["upload_bytes"] = upload
+    if download is not None:
+        fields["download_bytes"] = download
+    if upload is not None and download is not None:
+        fields["traffic_bytes"] = upload + download
+    return fields
+
+
 def _encode_for_json(value: Any) -> Any:
     if isinstance(value, bytes):
         return {"__bytes_b64__": base64.b64encode(value).decode("ascii")}
@@ -156,6 +324,27 @@ def _decode_from_json(value: Any) -> Any:
     return value
 
 
+def _compact_task_memory(task: dict[str, Any]) -> None:
+    """Drop heavy blobs from in-memory terminal tasks (persisted copy already saved)."""
+    payload = task.get("payload")
+    if isinstance(payload, dict):
+        if payload.get("images"):
+            payload["images"] = []
+        if payload.get("image"):
+            payload.pop("image", None)
+    data = task.get("data")
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict) and item.get("b64_json"):
+                item.pop("b64_json", None)
+    for heavy_key in ("schedule_trace", "detail", "log_detail"):
+        if heavy_key in task:
+            task.pop(heavy_key, None)
+
+
+TERMINAL_MEMORY_RETENTION_SECS = 90.0
+
+
 def _public_task(task: dict[str, Any]) -> dict[str, Any]:
     item = {
         "id": task.get("id"),
@@ -179,6 +368,27 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
         item["progress"] = task.get("progress")
     if task.get("duration_ms") is not None:
         item["duration_ms"] = task.get("duration_ms")
+    if task.get("total_wall_ms") is not None:
+        item["total_wall_ms"] = int(task.get("total_wall_ms") or 0)
+    if task.get("task_queue_ms") is not None:
+        item["task_queue_ms"] = int(task.get("task_queue_ms") or 0)
+    if task.get("worker_duration_ms") is not None:
+        item["worker_duration_ms"] = int(task.get("worker_duration_ms") or 0)
+    phase_timings = task.get("phase_timings_ms")
+    if isinstance(phase_timings, dict) and phase_timings:
+        item["phase_timings_ms"] = phase_timings
+        wall_clock = phase_timings.get("wall_clock_ms")
+        if wall_clock is not None:
+            item["wall_clock_ms"] = int(wall_clock)
+    if task.get("retry_phase_cursor"):
+        item["retry_phase_cursor"] = task.get("retry_phase_cursor")
+    if task.get("pipeline_phase"):
+        item["pipeline_phase"] = task.get("pipeline_phase")
+    if task.get("enhanced_prompt"):
+        item["enhanced_prompt"] = task.get("enhanced_prompt")
+    sediment_ids = task.get("sediment_ids")
+    if isinstance(sediment_ids, list) and sediment_ids:
+        item["sediment_ids"] = sediment_ids
     if task.get("resume_attempts") is not None:
         item["resume_attempts"] = int(task.get("resume_attempts") or 0)
     if task.get("next_resume_ts"):
@@ -305,6 +515,15 @@ class ImageTaskService:
         self._cancel_events: dict[str, threading.Event] = {}
         self._success_duration_ewma_secs = _SUCCESS_DURATION_EWMA_INITIAL_SECS
         self._last_submit_start_ts = 0.0
+        # task_key -> live PipelineRun. The run object is otherwise reachable only from
+        # the worker frame that created it, so a dead worker took the only handle on its
+        # pipeline accounting with it (audit 28 §B10).
+        self._active_pipeline_runs: dict[str, object] = {}
+        self._last_reap_ts = 0.0
+        # Per-worker consecutive crash counter, for the loop backoff.
+        self._worker_crash_state = threading.local()
+        # One-shot latch for the sync-ladder budget warning (audit 28 §B7).
+        self._sync_ladder_validation_logged = False
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
@@ -315,6 +534,7 @@ class ImageTaskService:
         with self._condition:
             if self._stop_event.is_set():
                 self._stop_event = threading.Event()
+            self._log_sync_ladder_validation_locked()
             self._recover_runtime_tasks_locked()
             self._ensure_workers_locked()
             self._condition.notify_all()
@@ -330,6 +550,27 @@ class ImageTaskService:
             base = max(0, int(self._queue_settings().get("submit_start_min_interval_ms") or 0))
         except Exception:
             base = 0
+        if self._queue_settings().get("submit_interval_adaptive", True):
+            try:
+                from services.account_service import account_service
+                from services.image_pipeline import schedule_core
+
+                stats = account_service.get_image_candidate_runtime_stats()
+                inflight = int(stats.get("image_inflight_count") or 0)
+                cap = self._adaptive_submit_cap()
+                with self._condition:
+                    queued = sum(
+                        1 for task in self._tasks.values() if task.get("status") == TASK_STATUS_QUEUED
+                    )
+                if not schedule_core.dispatch_should_apply_interval(
+                    interval_ms=base,
+                    inflight=inflight,
+                    cap=cap,
+                    queued=queued,
+                ):
+                    return 0
+            except Exception:
+                pass
         settings = config.get_scheduler_settings()
         if not settings.get("enabled") or base <= 0:
             return base
@@ -338,6 +579,25 @@ class ImageTaskService:
             jitter_lo=float(settings.get("submit_interval_jitter_lo") or 0.7),
             jitter_hi=float(settings.get("submit_interval_jitter_hi") or 1.3),
         )
+
+    def _adaptive_submit_cap(self) -> int:
+        try:
+            pipeline = config.get_image_pipeline_settings()
+            sse_slots = int(pipeline.get("sse_slots") or 10)
+        except Exception:
+            sse_slots = 10
+        try:
+            from services.account_service import account_service
+
+            stats = account_service.get_image_candidate_runtime_stats()
+            global_limit = int(stats.get("image_global_limit") or stats.get("image_global_concurrency_limit") or 0)
+        except Exception:
+            global_limit = 0
+        if global_limit <= 0:
+            global_limit = sse_slots
+        with self._condition:
+            per_user = self._effective_per_user_running_max_locked()
+        return max(1, min(sse_slots, global_limit, per_user))
 
     def _resume_delay_secs(self, attempts: int) -> float:
         settings = config.get_scheduler_settings()
@@ -356,8 +616,242 @@ class ImageTaskService:
             return 300.0
         return max(60.0, float(settings.get("resume_wall_sec") or 240.0))
 
-    def _resume_deadline_ts(self, now: float | None = None) -> float:
-        return float(now if now is not None else time.time()) + self._resume_wall_secs()
+    def _resume_deadline_ts(self, now: float | None = None, *, key: str = "") -> float:
+        """Resume wall-clock deadline, never later than the sync ladder deadline.
+
+        The wall alone bounded nothing useful: it was anchored at whatever "now" the
+        transition happened at and re-armed on every hop, so the ladder could outlive
+        the client by minutes (audit 28 §B7).
+        """
+        current = float(now if now is not None else time.time())
+        deadline = current + self._resume_wall_secs()
+        if key:
+            ladder = self._sync_ladder_deadline_ts(key)
+            if ladder > 0:
+                deadline = min(deadline, ladder)
+        return deadline
+
+    # ------------------------------------------------------- §B7 sync ladder budget
+
+    def _sync_client_budget_secs(self) -> float:
+        """Wall-clock budget a sync caller actually waits (see wait_for_result)."""
+        try:
+            return max(60.0, min(900.0, float(config.newapi_image_sync_wait_timeout_secs)))
+        except Exception:
+            return 540.0
+
+    def _sync_ladder_reserve_secs(self, client_budget_secs: float) -> float:
+        """Slice of the client budget the ladder must *not* consume.
+
+        Covers the queue wait before the first attempt, the terminal DB write, the
+        response marshalling and the NewAPI/Cloudflare hop in front of us.
+        """
+        try:
+            ratio = float(
+                self._queue_settings().get("sync_ladder_reserve_ratio")
+                or _SYNC_LADDER_RESERVE_RATIO
+            )
+        except Exception:
+            ratio = _SYNC_LADDER_RESERVE_RATIO
+        ratio = max(0.0, min(_SYNC_LADDER_RESERVE_MAX_SHARE, ratio))
+        budget = max(1.0, float(client_budget_secs))
+        reserve = max(
+            _SYNC_LADDER_RESERVE_MIN_SECS,
+            min(_SYNC_LADDER_RESERVE_MAX_SECS, budget * ratio),
+        )
+        return min(reserve, budget * _SYNC_LADDER_RESERVE_MAX_SHARE)
+
+    def _sync_ladder_budget_secs(self, client_budget_secs: float | None = None) -> float:
+        budget = float(client_budget_secs if client_budget_secs is not None else self._sync_client_budget_secs())
+        return max(1.0, budget - self._sync_ladder_reserve_secs(budget))
+
+    def _sync_ladder_deadline_ts(self, key: str) -> float:
+        """0.0 for async/detached tasks — they have no client bound to respect.
+
+        Deliberately lock-free: this is read on every ladder wait slice, and both dict
+        lookups are atomic under the GIL. Taking ``self._lock`` here would queue a waiting
+        worker behind every ``list_tasks`` / ``_cleanup_locked`` pass, for a value that
+        only ever moves earlier.
+        """
+        if not key:
+            return 0.0
+        task = self._tasks.get(key)
+        if not isinstance(task, dict):
+            return 0.0
+        try:
+            return float(task.get("sync_ladder_deadline_ts") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _sync_ladder_remaining_secs(self, key: str, *, now: float | None = None) -> float | None:
+        """Seconds of ladder budget left, or None when the task is not sync-attached.
+
+        None means "do not shorten anything": a genuinely detached background task has
+        no 540s client bound and keeps the original ladder.
+        """
+        deadline = self._sync_ladder_deadline_ts(key)
+        if deadline <= 0:
+            return None
+        return deadline - float(now if now is not None else time.time())
+
+    def _sync_ladder_exhausted(self, key: str, *, now: float | None = None) -> bool:
+        remaining = self._sync_ladder_remaining_secs(key, now=now)
+        return remaining is not None and remaining <= 0.0
+
+    def _attach_sync_waiter_locked(self, key: str, *, wait_timeout_secs: float, client_deadline_ts: float) -> None:
+        """Record the client bound this task's ladder has to converge inside.
+
+        Called from ``wait_for_result``, which *is* the definition of a sync caller.
+        Several callers may await the same task_id; the ladder has to fit the earliest
+        client deadline, otherwise the first one to give up still pays for the rest.
+        """
+        task = self._tasks.get(key)
+        if not isinstance(task, dict):
+            return
+        if float(wait_timeout_secs) < _SYNC_LADDER_MIN_BINDING_BUDGET_SECS:
+            # A short poll-style wait is not a client deadline; bounding the ladder by it
+            # would contradict "the task keeps running in the background".
+            return
+        ladder_deadline = float(client_deadline_ts) - self._sync_ladder_reserve_secs(wait_timeout_secs)
+        previous_ladder = 0.0
+        try:
+            previous_ladder = float(task.get("sync_ladder_deadline_ts") or 0.0)
+        except (TypeError, ValueError):
+            previous_ladder = 0.0
+        if previous_ladder > 0:
+            ladder_deadline = min(previous_ladder, ladder_deadline)
+        task["sync_waiters"] = int(task.get("sync_waiters") or 0) + 1
+        if previous_ladder != ladder_deadline:
+            task["sync_ladder_deadline_ts"] = ladder_deadline
+            task["sync_client_deadline_ts"] = float(client_deadline_ts)
+            # Persist: a restart must not silently hand the ladder an unbounded budget.
+            self._save_task_locked(key)
+
+    def _detach_sync_waiter(self, key: str) -> None:
+        """The waiter is gone; the recorded deadline deliberately stays.
+
+        Once a sync client has attached, the budget is spent whether or not it is still
+        listening — keeping the deadline is what stops the ladder outliving it.
+        """
+        with self._condition:
+            task = self._tasks.get(key)
+            if isinstance(task, dict):
+                task["sync_waiters"] = max(0, int(task.get("sync_waiters") or 0) - 1)
+
+    def _effective_task_hard_timeout_secs(self, key: str, payload: dict[str, Any]) -> float:
+        """Per-mode hard timeout, clamped to what is left of the sync ladder budget."""
+        natural = self._task_hard_timeout_secs(payload)
+        remaining = self._sync_ladder_remaining_secs(key)
+        if remaining is None:
+            return natural
+        return max(0.1, min(natural, remaining))
+
+    def _effective_resume_poll_hard_timeout_secs(self, key: str, timeout_secs: float) -> float:
+        natural = self._resume_poll_hard_timeout_secs(timeout_secs)
+        remaining = self._sync_ladder_remaining_secs(key)
+        if remaining is None:
+            return natural
+        return max(0.1, min(natural, remaining))
+
+    def _nominal_resume_backoff_secs(self, attempts: int) -> float:
+        """Worst-case (max-jitter) backoff for attempt N, for the budget validation."""
+        settings = config.get_scheduler_settings()
+        if not settings.get("enabled"):
+            return min(300.0, 30.0 * max(1, int(attempts or 1)))
+        # Pinning both jitter bounds to the high end makes the real scheduler function
+        # deterministic instead of re-deriving its formula here.
+        return compute_resume_delay_seconds(
+            int(attempts or 1),
+            first_delay_sec=float(settings.get("resume_first_delay_sec") or 5),
+            backoff_base_sec=float(settings.get("resume_backoff_base_sec") or 5),
+            backoff_cap_sec=float(settings.get("resume_backoff_cap_sec") or 60),
+            jitter_lo=1.25,
+            jitter_hi=1.25,
+        )
+
+    def validate_sync_ladder_budget(self) -> dict[str, Any]:
+        """Surface an inverted timeout configuration instead of letting it rot.
+
+        The 1395s-against-540s inversion arose because no single place compared the
+        server-side ladder with the client budget. This does, per mode, and is called
+        from ``start_background`` so a future retune shows up in the log.
+        """
+        client_budget = self._sync_client_budget_secs()
+        reserve = self._sync_ladder_reserve_secs(client_budget)
+        ladder_budget = self._sync_ladder_budget_secs(client_budget)
+        try:
+            max_attempts = max(1, int(self.timeout_pending_max_attempts_getter()))
+        except Exception:
+            max_attempts = 1
+        try:
+            resume_poll_secs = max(5.0, float(self.timeout_pending_poll_secs_getter()))
+        except Exception:
+            resume_poll_secs = 180.0
+        backoff_total = sum(self._nominal_resume_backoff_secs(index) for index in range(1, max_attempts + 1))
+        resume_attempt_secs = self._resume_poll_hard_timeout_secs(resume_poll_secs)
+        modes: dict[str, Any] = {}
+        for name, poll_timeout in self._nominal_mode_poll_timeouts().items():
+            first_attempt = self._task_hard_timeout_secs({"poll_timeout_secs": poll_timeout})
+            nominal_total = first_attempt + backoff_total + (resume_attempt_secs * max_attempts)
+            overflow = nominal_total - ladder_budget
+            modes[name] = {
+                "poll_timeout_secs": round(poll_timeout, 1),
+                "first_attempt_secs": round(first_attempt, 1),
+                "resume_attempt_secs": round(resume_attempt_secs, 1),
+                "nominal_total_secs": round(nominal_total, 1),
+                "overflow_secs": round(max(0.0, overflow), 1),
+                "inverted": overflow > 0,
+                # What the ladder is actually allowed to spend after the clamp.
+                "enforced_total_secs": round(min(nominal_total, ladder_budget), 1),
+            }
+        inverted = [name for name, item in modes.items() if item["inverted"]]
+        report: dict[str, Any] = {
+            "client_budget_secs": round(client_budget, 1),
+            "reserve_secs": round(reserve, 1),
+            "ladder_budget_secs": round(ladder_budget, 1),
+            "resume_max_attempts": max_attempts,
+            "nominal_backoff_total_secs": round(backoff_total, 1),
+            "modes": modes,
+            "inverted": bool(inverted),
+            "inverted_modes": inverted,
+        }
+        if inverted:
+            report["detail"] = (
+                "server-side resume ladder exceeds the sync client budget for "
+                f"{', '.join(inverted)}; attempts will be truncated to "
+                f"{report['ladder_budget_secs']}s (client budget {report['client_budget_secs']}s)"
+            )
+        else:
+            report["detail"] = "resume ladder converges inside the sync client budget"
+        return report
+
+    def _nominal_mode_poll_timeouts(self) -> dict[str, float]:
+        def _read(name: str, fallback: float) -> float:
+            try:
+                return max(1.0, float(getattr(config, name)))
+            except Exception:
+                return fallback
+
+        return {
+            "generate": _read("image_generation_poll_timeout_secs", 120.0),
+            "edit": _read("image_edit_poll_timeout_secs", 300.0),
+            "multi_reference": _read("image_multi_reference_poll_timeout_secs", 360.0),
+        }
+
+    def _log_sync_ladder_validation_locked(self) -> None:
+        if getattr(self, "_sync_ladder_validation_logged", False):
+            return
+        self._sync_ladder_validation_logged = True
+        try:
+            report = self.validate_sync_ladder_budget()
+        except Exception:
+            return
+        if not report.get("inverted"):
+            return
+        try:
+            log_service.add(LOG_TYPE_CALL, "同步生图超时阶梯配置倒挂", {"status": "warning", **report})
+        except Exception:
+            pass
 
     def _prompt_fingerprint(self, owner: str, prompt: str) -> str:
         digest = hashlib.sha256(str(prompt or "").strip().encode("utf-8")).hexdigest()
@@ -434,6 +928,10 @@ class ImageTaskService:
         base_url: str = "",
         response_format: str = "url",
         n: int = 1,
+        prompt_enhance: bool = False,
+        prompt_enhance_locale: str = "en",
+        multi_image_mode: str = "fast",
+        preferred_account_email: str = "",
     ) -> dict[str, Any]:
         payload = {
             "prompt": prompt,
@@ -446,6 +944,10 @@ class ImageTaskService:
             "poll_timeout_secs": float(config.image_generation_poll_timeout_secs),
             "resume_timeout_secs": float(self.timeout_pending_poll_secs_getter()),
             "queue_coordinated": True,
+            "prompt_enhance": bool(prompt_enhance),
+            "prompt_enhance_locale": _clean(prompt_enhance_locale, "en"),
+            "multi_image_mode": _clean(multi_image_mode, "fast"),
+            "preferred_account_email": _clean(preferred_account_email),
         }
         return self._submit(identity, client_task_id=client_task_id, mode="generate", payload=payload)
 
@@ -465,6 +967,9 @@ class ImageTaskService:
         mask_asset_ids: list[str] | None = None,
         response_format: str = "url",
         n: int = 1,
+        prompt_enhance: bool = False,
+        prompt_enhance_locale: str = "en",
+        multi_image_mode: str = "fast",
     ) -> dict[str, Any]:
         payload = {
             "prompt": prompt,
@@ -487,6 +992,9 @@ class ImageTaskService:
         )
         payload["resume_timeout_secs"] = float(self.timeout_pending_poll_secs_getter())
         payload["queue_coordinated"] = True
+        payload["prompt_enhance"] = bool(prompt_enhance)
+        payload["prompt_enhance_locale"] = _clean(prompt_enhance_locale, "en")
+        payload["multi_image_mode"] = _clean(multi_image_mode, "fast")
         return self._submit(identity, client_task_id=client_task_id, mode="edit", payload=payload)
 
     def success_duration_ewma_secs(self) -> float:
@@ -521,6 +1029,15 @@ class ImageTaskService:
             except Exception:
                 global_slots = 6
             per_user_slots = max(1, int(self._effective_per_user_running_max_locked()))
+            try:
+                if image_pipeline_scheduler.enabled():
+                    pipeline = config.get_image_pipeline_settings()
+                    per_user_slots = max(
+                        per_user_slots,
+                        int(pipeline.get("sse_slots") or global_slots),
+                    )
+            except Exception:
+                pass
             running_slots = max(1, min(global_slots, per_user_slots))
             ewma = float(self._success_duration_ewma_secs or _SUCCESS_DURATION_EWMA_INITIAL_SECS)
         if ahead <= 0:
@@ -557,20 +1074,47 @@ class ImageTaskService:
         except Exception:
             poll_interval = 1.5
         deadline = time.time() + wait_timeout
-        with self._condition:
-            while True:
-                if self._cleanup_locked():
-                    self._save_locked()
-                task = self._tasks.get(key) or self._load_task_from_db_locked(key)
-                if task is None:
-                    raise KeyError(f"image task not found: {task_id}")
-                status = _clean(task.get("status"))
-                if status in TERMINAL_STATUSES:
-                    return _public_task(task)
-                remaining = deadline - time.time()
-                if remaining <= 0:
-                    raise ImageTaskWaitTimeoutError(task_id, _public_task(task))
-                self._condition.wait(timeout=min(poll_interval, max(0.05, remaining)))
+        attached = False
+        try:
+            with self._condition:
+                while True:
+                    if self._cleanup_locked():
+                        self._save_locked()
+                    task = self._tasks.get(key) or self._load_task_from_db_locked(key)
+                    if task is None:
+                        raise KeyError(f"image task not found: {task_id}")
+                    if not attached:
+                        # Being awaited here is what makes a task "sync": from now on the
+                        # whole server-side ladder has to fit inside this caller's budget
+                        # (audit 28 §B7). Async submitters never reach this method.
+                        self._attach_sync_waiter_locked(
+                            key,
+                            wait_timeout_secs=wait_timeout,
+                            client_deadline_ts=deadline,
+                        )
+                        attached = True
+                    status = _clean(task.get("status"))
+                    if status in TERMINAL_STATUSES:
+                        return _public_task(task)
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        raise ImageTaskWaitTimeoutError(task_id, _public_task(task))
+                    self._condition.wait(timeout=min(poll_interval, max(0.05, remaining)))
+        finally:
+            if attached:
+                self._detach_sync_waiter(key)
+
+    def compact_task_heavy_fields(self, identity: dict[str, object], task_id: str) -> None:
+        """Drop in-memory b64 blobs after sync client has read the result."""
+        owner = _owner_id(identity)
+        key = _task_key(owner, _clean(task_id))
+        with self._lock:
+            task = self._tasks.get(key)
+            if not isinstance(task, dict):
+                return
+            _compact_task_memory(task)
+            if _clean(task.get("status")) in TERMINAL_STATUSES:
+                self._tasks.pop(key, None)
 
     def queue_depth(self) -> int:
         with self._lock:
@@ -654,9 +1198,15 @@ class ImageTaskService:
             if self._cleanup_locked():
                 self._save_locked()
             try:
-                running_limit = max(1, int(self.per_user_running_max_getter()))
+                # Must be the number dispatch actually enforces, not the raw config key:
+                # the two used to be computed independently, so the UI could promise 2
+                # while `_next_submit_task_locked` ran 10 (audit 28 §A4-7).
+                running_limit = max(1, int(self._owner_running_cap_locked(owner)))
             except Exception:
-                running_limit = 2
+                try:
+                    running_limit = max(1, int(self.per_user_running_max_getter()))
+                except Exception:
+                    running_limit = 2
             try:
                 accepted_limit = max(1, int(self.per_user_queue_max_getter()))
             except Exception:
@@ -725,6 +1275,13 @@ class ImageTaskService:
     def _submit(self, identity: dict[str, object], *, client_task_id: str, mode: str, payload: dict[str, Any]) -> dict[str, Any]:
         if _image_generation_paused():
             raise ImageTaskQueueFullError("image generation is paused to preserve the account pool")
+        if image_pipeline_scheduler.enabled():
+            try:
+                from services.image_pipeline.guards import ensure_dispatchable_pool
+
+                ensure_dispatchable_pool(min_count=2)
+            except ImagePoolStarvedError as exc:
+                raise ImageTaskQueueFullError(str(exc)) from exc
         task_id = _clean(client_task_id)
         if not task_id:
             raise ValueError("client_task_id is required")
@@ -742,6 +1299,23 @@ class ImageTaskService:
                 return _public_task(task)
             self._enforce_queue_limits_locked(owner)
             self._enforce_prompt_dedup_locked(owner, payload)
+            preferred = ""
+            if isinstance(payload, dict):
+                preferred = str(payload.get("preferred_account_email") or "").strip()
+            try:
+                from services.image_pipeline.account_lease_pool import account_lease_pool
+
+                if preferred:
+                    account_lease_pool.seed_hint(preferred)
+                queued = sum(
+                    1 for item in self._tasks.values() if item.get("status") == TASK_STATUS_QUEUED
+                )
+                account_lease_pool.seed_queued_preferences(self._tasks)
+                account_lease_pool.maintain(max_acquire=min(16, max(4, queued + 3)))
+            except Exception:
+                pass
+            if schedule_trace.enabled():
+                schedule_trace.begin(key, preferred)
             task = {
                 "id": task_id,
                 "owner_id": owner,
@@ -854,7 +1428,41 @@ class ImageTaskService:
             return True
         return status == TASK_STATUS_RUNNING and not cls._is_resume_polling_task(task)
 
+    @staticmethod
+    def _explicit_per_user_running_configured() -> bool:
+        """True when the operator actually set any per-user running knob.
+
+        ``get_image_task_queue_settings()`` normalises every key in, so presence has to
+        be read from the raw block. This is what lets ``relaxed_per_user_running`` keep
+        its old meaning for un-tuned deployments while explicit config now binds
+        (audit 28 §5 / §A4-7).
+        """
+        raw = getattr(config, "data", None)
+        block = raw.get("image_task_queue") if isinstance(raw, dict) else None
+        if not isinstance(block, dict):
+            return False
+        return any(key in block for key in _PER_USER_RUNNING_CONFIG_KEYS)
+
     def _effective_per_user_running_max_locked(self) -> int:
+        """Config-derived per-user running ceiling (before per-owner fairness).
+
+        ``relaxed_per_user_running`` used to ``return`` here with ``sse_slots``, ahead of
+        base/burst, which made per_user_running_max / _base / _burst and every burst_min_*
+        key dead configuration. It is now a *floor relaxation* applied only when none of
+        those keys are configured, so behaviour is unchanged for deployments that never
+        set them and honoured for the ones that did (audit 28 §A4-7).
+        """
+        value = self._configured_per_user_running_max_locked()
+        if not self._explicit_per_user_running_configured():
+            try:
+                relaxed = image_pipeline_scheduler.relaxed_per_user_running_max()
+            except Exception:
+                relaxed = None
+            if relaxed is not None:
+                value = max(value, int(relaxed))
+        return max(1, value)
+
+    def _configured_per_user_running_max_locked(self) -> int:
         settings = self._queue_settings()
         try:
             base = max(1, int(settings.get("per_user_running_base") or settings.get("per_user_running_max") or 6))
@@ -897,9 +1505,72 @@ class ImageTaskService:
             return burst
         return base
 
+    # ----------------------------------------------- §A4-7 per-owner submit fairness
+
+    def _contending_owner_count_locked(self, owner: str) -> int:
+        """Distinct *other* owners with queued work right now."""
+        owners = {
+            _clean(task.get("owner_id"))
+            for task in self._tasks.values()
+            if task.get("status") == TASK_STATUS_QUEUED and _clean(task.get("owner_id")) != owner
+        }
+        owners.discard("")
+        return len(owners)
+
+    def _owner_running_cap_locked(self, owner: str) -> int:
+        """Running-task ceiling for one owner — the single source of truth.
+
+        Dispatch used to read ``_effective_per_user_running_max_locked`` (which
+        ``relaxed_per_user_running`` pinned to ``sse_slots``) while the UI displayed
+        ``per_user_running_max_getter()``, so the two disagreed. Both now call this.
+
+        Because a submit worker is held for the whole end-to-end task, a ceiling equal to
+        ``submit_workers`` let one owner pin the entire pool. Under contention the owner is
+        additionally capped by a max-min fair share and by a reserve that keeps at least
+        one worker out of any single owner's reach. With no other owner waiting the
+        configured ceiling applies unchanged, so single-tenant throughput is untouched.
+        """
+        ceiling = self._effective_per_user_running_max_locked()
+        try:
+            hard_max = max(1, int(self.per_user_running_max_getter()))
+        except Exception:
+            hard_max = ceiling
+        ceiling = max(1, min(ceiling, hard_max))
+        contenders = self._contending_owner_count_locked(owner)
+        if contenders <= 0:
+            return ceiling
+        workers = self._target_submit_workers()
+        reserve = max(1, int(round(workers * _OWNER_RESERVE_RATIO)))
+        fair_share = max(1, workers // (1 + contenders))
+        return max(1, min(ceiling, workers - reserve, fair_share))
+
+    def _warm_account_lease_pool_locked(self) -> None:
+        """Warm the account lease pool.
+
+        Despite the ``_locked`` suffix this is also called *without* the lock held (from
+        ``_run_task``), and it used to hand ``self._tasks`` itself to
+        ``seed_queued_preferences``, which iterates it — a concurrent submit then raised
+        ``RuntimeError: dictionary changed size during iteration`` into the bare
+        ``except`` below and silently skipped the warm-up (audit 28 §8). Snapshot under
+        the (re-entrant) lock and iterate the copy instead.
+        """
+        if not image_pipeline_scheduler.enabled():
+            return
+        try:
+            from services.image_pipeline.account_lease_pool import account_lease_pool
+
+            with self._lock:
+                tasks_snapshot = dict(self._tasks)
+            queued = sum(1 for item in tasks_snapshot.values() if item.get("status") == TASK_STATUS_QUEUED)
+            account_lease_pool.seed_queued_preferences(tasks_snapshot)
+            account_lease_pool.maintain(max_acquire=min(16, max(4, queued + 3)))
+        except Exception:
+            pass
+
     def _next_submit_task_locked(self) -> tuple[str, str, dict[str, Any], dict[str, object], str] | None:
         if self._deadlock_guard_tripped_locked():
             return None
+        self._warm_account_lease_pool_locked()
         try:
             interval_ms = self._effective_submit_interval_ms()
         except Exception:
@@ -908,14 +1579,35 @@ class ImageTaskService:
             elapsed = time.time() - float(self._last_submit_start_ts)
             if elapsed < (interval_ms / 1000.0):
                 return None
-        per_user_running_max = self._effective_per_user_running_max_locked()
+        queued = [
+            (key, task) for key, task in self._tasks.items() if task.get("status") == TASK_STATUS_QUEUED
+        ]
+        if not queued:
+            # Idle loops run this every 0.5s per worker; there is nothing to rank.
+            return None
+        running_by_owner: dict[str, int] = {}
+        for item in self._tasks.values():
+            if item.get("status") != TASK_STATUS_RUNNING or self._is_resume_polling_task(item):
+                continue
+            owner_id = _clean(item.get("owner_id"))
+            running_by_owner[owner_id] = running_by_owner.get(owner_id, 0) + 1
+        # Dispatch was global FIFO by created_ts with no notion of the owner, so an owner
+        # with a long queue held the head of the line for everyone. Ordering by the
+        # owner's current occupancy first keeps FIFO *within* an owner while giving the
+        # least-served owner the next free worker (audit 28 §A4-7).
         candidates = sorted(
-            ((key, task) for key, task in self._tasks.items() if task.get("status") == TASK_STATUS_QUEUED),
-            key=lambda item: float(item[1].get("created_ts") or 0.0),
+            queued,
+            key=lambda item: (
+                running_by_owner.get(_clean(item[1].get("owner_id")), 0),
+                float(item[1].get("created_ts") or 0.0),
+            ),
         )
+        owner_caps: dict[str, int] = {}
         for key, task in candidates:
             owner = _clean(task.get("owner_id"))
-            if self._owner_running_count_locked(owner) >= per_user_running_max:
+            if owner not in owner_caps:
+                owner_caps[owner] = self._owner_running_cap_locked(owner)
+            if running_by_owner.get(owner, 0) >= owner_caps[owner]:
                 continue
             payload = task.get("payload")
             identity = task.get("identity")
@@ -926,8 +1618,26 @@ class ImageTaskService:
                 task["updated_ts"] = time.time()
                 self._save_task_locked(key)
                 continue
+            if self._sync_ladder_exhausted(key):
+                # Sync caller already gave up while this was queued; starting it would
+                # spend an account slot and quota on a response nobody can receive.
+                task["status"] = TASK_STATUS_ERROR
+                task["progress"] = "failed"
+                task["error"] = "同步调用方等待预算已耗尽，排队任务不再启动"
+                task["updated_at"] = _now_iso()
+                task["updated_ts"] = time.time()
+                self._save_task_locked(key)
+                continue
             now_ts = time.time()
-            task.update({"status": TASK_STATUS_RUNNING, "progress": "submitting", "error": "", "updated_at": _now_iso(), "updated_ts": now_ts})
+            task.update({
+                "status": TASK_STATUS_RUNNING,
+                "progress": "submitting",
+                "error": "",
+                "updated_at": _now_iso(),
+                "updated_ts": now_ts,
+                "started_ts": now_ts,
+                "worker_started_ts": now_ts,
+            })
             self._save_task_locked(key)
             self._last_submit_start_ts = now_ts
             return key, _clean(task.get("mode"), "generate"), dict(payload), dict(identity), _clean(task.get("model"), "gpt-image-2")
@@ -935,24 +1645,240 @@ class ImageTaskService:
 
     def _submit_worker_loop(self) -> None:
         while not self._stop_event.is_set():
-            with self._condition:
-                run_args = self._next_submit_task_locked()
-                if run_args is None:
-                    wait_secs = 0.5
-                    try:
-                        interval_ms = self._effective_submit_interval_ms()
-                    except Exception:
-                        interval_ms = 0
-                    if interval_ms > 0 and self._last_submit_start_ts > 0:
-                        remaining = (interval_ms / 1000.0) - (time.time() - float(self._last_submit_start_ts))
-                        if 0 < remaining < wait_secs:
-                            wait_secs = remaining
-                    self._condition.wait(timeout=max(0.05, wait_secs))
+            task_key = ""
+            try:
+                self._maybe_reap_stuck_running_tasks()
+                with self._condition:
+                    run_args = self._next_submit_task_locked()
+                    if run_args is None:
+                        wait_secs = 0.5
+                        try:
+                            interval_ms = self._effective_submit_interval_ms()
+                        except Exception:
+                            interval_ms = 0
+                        if interval_ms > 0 and self._last_submit_start_ts > 0:
+                            remaining = (interval_ms / 1000.0) - (time.time() - float(self._last_submit_start_ts))
+                            if 0 < remaining < wait_secs:
+                                wait_secs = remaining
+                        if image_pipeline_scheduler.enabled():
+                            self._warm_account_lease_pool_locked()
+                        self._condition.wait(timeout=max(0.05, wait_secs))
+                        continue
+                task_key, mode, payload, identity, model = run_args
+                self._run_task(task_key, mode, payload, identity, model)
+            except Exception as exc:
+                # _next_submit_task_locked() already flipped this task to RUNNING and
+                # persisted it, so an escape here used to kill the worker thread and
+                # strand the task in RUNNING forever. Known escape routes: the explicit
+                # re-raise for a non-"queue is full" RuntimeError from begin_run, a
+                # non-RuntimeError from begin_run (ValueError from int(payload["n"]),
+                # TypeError from normalize_multi_image_mode), "can't start new thread",
+                # and sqlite3.OperationalError from _update_task/_log_call inside an
+                # except block. Terminalise the *task*; keep the worker (audit 28 §B10).
+                self._handle_worker_loop_crash(task_key, exc, worker="submit")
+            else:
+                self._note_worker_loop_ok()
+            try:
+                with self._condition:
+                    self._condition.notify_all()
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------ §B10 fixes
+
+    def _handle_worker_loop_crash(self, key: str, exc: BaseException, *, worker: str) -> None:
+        """Turn a worker-loop escape into a terminal task instead of a dead thread."""
+        detail = _clean(str(exc)) or exc.__class__.__name__
+        message = f"image {worker} worker aborted: {exc.__class__.__name__}: {detail}"[:500]
+        if key:
+            try:
+                self._release_task_runtime_resources(key)
+            except Exception:
+                pass
+            try:
+                self._update_task(key, status=TASK_STATUS_ERROR, progress="failed", error=message)
+            except Exception:
+                # The persistence layer is what failed (locked DB / full disk). Keep the
+                # in-memory row terminal anyway, otherwise it keeps consuming global,
+                # per-user and per-owner dispatch capacity until restart.
+                try:
+                    with self._condition:
+                        task = self._tasks.get(key)
+                        if isinstance(task, dict):
+                            task["status"] = TASK_STATUS_ERROR
+                            task["progress"] = "failed"
+                            task["error"] = message
+                            task["updated_at"] = _now_iso()
+                            task["updated_ts"] = time.time()
+                        self._cancel_events.pop(key, None)
+                        self._condition.notify_all()
+                except Exception:
+                    pass
+        streak = max(1, int(getattr(self._worker_crash_state, "streak", 0)) + 1)
+        self._worker_crash_state.streak = streak
+        try:
+            log_service.add(
+                LOG_TYPE_CALL,
+                f"图片任务 worker 异常兜底（{worker}）",
+                {"task_key": key or "", "status": "failed", "error": message, "crash_streak": streak},
+            )
+        except Exception:
+            pass
+        # Never spin: an immortal loop against a permanently broken dependency would
+        # otherwise burn the CPU and hammer the failing resource.
+        backoff = min(_WORKER_CRASH_BACKOFF_MAX_SECS, _WORKER_CRASH_BACKOFF_SECS * (2 ** (streak - 1)))
+        self._stop_event.wait(backoff)
+
+    def _note_worker_loop_ok(self) -> None:
+        self._worker_crash_state.streak = 0
+
+    def _pop_active_pipeline_run(self, key: str) -> object | None:
+        with self._lock:
+            return self._active_pipeline_runs.pop(key, None)
+
+    def _release_task_runtime_resources(self, key: str) -> None:
+        """Give back everything a task holds outside its own status field.
+
+        Status alone is not enough: the account in-flight slot, the pipeline admission
+        permit and the sS/upload/download slots all live elsewhere, and the watchdog
+        counts a stuck RUNNING task as *expected* in-flight, so the leak looks
+        legitimate (audit 28 §B10).
+        """
+        with self._lock:
+            task = self._tasks.get(key)
+            task_snapshot = dict(task) if isinstance(task, dict) else {}
+            cancel_event = self._cancel_events.get(key)
+        if cancel_event is not None:
+            try:
+                cancel_event.set()
+            except Exception:
+                pass
+        pipeline_run = self._pop_active_pipeline_run(key)
+        tokens: set[str] = set()
+        for field in ("resume_access_token", "access_token"):
+            token = _clean(task_snapshot.get(field))
+            if token:
+                tokens.add(token)
+        if pipeline_run is not None:
+            bound = _clean(getattr(pipeline_run, "_account_access_token", ""))
+            if bound:
+                tokens.add(bound)
+            try:
+                # Idempotent: decrements the pipeline admission counter exactly once and
+                # sweeps any sS / upload / download slot the dead worker left behind.
+                pipeline_run.finish()
+            except Exception:
+                pass
+        if tokens:
+            self._force_release_image_slots(tokens)
+
+    def _stuck_running_bound_secs(self, task: dict[str, Any]) -> float:
+        """Wall-clock ceiling past which a RUNNING task can only be stranded.
+
+        Built from the legitimate per-mode hard timeout (`_task_hard_timeout_secs`, i.e.
+        ~225s generation / ~435s single-ref edit / ~495s multi-ref) plus a proportional
+        margin covering the cancel grace, the terminal DB write and the resume ladder —
+        deliberately not an independent magic number.
+        """
+        payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        try:
+            bound = float(self._task_hard_timeout_secs(payload))
+        except Exception:
+            bound = 900.0
+        if self._is_resume_polling_task(task):
+            try:
+                resume_bound = self._resume_poll_hard_timeout_secs(
+                    float(task.get("resume_timeout_secs") or self.timeout_pending_poll_secs_getter())
+                )
+            except Exception:
+                resume_bound = 0.0
+            bound = max(bound, float(resume_bound))
+        margin = max(
+            _STUCK_RUNNING_MARGIN_MIN_SECS,
+            min(_STUCK_RUNNING_MARGIN_MAX_SECS, bound * _STUCK_RUNNING_MARGIN_RATIO),
+        )
+        return bound + margin
+
+    def _stuck_running_since_ts(self, task: dict[str, Any]) -> float:
+        """Latest sign of life for a RUNNING task (0.0 when unknown → never reaped).
+
+        ``_update_task`` bumps ``updated_ts`` on every progress callback, so a healthy
+        long-running task keeps pushing its own deadline out and a genuinely dead worker
+        stops doing so.
+        """
+        candidates = [
+            float(task.get("updated_ts") or 0.0),
+            float(task.get("worker_started_ts") or 0.0),
+            float(task.get("started_ts") or 0.0),
+        ]
+        newest = max(candidates)
+        if newest > 0:
+            return newest
+        return float(task.get("created_ts") or 0.0)
+
+    def _maybe_reap_stuck_running_tasks(self) -> list[str]:
+        # Called from every iteration of every worker loop, so the throttle check stays
+        # lock-free: reading a float is atomic under the GIL, and losing the race only
+        # costs a duplicate scan, which is idempotent.
+        now = time.time()
+        if now - float(self._last_reap_ts or 0.0) < _REAP_INTERVAL_SECS:
+            return []
+        with self._lock:
+            if now - float(self._last_reap_ts or 0.0) < _REAP_INTERVAL_SECS:
+                return []
+            self._last_reap_ts = now
+        return self.reap_stuck_running_tasks()
+
+    def reap_stuck_running_tasks(self, *, now: float | None = None) -> list[str]:
+        """Terminalise RUNNING tasks whose worker can no longer be alive.
+
+        Nothing else reclaims them: ``_recover_unfinished_locked`` runs once behind the
+        ``_runtime_recovered`` latch and ``_cleanup_locked`` only evicts
+        ``TERMINAL_STATUSES`` (audit 28 §B10).
+        """
+        current = float(now if now is not None else time.time())
+        stuck: list[tuple[str, float]] = []
+        with self._lock:
+            for key, task in list(self._tasks.items()):
+                if _clean(task.get("status")) != TASK_STATUS_RUNNING:
                     continue
-            key, mode, payload, identity, model = run_args
-            self._run_task(key, mode, payload, identity, model)
-            with self._condition:
-                self._condition.notify_all()
+                since = self._stuck_running_since_ts(task)
+                if since <= 0:
+                    continue
+                bound = self._stuck_running_bound_secs(task)
+                stalled_for = current - since
+                if stalled_for > bound:
+                    stuck.append((key, stalled_for))
+        reaped: list[str] = []
+        for key, stalled_for in stuck:
+            message = (
+                f"image task reaped: stuck in {TASK_STATUS_RUNNING} for {stalled_for:.0f}s "
+                "with no live worker"
+            )
+            try:
+                self._release_task_runtime_resources(key)
+            except Exception:
+                pass
+            try:
+                self._update_task(
+                    key,
+                    status=TASK_STATUS_ERROR,
+                    progress="failed",
+                    error=message,
+                    reaped_stuck_running=True,
+                )
+            except Exception:
+                continue
+            reaped.append(key)
+            try:
+                log_service.add(
+                    LOG_TYPE_CALL,
+                    "图片任务卡死回收",
+                    {"task_key": key, "status": "failed", "error": message, "stalled_secs": int(stalled_for)},
+                )
+            except Exception:
+                pass
+        return reaped
 
     def _task_hard_timeout_secs(self, payload: dict[str, Any]) -> float:
         explicit = payload.get("task_hard_timeout_secs")
@@ -975,12 +1901,207 @@ class ImageTaskService:
 
     def _run_task(self, key: str, mode: str, payload: dict[str, Any], identity: dict[str, object], model: str) -> None:
         started = time.time()
+        trace = schedule_trace.get(key)
+        trace_token = schedule_trace.bind(trace)
+        if trace is not None:
+            trace.emit("task_worker_start")
         cancelled = threading.Event()
         finished = threading.Event()
         state_lock = threading.Lock()
         outcome: dict[str, Any] = {"payload_for_run": dict(payload)}
         leased_access_tokens: set[str] = set()
         released_access_tokens: set[str] = set()
+        pipeline_run = None
+        if image_pipeline_scheduler.enabled():
+            self._warm_account_lease_pool_locked()
+            try:
+                pipeline_run = image_pipeline_scheduler.begin_run(task_key=key, mode=mode, payload=payload)
+            except ImagePoolStarvedError as exc:
+                self._update_task(
+                    key,
+                    status=TASK_STATUS_ERROR,
+                    progress="failed",
+                    error=str(exc),
+                )
+                return
+            except RuntimeError as exc:
+                if "queue is full" in str(exc).lower():
+                    self._update_task(
+                        key,
+                        status=TASK_STATUS_ERROR,
+                        progress="failed",
+                        error=str(exc),
+                    )
+                    return
+                raise
+        if pipeline_run is not None:
+            pipeline_run.persist_hook = lambda **fields: self._update_task(key, **fields)
+            # Publish the run so the stuck-RUNNING reaper can still hand back its
+            # pipeline accounting if this worker never reaches the finally below.
+            with self._lock:
+                self._active_pipeline_runs[key] = pipeline_run
+        try:
+            self._run_task_body(
+                key,
+                mode,
+                payload,
+                identity,
+                model,
+                started,
+                cancelled,
+                finished,
+                state_lock,
+                outcome,
+                leased_access_tokens,
+                released_access_tokens,
+                pipeline_run,
+            )
+        finally:
+            self._finalize_pipeline_run(key, pipeline_run)
+            self._finalize_schedule_trace(key)
+            schedule_trace.unbind(trace_token)
+        self._emit_pending_call_log(key, outcome, identity, mode, model, started)
+
+    def _finalize_schedule_trace(self, key: str) -> None:
+        trace = schedule_trace.pop(key)
+        if trace is None:
+            return
+        try:
+            trace.emit("task_terminal")
+            payload = trace.finish()
+            self._update_task(key, schedule_trace=payload)
+        except Exception:
+            pass
+
+    def _emit_pending_call_log(
+        self,
+        key: str,
+        outcome: dict[str, Any],
+        identity: dict[str, object],
+        mode: str,
+        model: str,
+        started: float,
+    ) -> None:
+        pending = outcome.get("pending_call_log")
+        if not isinstance(pending, dict):
+            return
+        suffix = _clean(pending.get("suffix"), "调用完成")
+        pending_usage = pending.get("usage")
+        usage = pending_usage if isinstance(pending_usage, dict) else None
+        self._log_call(
+            identity,
+            mode,
+            model,
+            started,
+            suffix,
+            request_preview=_clean(pending.get("request_preview")),
+            status=_clean(pending.get("status"), "success"),
+            error=_clean(pending.get("error")),
+            urls=pending.get("urls") if isinstance(pending.get("urls"), list) else None,
+            account_email=_clean(pending.get("account_email")),
+            task_key=key,
+            usage=usage,
+            traffic_fields=_call_log_traffic_fields(pending),
+        )
+
+    def _finalize_pipeline_run(self, key: str, pipeline_run: object | None) -> None:
+        if pipeline_run is None:
+            # Nothing was ever published for this key (pipeline disabled, or begin_run
+            # failed), so there is no registry entry to reclaim.
+            return
+        with self._lock:
+            self._active_pipeline_runs.pop(key, None)
+        try:
+            # finish() is idempotent, so a run the reaper already reclaimed is a no-op
+            # here rather than a double-decrement of the global admission counter.
+            timings = pipeline_run.finish().to_dict()
+            self._update_task(key, phase_timings_ms=timings, pipeline_phase="delivered")
+        except Exception:
+            pass
+
+    def _task_call_log_urls(self, task: dict[str, Any]) -> list[str]:
+        data = task.get("data")
+        if not isinstance(data, list):
+            return []
+        urls: list[str] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            url = _clean(item.get("url"))
+            if url:
+                urls.append(url)
+        return list(dict.fromkeys(urls))
+
+    def _task_call_log_request_preview(self, task: dict[str, Any]) -> str:
+        payload = task.get("payload")
+        if isinstance(payload, dict):
+            return request_text(payload.get("prompt"))
+        return ""
+
+    def _leased_tokens_for_release(
+        self,
+        *,
+        leased_access_tokens: set[str],
+        outcome: dict[str, Any],
+        pipeline_run: object | None,
+    ) -> set[str]:
+        tokens = {str(t).strip() for t in leased_access_tokens if str(t).strip()}
+        resume = _clean(outcome.get("access_token"))
+        if resume:
+            tokens.add(resume)
+        if pipeline_run is not None:
+            bound = _clean(getattr(pipeline_run, "_account_access_token", ""))
+            if bound:
+                tokens.add(bound)
+        return tokens
+
+    def _wait_for_runner(
+        self,
+        key: str,
+        finished: threading.Event,
+        granted_secs: float,
+    ) -> tuple[bool, float]:
+        """Wait for the runner, bounded by the hard timeout *and* the sync ladder.
+
+        The wall used to be checked only when an attempt was dispatched, so an attempt
+        that started just inside the deadline still ran its full hard timeout (audit 28
+        §B7). Waiting in slices also lets a sync waiter that attaches after dispatch
+        bound the attempt already in flight.
+
+        Returns ``(finished, granted_secs)`` where ``granted_secs`` is the budget this
+        attempt actually got — that is what the timeout message reports.
+        """
+        start = time.time()
+        granted = max(0.1, float(granted_secs))
+        while True:
+            now = time.time()
+            elapsed = max(0.0, now - start)
+            remaining = granted - elapsed
+            ladder = self._sync_ladder_remaining_secs(key, now=now)
+            if ladder is not None and ladder < remaining:
+                remaining = ladder
+                granted = elapsed + max(0.0, ladder)
+            if remaining <= 0:
+                return finished.is_set(), max(0.1, granted)
+            if finished.wait(timeout=min(remaining, _SYNC_LADDER_RECHECK_INTERVAL_SECS)):
+                return True, max(0.1, granted)
+
+    def _run_task_body(
+        self,
+        key: str,
+        mode: str,
+        payload: dict[str, Any],
+        identity: dict[str, object],
+        model: str,
+        started: float,
+        cancelled: threading.Event,
+        finished: threading.Event,
+        state_lock: threading.Lock,
+        outcome: dict[str, Any],
+        leased_access_tokens: set[str],
+        released_access_tokens: set[str],
+        pipeline_run: object | None,
+    ) -> None:
         with self._lock:
             self._cancel_events[key] = cancelled
             # 若用户在入队后、开跑前已取消，任务可能已是 error
@@ -1041,7 +2162,7 @@ class ImageTaskService:
                     if progress:
                         updates["progress"] = progress
                     if progress == "image_stream_resolve_start":
-                        updates["started_ts"] = time.time()
+                        updates["resolve_started_ts"] = time.time()
                     if conversation_id:
                         updates["conversation_id"] = conversation_id
                     resume_access_token = _clean(outcome.get("access_token"))
@@ -1060,14 +2181,22 @@ class ImageTaskService:
                 return
 
         def run_handler() -> None:
+            child_trace = schedule_trace.get(key)
+            child_token = schedule_trace.bind(child_trace)
             try:
-                payload_for_run = self._resolve_payload_assets(mode, payload, identity)
+                payload_for_run = self._resolve_payload_assets(mode, payload, identity, pipeline_run=pipeline_run)
                 with state_lock:
                     outcome["payload_for_run"] = payload_for_run
+                prefer = _clean(payload_for_run.get("preferred_account_email") or payload.get("preferred_account_email"))
+                if prefer:
+                    from services.request_account_context import set_preferred_account_email
+
+                    set_preferred_account_email(prefer)
                 payload_with_progress = {
                     **payload_for_run,
                     "progress_callback": progress_callback,
                     "cancel_event": cancelled,
+                    "pipeline_run": pipeline_run,
                 }
                 handler = self.edit_handler if mode == "edit" else self.generation_handler
                 result = handler(payload_with_progress)
@@ -1077,12 +2206,17 @@ class ImageTaskService:
                 with state_lock:
                     outcome["exception"] = exc
             finally:
+                schedule_trace.unbind(child_token)
                 finished.set()
 
         thread = threading.Thread(target=run_handler, name=f"image-task-runner-{key.replace(':', '-')}", daemon=True)
         thread.start()
-        hard_timeout_secs = self._task_hard_timeout_secs(payload)
-        if not finished.wait(timeout=hard_timeout_secs):
+        completed, hard_timeout_secs = self._wait_for_runner(
+            key,
+            finished,
+            self._effective_task_hard_timeout_secs(key, payload),
+        )
+        if not completed:
             cancelled.set()
             try:
                 cancel_grace_secs = max(0.0, min(5.0, float(payload.get("cancel_grace_secs") or 1.0)))
@@ -1097,9 +2231,20 @@ class ImageTaskService:
                 payload_for_run = outcome.get("payload_for_run") if isinstance(outcome.get("payload_for_run"), dict) else payload
                 conversation_id = _clean(outcome.get("conversation_id"))
                 resume_access_token = _clean(outcome.get("access_token"))
-                leased_tokens = set(leased_access_tokens)
+                leased_tokens = self._leased_tokens_for_release(
+                    leased_access_tokens=leased_access_tokens,
+                    outcome=outcome,
+                    pipeline_run=pipeline_run,
+                )
 
-            if conversation_id:
+            resume_worth_it = True
+            resume_remaining = self._sync_ladder_remaining_secs(key)
+            if resume_remaining is not None and resume_remaining < _SYNC_LADDER_MIN_ATTEMPT_SECS:
+                # The sync caller's budget is gone: a resume poll could only hit upstream
+                # with the same access token for a response nobody can receive, so this
+                # is where the ladder stops instead of queueing 1–4 more attempts.
+                resume_worth_it = False
+            if conversation_id and resume_worth_it:
                 error_message = (
                     f"image task hard timeout after upstream conversation capture ({hard_timeout_secs:.1f}s); "
                     "background resume polling scheduled"
@@ -1144,8 +2289,19 @@ class ImageTaskService:
                 )
                 return
 
-            error_message = f"image task hard timeout before upstream completion ({hard_timeout_secs:.1f}s); no conversation_id captured"
+            if conversation_id and not resume_worth_it:
+                error_message = (
+                    f"image task hard timeout after upstream conversation capture ({hard_timeout_secs:.1f}s); "
+                    "sync client budget exhausted, resume polling skipped"
+                )
+            else:
+                error_message = f"image task hard timeout before upstream completion ({hard_timeout_secs:.1f}s); no conversation_id captured"
             released_count = 0
+            leased_tokens = self._leased_tokens_for_release(
+                leased_access_tokens=leased_access_tokens,
+                outcome=outcome,
+                pipeline_run=pipeline_run,
+            )
             for leased_token in leased_tokens:
                 if not claim_release(leased_token):
                     continue
@@ -1178,6 +2334,9 @@ class ImageTaskService:
                     cancel_grace_secs=cancel_grace_secs,
                     runner_alive_after_cancel=runner_alive_after_cancel,
                     force_released_inflight_count=force_released,
+                    # Kept so the operator-triggered resume_poll() escape hatch still has
+                    # something to resume, even though the automatic ladder stopped here.
+                    **({"conversation_id": conversation_id} if conversation_id else {}),
                 )
             self._log_call(
                 identity,
@@ -1213,14 +2372,28 @@ class ImageTaskService:
             duration_ms = int((time.time() - started) * 1000)
             self._update_task(key, status=TASK_STATUS_SUCCESS, progress="success", data=data, usage=usage, error="", duration_ms=duration_ms)
             self.note_success_duration_ms(duration_ms)
-            self._log_call(identity, mode, model, started, "调用完成", request_preview=request_text(payload_for_run.get("prompt")), urls=_collect_image_urls(data), account_email=account_email)
+            outcome["pending_call_log"] = {
+                "suffix": "调用完成",
+                "request_preview": request_text(payload_for_run.get("prompt")),
+                "urls": _collect_image_urls(data),
+                "account_email": account_email,
+                "status": "success",
+                **({"usage": usage} if isinstance(usage, dict) else {}),
+                **_call_log_traffic_fields(result),
+            }
         except Exception as exc:
             error_message = str(exc) or "image task failed"
             account_email = _clean(getattr(exc, "account_email", ""))
             conversation_id = _clean(getattr(exc, "conversation_id", ""))
             code = _clean(getattr(exc, "code", ""))
             duration_ms = int((time.time() - started) * 1000)
-            if conversation_id and (code == "image_timeout_pending" or _looks_like_timeout(error_message)):
+            ladder_left = self._sync_ladder_remaining_secs(key)
+            resume_affordable = ladder_left is None or ladder_left >= _SYNC_LADDER_MIN_ATTEMPT_SECS
+            if (
+                conversation_id
+                and resume_affordable
+                and (code == "image_timeout_pending" or _looks_like_timeout(error_message))
+            ):
                 resume_timeout_secs = max(
                     float(payload.get("resume_timeout_secs") or 0.0),
                     float(payload.get("poll_timeout_secs") or 0.0),
@@ -1260,7 +2433,7 @@ class ImageTaskService:
                 duration_ms=duration_ms,
                 **({"conversation_id": conversation_id} if conversation_id else {}),
             )
-            self._log_call(identity, mode, model, started, "调用失败", request_preview=request_text(payload_for_run.get("prompt")), status="failed", error=error_message, account_email=account_email)
+            self._log_call(identity, mode, model, started, "调用失败", request_preview=request_text(payload_for_run.get("prompt")), status="failed", error=error_message, account_email=account_email, task_key=key)
 
     def _force_release_image_slots(self, access_tokens: set[str] | list[str] | tuple[str, ...]) -> int:
         released = 0
@@ -1277,25 +2450,46 @@ class ImageTaskService:
                 pass
         return released
 
-    def _resolve_payload_assets(self, mode: str, payload: dict[str, Any], identity: dict[str, object]) -> dict[str, Any]:
+    def _resolve_payload_assets(
+        self,
+        mode: str,
+        payload: dict[str, Any],
+        identity: dict[str, object],
+        *,
+        pipeline_run: object | None = None,
+    ) -> dict[str, Any]:
         if mode != "edit":
             return dict(payload)
-        resolved = dict(payload)
-        image_asset_ids = [str(item).strip() for item in (resolved.get("image_asset_ids") or []) if str(item).strip()]
-        mask_asset_ids = [str(item).strip() for item in (resolved.get("mask_asset_ids") or []) if str(item).strip()]
-        if not image_asset_ids and not mask_asset_ids:
-            return resolved
-        from services.image_asset_service import image_asset_service
+        upload_acquired = False
+        if pipeline_run is not None:
+            try:
+                getattr(pipeline_run, "acquire_upload")()
+                upload_acquired = True
+            except Exception:
+                pass
+        try:
+            resolved = dict(payload)
+            image_asset_ids = [str(item).strip() for item in (resolved.get("image_asset_ids") or []) if str(item).strip()]
+            mask_asset_ids = [str(item).strip() for item in (resolved.get("mask_asset_ids") or []) if str(item).strip()]
+            if not image_asset_ids and not mask_asset_ids:
+                return resolved
+            from services.image_asset_service import image_asset_service
 
-        if image_asset_ids:
-            existing_images = resolved.get("images") if isinstance(resolved.get("images"), list) else []
-            resolved["images"] = [*existing_images, *image_asset_service.read_assets(identity, image_asset_ids)]
-        if mask_asset_ids:
-            existing_masks = resolved.get("mask") if isinstance(resolved.get("mask"), list) else []
-            resolved["mask"] = [*existing_masks, *image_asset_service.read_assets(identity, mask_asset_ids)]
-        resolved.pop("image_asset_ids", None)
-        resolved.pop("mask_asset_ids", None)
-        return resolved
+            if image_asset_ids:
+                existing_images = resolved.get("images") if isinstance(resolved.get("images"), list) else []
+                resolved["images"] = [*existing_images, *image_asset_service.read_assets(identity, image_asset_ids)]
+            if mask_asset_ids:
+                existing_masks = resolved.get("mask") if isinstance(resolved.get("mask"), list) else []
+                resolved["mask"] = [*existing_masks, *image_asset_service.read_assets(identity, mask_asset_ids)]
+            resolved.pop("image_asset_ids", None)
+            resolved.pop("mask_asset_ids", None)
+            return resolved
+        finally:
+            if upload_acquired and pipeline_run is not None:
+                try:
+                    getattr(pipeline_run, "release_upload")()
+                except Exception:
+                    pass
 
     def _next_poll_task_locked(self) -> tuple[str, str, float, dict[str, object], str, str, str] | None:
         now = time.time()
@@ -1313,12 +2507,24 @@ class ImageTaskService:
                 task.update(status=TASK_STATUS_ERROR, error="timeout_pending task has no conversation_id", updated_at=_now_iso(), updated_ts=now)
                 self._save_task_locked(key)
                 continue
+            ladder_deadline = 0.0
+            try:
+                ladder_deadline = float(task.get("sync_ladder_deadline_ts") or 0.0)
+            except (TypeError, ValueError):
+                ladder_deadline = 0.0
             deadline = float(task.get("resume_deadline_ts") or 0.0)
             if deadline <= 0:
                 anchor = float(task.get("updated_ts") or task.get("created_ts") or now)
                 deadline = anchor + self._resume_wall_secs()
-                task["resume_deadline_ts"] = deadline
-            if now > deadline:
+            if ladder_deadline > 0:
+                # The client budget is the outer bound; the resume wall can only make it
+                # tighter, never looser (audit 28 §B7).
+                deadline = min(deadline, ladder_deadline)
+            task["resume_deadline_ts"] = deadline
+            # A backoff that lands past the wall is dead on arrival: waiting for it only
+            # keeps the task non-terminal until some later pass notices.
+            next_resume_ts = float(task.get("next_resume_ts") or 0.0)
+            if now > deadline or (next_resume_ts > 0 and next_resume_ts > deadline):
                 task.update(
                     status=TASK_STATUS_ERROR,
                     progress="failed",
@@ -1328,16 +2534,32 @@ class ImageTaskService:
                 )
                 self._save_task_locked(key)
                 continue
-            if float(task.get("next_resume_ts") or 0.0) > now:
+            if next_resume_ts > now:
                 continue
             attempts = int(task.get("resume_attempts") or 0)
             if attempts >= max_attempts:
                 task.update(status=TASK_STATUS_ERROR, error="续轮询次数已耗尽", updated_at=_now_iso(), updated_ts=now)
                 self._save_task_locked(key)
                 continue
+            timeout_secs = float(task.get("resume_timeout_secs") or self.timeout_pending_poll_secs_getter())
+            if ladder_deadline > 0:
+                # Clamp this attempt's poll budget to what the client can still receive,
+                # leaving the resolve/download margin `_resume_poll_hard_timeout_secs`
+                # adds on top, so attempt end == deadline rather than deadline + 60s.
+                affordable = (deadline - now) - _RESUME_POLL_OVERHEAD_SECS
+                if (deadline - now) < _SYNC_LADDER_MIN_ATTEMPT_SECS:
+                    task.update(
+                        status=TASK_STATUS_ERROR,
+                        progress="failed",
+                        error="续轮询预算不足（同步调用方等待预算已耗尽）",
+                        updated_at=_now_iso(),
+                        updated_ts=now,
+                    )
+                    self._save_task_locked(key)
+                    continue
+                timeout_secs = max(5.0, min(timeout_secs, affordable))
             task.update(status=TASK_STATUS_RUNNING, progress="resume_polling", resume_attempts=attempts + 1, updated_at=_now_iso(), updated_ts=now)
             self._save_task_locked(key)
-            timeout_secs = float(task.get("resume_timeout_secs") or self.timeout_pending_poll_secs_getter())
             access_token = _clean(task.get("resume_access_token"))
             identity = task.get("identity") if isinstance(task.get("identity"), dict) else {}
             return key, conversation_id, timeout_secs, dict(identity), _clean(task.get("mode"), "generate"), _clean(task.get("model"), "gpt-image-2"), access_token
@@ -1345,23 +2567,36 @@ class ImageTaskService:
 
     def _poll_worker_loop(self) -> None:
         while not self._stop_event.is_set():
-            with self._condition:
-                run_args = self._next_poll_task_locked()
-                if run_args is None:
-                    self._condition.wait(timeout=1.0)
-                    continue
-            key, conversation_id, timeout_secs, identity, mode, model, access_token = run_args
-            self._run_resume_poll_with_hard_timeout(
-                key,
-                conversation_id,
-                timeout_secs,
-                identity,
-                mode,
-                model,
-                access_token=access_token,
-            )
-            with self._condition:
-                self._condition.notify_all()
+            task_key = ""
+            try:
+                self._maybe_reap_stuck_running_tasks()
+                with self._condition:
+                    run_args = self._next_poll_task_locked()
+                    if run_args is None:
+                        self._condition.wait(timeout=1.0)
+                        continue
+                key, conversation_id, timeout_secs, identity, mode, model, access_token = run_args
+                task_key = key
+                self._run_resume_poll_with_hard_timeout(
+                    key,
+                    conversation_id,
+                    timeout_secs,
+                    identity,
+                    mode,
+                    model,
+                    access_token=access_token,
+                )
+            except Exception as exc:
+                # Same stranding hazard as the submit loop: _next_poll_task_locked()
+                # already flipped the task to RUNNING/resume_polling (audit 28 §B10).
+                self._handle_worker_loop_crash(task_key, exc, worker="poll")
+            else:
+                self._note_worker_loop_ok()
+            try:
+                with self._condition:
+                    self._condition.notify_all()
+            except Exception:
+                pass
 
     def _resume_poll_hard_timeout_secs(self, timeout_secs: float) -> float:
         try:
@@ -1404,8 +2639,12 @@ class ImageTaskService:
 
         thread = threading.Thread(target=runner, name=f"image-resume-poll-{key.replace(':', '-')}", daemon=True)
         thread.start()
-        hard_timeout_secs = self._resume_poll_hard_timeout_secs(timeout_secs)
-        if finished.wait(timeout=hard_timeout_secs):
+        completed, hard_timeout_secs = self._wait_for_runner(
+            key,
+            finished,
+            self._effective_resume_poll_hard_timeout_secs(key, timeout_secs),
+        )
+        if completed:
             return
 
         error_message = f"image resume poll hard timeout ({hard_timeout_secs:.1f}s); conversation_id={conversation_id}"
@@ -1416,7 +2655,16 @@ class ImageTaskService:
                 max_attempts = max(1, int(self.timeout_pending_max_attempts_getter()))
             except Exception:
                 max_attempts = 3
-            if task and attempts < max_attempts:
+            # Mid-attempt wall: this attempt was cut short *because* the client budget ran
+            # out, so re-arming another one would be exactly the leak §B7 describes.
+            budget_left = self._sync_ladder_remaining_secs(key)
+            ladder_spent = budget_left is not None and budget_left < _SYNC_LADDER_MIN_ATTEMPT_SECS
+            if ladder_spent:
+                error_message = (
+                    f"image resume poll cancelled at sync client deadline ({hard_timeout_secs:.1f}s); "
+                    f"conversation_id={conversation_id}"
+                )
+            if task and attempts < max_attempts and not ladder_spent:
                 now_ts = time.time()
                 updates = {
                     "status": TASK_STATUS_TIMEOUT_PENDING,
@@ -1429,7 +2677,7 @@ class ImageTaskService:
                     "updated_ts": now_ts,
                 }
                 if not float(task.get("resume_deadline_ts") or 0.0):
-                    updates["resume_deadline_ts"] = self._resume_deadline_ts(now_ts)
+                    updates["resume_deadline_ts"] = self._resume_deadline_ts(now_ts, key=key)
                 task.update(updates)
                 self._save_task_locked(key)
                 self._condition.notify_all()
@@ -1469,7 +2717,7 @@ class ImageTaskService:
                 identity=dict(identity),
                 resume_timeout_secs=max(5.0, min(600.0, float(extra_timeout_secs))),
                 next_resume_ts=time.time(),
-                resume_deadline_ts=self._resume_deadline_ts(),
+                resume_deadline_ts=self._resume_deadline_ts(key=key),
                 updated_at=_now_iso(),
                 updated_ts=time.time(),
             )
@@ -1514,7 +2762,20 @@ class ImageTaskService:
             duration_ms = int((time.time() - started) * 1000)
             self._update_task(key, status=TASK_STATUS_SUCCESS, progress="success", data=data, error="", duration_ms=duration_ms)
             self.note_success_duration_ms(duration_ms)
-            self._log_call(identity, mode, model, started, "调用完成（续轮询）", status="success", urls=_collect_image_urls(data))
+            with self._condition:
+                task = self._tasks.get(key) or {}
+            self._log_call(
+                identity,
+                mode,
+                model,
+                started,
+                "调用完成（续轮询）",
+                status="success",
+                urls=_collect_image_urls(data),
+                task_key=key,
+                usage=task.get("usage") if isinstance(task.get("usage"), dict) else None,
+                traffic_fields=_call_log_traffic_fields(task),
+            )
         except Exception as exc:
             error_message = str(exc) or "resume poll failed"
             with self._condition:
@@ -1525,6 +2786,11 @@ class ImageTaskService:
                 except Exception:
                     max_attempts = 3
                 should_retry = _looks_like_timeout(error_message) or _looks_like_token_invalid(error_message)
+                budget_left = self._sync_ladder_remaining_secs(key)
+                if budget_left is not None and budget_left < _SYNC_LADDER_MIN_ATTEMPT_SECS:
+                    # Sync caller is gone; another attempt would spend account quota on a
+                    # response that can no longer be delivered (audit 28 §B7).
+                    should_retry = False
                 if task and attempts < max_attempts and should_retry:
                     if _looks_like_token_invalid(error_message):
                         current_token = _clean(task.get("resume_access_token") or access_token)
@@ -1543,7 +2809,7 @@ class ImageTaskService:
                         updated_ts=time.time(),
                     )
                     if not float(task.get("resume_deadline_ts") or 0.0):
-                        task["resume_deadline_ts"] = self._resume_deadline_ts()
+                        task["resume_deadline_ts"] = self._resume_deadline_ts(key=key)
                     self._save_task_locked(key)
                     self._condition.notify_all()
                     return
@@ -1567,10 +2833,13 @@ class ImageTaskService:
         error: str = "",
         urls: list[str] | None = None,
         account_email: str = "",
+        task_key: str = "",
+        usage: dict[str, Any] | None = None,
+        traffic_fields: dict[str, int] | None = None,
     ) -> None:
         endpoint = "/v1/images/edits" if mode == "edit" else "/v1/images/generations"
         summary_prefix = "图生图" if mode == "edit" else "文生图"
-        detail = {
+        detail: dict[str, Any] = {
             "key_id": identity.get("id"),
             "key_name": identity.get("name"),
             "role": identity.get("role"),
@@ -1589,10 +2858,107 @@ class ImageTaskService:
             detail["account_email"] = account_email
         if urls:
             detail["urls"] = list(dict.fromkeys(urls))
+        task: dict[str, Any] = {}
+        if task_key:
+            with self._condition:
+                task = dict(self._tasks.get(task_key) or {})
+            detail["task_id"] = task.get("id")
+            detail["worker_duration_ms"] = task.get("duration_ms")
+            for timing_field in (
+                "total_wall_ms",
+                "task_queue_ms",
+                "created_at",
+                "worker_started_ts",
+                "finished_ts",
+            ):
+                value = task.get(timing_field)
+                if value is not None and value != "":
+                    detail[timing_field] = value
+            phase_timings = task.get("phase_timings_ms")
+            if isinstance(phase_timings, dict) and phase_timings:
+                detail["phase_timings_ms"] = dict(phase_timings)
+                for phase_key, phase_ms in phase_timings.items():
+                    if not str(phase_key).endswith("_ms"):
+                        continue
+                    try:
+                        value = int(phase_ms or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if value > 0:
+                        detail[f"phase_{phase_key}"] = value
+            progress = _clean(task.get("progress"))
+            if progress:
+                detail["progress"] = progress
+            pipeline_phase = _clean(task.get("pipeline_phase"))
+            if pipeline_phase:
+                detail["pipeline_phase"] = pipeline_phase
+            schedule_trace_payload = task.get("schedule_trace")
+            if isinstance(schedule_trace_payload, dict) and schedule_trace_payload:
+                detail["schedule_trace"] = schedule_trace_payload
+        resolved_usage: dict[str, Any] | None = None
+        if isinstance(usage, dict) and usage:
+            resolved_usage = usage
+        elif isinstance(task.get("usage"), dict) and task.get("usage"):
+            resolved_usage = dict(task["usage"])
+        usage_fields = _call_log_usage_fields(resolved_usage)
+        if usage_fields:
+            detail.update(usage_fields)
+        phase_timings = detail.get("phase_timings_ms")
+        sse_stream_ms = 0
+        if isinstance(phase_timings, dict):
+            try:
+                sse_stream_ms = int(phase_timings.get("sse_stream_ms") or 0)
+            except (TypeError, ValueError):
+                sse_stream_ms = 0
+        total_wall_ms = 0
+        for source in (detail, task):
+            value = _positive_int(source.get("total_wall_ms"))
+            if value is not None:
+                total_wall_ms = value
+                break
+        tokens_per_sec = _tokens_per_sec_from_sources(
+            resolved_usage,
+            sse_stream_ms=sse_stream_ms,
+            total_wall_ms=total_wall_ms,
+        )
+        if tokens_per_sec is not None:
+            detail["tokens_per_sec"] = tokens_per_sec
+        traffic = dict(traffic_fields or {})
+        for key, value in _call_log_traffic_fields(task).items():
+            traffic.setdefault(key, value)
+        if traffic:
+            detail.update(traffic)
         try:
             log_service.add(LOG_TYPE_CALL, f"{summary_prefix}{suffix}", detail)
         except Exception:
             pass
+        if task_key:
+            with self._lock:
+                mem_task = self._tasks.get(task_key)
+                if isinstance(mem_task, dict) and _clean(mem_task.get("status")) in TERMINAL_STATUSES:
+                    _compact_task_memory(mem_task)
+                    self._tasks.pop(task_key, None)
+
+    def _apply_terminal_timing_fields(self, task: dict[str, Any], *, finished_ts: float | None = None) -> None:
+        """任务进入终态时补齐墙钟/排队/执行分段，供 API 与 call log 排查。"""
+        now = float(finished_ts if finished_ts is not None else time.time())
+        task["finished_ts"] = now
+        created_ts = float(task.get("created_ts") or 0.0)
+        worker_started = float(
+            task.get("worker_started_ts")
+            or task.get("started_ts")
+            or task.get("updated_ts")
+            or created_ts
+            or now
+        )
+        if created_ts > 0:
+            task["total_wall_ms"] = int(max(0.0, (now - created_ts) * 1000))
+            task["task_queue_ms"] = int(max(0.0, (worker_started - created_ts) * 1000))
+        worker_duration = task.get("duration_ms")
+        if worker_duration is None and worker_started > 0:
+            task["worker_duration_ms"] = int(max(0.0, (now - worker_started) * 1000))
+        elif worker_duration is not None:
+            task["worker_duration_ms"] = int(worker_duration)
 
     def _update_task(self, key: str, **updates: Any) -> None:
         with self._condition:
@@ -1615,9 +2981,10 @@ class ImageTaskService:
                 and prev_status != TASK_STATUS_TIMEOUT_PENDING
                 and not float(task.get("resume_deadline_ts") or 0.0)
             ):
-                task["resume_deadline_ts"] = self._resume_deadline_ts(now)
+                task["resume_deadline_ts"] = self._resume_deadline_ts(now, key=key)
             if _clean(task.get("status")) in TERMINAL_STATUSES:
                 self._cancel_events.pop(key, None)
+                self._apply_terminal_timing_fields(task)
             self._save_task_locked(key)
             self._condition.notify_all()
 
@@ -1801,11 +3168,19 @@ class ImageTaskService:
                     task["error"] = "服务已重启，未完成的图片任务已中断"
                     task_changed = True
             elif status == TASK_STATUS_RUNNING:
-                if _clean(task.get("conversation_id")):
+                cursor = _clean(task.get("retry_phase_cursor"))
+                sediment_ids = task.get("sediment_ids") if isinstance(task.get("sediment_ids"), list) else []
+                if cursor == "SS_DONE" and sediment_ids and _clean(task.get("conversation_id")):
                     task["status"] = TASK_STATUS_TIMEOUT_PENDING
                     task["progress"] = "timeout_pending"
                     task["next_resume_ts"] = time.time() + self._resume_delay_secs(1)
-                    task["resume_deadline_ts"] = self._resume_deadline_ts()
+                    task["resume_deadline_ts"] = self._resume_deadline_ts(key=key)
+                    task["error"] = task.get("error") or "服务已重启，从 SS_DONE 续下载"
+                elif _clean(task.get("conversation_id")):
+                    task["status"] = TASK_STATUS_TIMEOUT_PENDING
+                    task["progress"] = "timeout_pending"
+                    task["next_resume_ts"] = time.time() + self._resume_delay_secs(1)
+                    task["resume_deadline_ts"] = self._resume_deadline_ts(key=key)
                     task["error"] = task.get("error") or "服务已重启，任务进入续轮询"
                 elif isinstance(task.get("payload"), dict) and isinstance(task.get("identity"), dict):
                     task["status"] = TASK_STATUS_QUEUED
@@ -1832,11 +3207,20 @@ class ImageTaskService:
         except Exception:
             retention_days = 30
         cutoff = time.time() - retention_days * 86400
-        removed_keys = [
-            key
-            for key, task in self._tasks.items()
-            if task.get("status") in TERMINAL_STATUSES and _timestamp(task.get("updated_at")) < cutoff
-        ]
+        memory_cutoff = time.time() - TERMINAL_MEMORY_RETENTION_SECS
+        removed_keys: list[str] = []
+        memory_evict_keys: list[str] = []
+        for key, task in list(self._tasks.items()):
+            status = task.get("status")
+            updated_ts = float(task.get("updated_ts") or _timestamp(task.get("updated_at")) or 0.0)
+            if status in TERMINAL_STATUSES and updated_ts < cutoff:
+                removed_keys.append(key)
+            elif status in TERMINAL_STATUSES and updated_ts < memory_cutoff:
+                memory_evict_keys.append(key)
+        for key in memory_evict_keys:
+            task = self._tasks.pop(key, None)
+            if task is not None:
+                _compact_task_memory(task)
         for key in removed_keys:
             self._tasks.pop(key, None)
             self._save_task_locked(key)

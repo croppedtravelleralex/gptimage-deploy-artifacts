@@ -18,6 +18,8 @@ from services.risk_dashboard_service import build_calendar, build_dashboard
 from services.risk_metrics_store import list_reports
 from services.text_nurture_service import text_nurture_service
 from services.account_warmup_service import account_warmup_service
+from services.webshare_cf_scan_service import webshare_cf_scan_service
+from services.image_pipeline import image_pipeline_scheduler
 
 
 class NurtureEnableRequest(BaseModel):
@@ -36,6 +38,10 @@ class NurtureProcessRequest(BaseModel):
     access_token: str = ""
     email: str = ""
     source: str = "manual"
+
+
+class WarmupUnblockRequest(BaseModel):
+    email: str = ""
 
 
 class OpsToolRequest(BaseModel):
@@ -92,6 +98,34 @@ def create_router() -> APIRouter:
     async def warmup_status(authorization: str | None = Header(default=None)):
         require_admin(authorization)
         return await run_in_threadpool(account_warmup_service.status)
+
+    @router.post("/api/ops/warmup/unblock")
+    async def warmup_unblock(
+        body: WarmupUnblockRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        """手动解除单个账号的 CF 探活封禁 + demote 冷却，使其立即恢复可派发。
+
+        封禁状态纯内存：解封结果不落库，也不跨进程重启保留。
+        """
+        require_admin(authorization)
+        try:
+            return await run_in_threadpool(
+                account_warmup_service.clear_block,
+                str(body.email or ""),
+                reason="manual_api",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+
+    @router.post("/api/ops/warmup/unblock-all")
+    async def warmup_unblock_all(authorization: str | None = Header(default=None)):
+        """批量解除全部 CF 探活封禁 + demote 冷却。同样不跨进程重启保留。"""
+        require_admin(authorization)
+        try:
+            return await run_in_threadpool(account_warmup_service.clear_all_blocks, reason="manual_api")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
     @router.post("/api/ops/nurture/enable")
     async def nurture_enable(body: NurtureEnableRequest, authorization: str | None = Header(default=None)):
@@ -161,6 +195,24 @@ def create_router() -> APIRouter:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
+    @router.get("/api/ops/webshare-cf-scan/status")
+    async def webshare_cf_scan_status(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return await run_in_threadpool(webshare_cf_scan_service.status)
+
+    @router.get("/api/ops/webshare-cf-scan/inventory")
+    async def webshare_cf_scan_inventory(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return await run_in_threadpool(webshare_cf_scan_service.inventory)
+
+    @router.post("/api/ops/webshare-cf-scan/run-once")
+    async def webshare_cf_scan_run_once(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        try:
+            return await run_in_threadpool(lambda: webshare_cf_scan_service.run_once(force=True))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+
     @router.get("/api/ops/humanlike-dashboard")
     async def humanlike_dashboard(authorization: str | None = Header(default=None)):
         require_admin(authorization)
@@ -189,5 +241,10 @@ def create_router() -> APIRouter:
     async def risk_audit_status(authorization: str | None = Header(default=None)):
         require_admin(authorization)
         return await run_in_threadpool(risk_audit_service.status)
+
+    @router.get("/api/ops/image-pipeline/snapshot")
+    async def image_pipeline_snapshot(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return await run_in_threadpool(image_pipeline_scheduler.snapshot)
 
     return router

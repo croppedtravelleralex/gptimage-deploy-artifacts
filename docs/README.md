@@ -1,8 +1,8 @@
 # 文档导航
 
-最后更新：2026-07-25
+最后更新：2026-07-26
 
-**冲突优先级**：代码/命令结果 > `02-current-state.md` > `04-improvement-backlog.md` > `06-handoff.md` > `logs/`
+**冲突优先级**：代码/命令结果 > `28`（调度/队列/槽位专项审计） > `02-current-state.md` > `04-improvement-backlog.md` > `06-handoff.md` > `logs/`
 
 ## 三秒上手
 
@@ -33,7 +33,8 @@
 | 用票链路 / 不做真 Chrome | `22-ticket-image-pipeline-and-go-spike.md` §9 |
 | 调度与双槽 | `21-image-scheduling-and-pipeline.md` |
 | **槽位释槽 / Rust 演进** | `26-slot-lifecycle-rust-roadmap.md` |
-| **看门狗 / 监控矩阵** | `27-pipeline-watchdog-monitoring-matrix.md` |
+| 看门狗 / 监控矩阵 | `27-pipeline-watchdog-monitoring-matrix.md`（多处 ✅ 已被 `28` 推翻） |
+| **调度/队列/槽位审计** | `28-scheduling-queue-slot-audit-20260726.md` ← **读这份再动调度代码** |
 | **前端首访/图片加速** | `25-frontend-performance-plan.md` |
 | 协议逆向 HAR 链 | `19-protocol-full-reverse-catalog.md` → `captures/spa/` |
 

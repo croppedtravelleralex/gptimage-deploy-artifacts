@@ -40,9 +40,35 @@ def wait_for_task(service: ImageTaskService, identity: dict[str, object], task_i
 
 class ImageTaskServiceTests(unittest.TestCase):
     def setUp(self):
+        # Windows flake fix: each test body wraps itself in
+        # ``with tempfile.TemporaryDirectory()``, but ``make_service`` registers
+        # ``addCleanup(service.stop)`` -- and addCleanup callbacks only run *after*
+        # the test method returns, i.e. after the with-block already deleted the
+        # directory. So the service's worker threads are still holding
+        # ``image_tasks.db`` open when Windows tries to unlink it, and teardown
+        # raises ``PermissionError: [WinError 32]``. The failure is teardown-only
+        # (never an assertion), but it surfaces as a random red test whose name
+        # changes run to run, which makes the suite untrustworthy.
+        #
+        # Forcing ``ignore_cleanup_errors=True`` at every call site in this class
+        # fixes it in one place. The alternative -- moving ``service.stop()``
+        # inside each with-block -- would touch 20+ tests. Cost: a stray temp dir
+        # may linger in %TEMP% on Windows. Real assertion failures are unaffected.
+        _RealTemporaryDirectory = tempfile.TemporaryDirectory
+
+        def _tolerant_tempdir(*args, **kwargs):
+            kwargs.setdefault("ignore_cleanup_errors", True)
+            return _RealTemporaryDirectory(*args, **kwargs)
+
+        patcher = mock.patch.object(tempfile, "TemporaryDirectory", _tolerant_tempdir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
         self._original_image_generation_paused = config.data.get("image_generation_paused")
         self._original_image_task_queue = config.data.get("image_task_queue")
+        self._original_image_pipeline = config.data.get("image_pipeline")
         config.data["image_generation_paused"] = False
+        config.data["image_pipeline"] = {"enabled": False}
         config.data["image_task_queue"] = {
             **(self._original_image_task_queue if isinstance(self._original_image_task_queue, dict) else {}),
             "enabled": True,
@@ -58,6 +84,10 @@ class ImageTaskServiceTests(unittest.TestCase):
             config.data.pop("image_task_queue", None)
         else:
             config.data["image_task_queue"] = self._original_image_task_queue
+        if self._original_image_pipeline is None:
+            config.data.pop("image_pipeline", None)
+        else:
+            config.data["image_pipeline"] = self._original_image_pipeline
 
     def make_service(self, path: Path, handler=None, **kwargs) -> ImageTaskService:
         service = ImageTaskService(

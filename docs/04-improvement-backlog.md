@@ -1,20 +1,109 @@
 # 改进池
 
-最后校准：2026-07-25
+最后校准：2026-07-26
 
 原则：只保留当前仍有工程价值的项；已完成和历史流水不放在这里，详见 `docs/logs/2026/2026-07.md` 与 `docs/archive/`。
 
+## AUDIT-28 调度/队列/槽位审计整治【P0 · 新开 2026-07-26】
+
+真相源：[`28-scheduling-queue-slot-audit-20260726.md`](./28-scheduling-queue-slot-audit-20260726.md)（Panda 生产代码只读审计，6 子代理分域 + 逐条复核）
+
+**执行纪律**：批次内按序做，跨批次不得跳。**批次 0 必须最先** —— 打开 watchdog 的 force 会同时引爆 `_PySlotLedger` 自死锁。每批次落地后跑 conc10 + `capture_performance_baseline.py` 再进下一批。
+
+### 批次 0 — 解除踩雷前置（必须最先）
+
+| ID | 事项 | 位置 | 审计项 |
+|----|------|------|--------|
+| A0-1 | `_PySlotLedger._lock` 改 `RLock()`，或 `watchdog_tick` 内改调不加锁的私有版 | `slot_ledger.py:29,93` | B3 |
+| A0-2 | `.so` 加载失败改为**显式告警**，不再静默降级到 Python | `slot_ledger.py:179-181` | B3 |
+
+### 批次 1 — 止血：停止丢图 / 停止丢工作项
+
+| ID | 事项 | 位置 | 审计项 |
+|----|------|------|--------|
+| A1-1 | sS 墙钟阈值改为 `> max(poll_timeout) + margin`，或改为**仅覆盖 SSE 阶段**（sediment 前）而非全程 | `orchestrator.py:190` | B1 |
+| A1-2 | `TimeoutError` 转 `ImageGenerationError` 时**保留 `conversation_id`**，让续轮询可接管 | `conversation.py:2201` | B1 |
+| A1-3 | `release_ss` 早退前先归还池槽；或 `acquire_ss` 重试时从 `_ss_released_indices` 摘除 index | `orchestrator.py:354` | B2 |
+| A1-4 | 4 处 `acquire`（ss/ps/upload/download）全部传 `timeout`，消除无界 wedge | `orchestrator.py:290,306,338,378` | B2 |
+| A1-5 | text_nurture 出队改**非破坏性**：校验通过再 commit，失败 requeue + 退避 + 死信 | `text_nurture_service.py:378` | A1 |
+| A1-6 | 周末预设补齐：`business_hours`/`extended_business` 增加周末档位，或闸门改 `>=` | `ip_nurture_schedule.py:83-85,189` | A1 |
+
+### 批次 2 — 恢复供给
+
+| ID | 事项 | 位置 | 审计项 |
+|----|------|------|--------|
+| A2-1 | `cf_block_sec` 从 86400 降至分钟量级；`_cf_fail_streak` 加滑动窗口衰减 | `account_warmup_service.py:351,336` | A2 |
+| A2-2 | 已封号加**周期性重探**（当前封后不再探活 → 永不解封） | `account_warmup_service.py:320-322` | A2 |
+| A2-3 | 补人工解封 API + UI（当前只有只读 status） | `api/ops.py:93-96` | A2 |
+| A2-4 | `quota==0` 不再改 `status=限流`，改设 `image_soft_capped`（与 `:507` 既有结论一致，此处是漏改） | `account_service.py:3517` | A3 |
+| A2-5 | 存量已沉底账号一次性回捞（`status=限流` 且 `restore_at` 已过） | 运维脚本 | A3 |
+
+### 批次 3 — 让兜底与监控真正生效（依赖批次 0）
+
+| ID | 事项 | 位置 | 审计项 |
+|----|------|------|--------|
+| A3-1 | `tick(force_release_expired=True)`；`reconcile_inflight(force=True)` | `api/system.py:390`、`pipeline_watchdog.py:51` | A4 |
+| A3-2 | watchdog 挪到**独立后台线程**，不再寄生 `/health` | `pipeline_watchdog.py` | A4 |
+| A3-3 | 修 `pipeline.get("pools")` → 顶层取 `ss`，恢复 `ss_active`/`ss_queued` | `pipeline_watchdog.py:53` | A5 |
+| A3-4 | `reconcile` 前排除 resume-polling 任务（当前结构性虚高 → 打开 force 会误伤） | `pipeline_watchdog.py:32` | A4 |
+| A3-5 | `PipelineRun.finish()` 用 `try/finally` 包住；`begin_run` 的 `admit()` 后加异常回滚 | `orchestrator.py:100,403` | B9 |
+| A3-6 | submit/poll worker 循环体加 `try/except`，异常落 ERROR 而非杀线程；补 RUNNING 超时 reaper | `image_task_service.py:1217` | B10 |
+| A3-7 | `release_image_slot` 加 ownership token / 幂等 key，消除 SSE-release 与 `mark_image_result` 双释放 | `orchestrator.py:201`、`account_service.py:3502` | B4 |
+
+### 批次 4 — 吞吐与口径【P1】
+
+| ID | 事项 | 位置 | 审计项 |
+|----|------|------|--------|
+| A4-1 | `_stamp_image_next_ok` 从"完成后"移到"开跑时"（或 `T_start + gap`）— **单改此项 +35% 吞吐** | `account_service.py:3522` | §4 |
+| A4-2 | ETA 改用 admission→delivery 全墙钟；`running_slots` 纳入 `binding_inflight_max` 与冷却周期 | `image_task_service.py:700-729` | §4 |
+| A4-3 | `image_binding_inflight_max` 语义修正（当前把账号自身计入自身 binding → 单号并发恒为 1） | `account_service.py:695-701` | B5 |
+| A4-4 | `image_poll_max_upstream_gets`（隐藏默认 24）显式化并对齐 300/360s 预算；超时报错指向正确 key | `image_poll_budget.py:82`、`openai_backend_api.py:3707` | B6 |
+| A4-5 | resume 阶梯总预算收敛到 < 客户端 540s；`resume_deadline_ts` 改为**运行中**也检查 | `image_task_service.py:1787` | B7 |
+| A4-6 | deadlock guard 死区修复：`65~90%` 区间也复位 `_above_since`；CPU 改读 cgroup v2 | `image_deadlock_guard_service.py:65,44` | B8 |
+| A4-7 | `per_user_running` 与 `submit_workers` 解耦（当前同为 10 = 无跨用户隔离） | `image_task_service.py:1095` | §3 |
+
+### 批次 5 — 死配置清理与可观测【P1/P2】
+
+| ID | 事项 | 审计项 |
+|----|------|--------|
+| A5-1 | 死配置一次性处理：`image_timeout_retry_secs`、`download_workers`、`workload.text_queue_mode`、`burst_*`、三个顶层 `*_poll_timeout_secs`（**保留键但标注失效，或接上消费者**；不静默删除） | §5 |
+| A5-2 | `image_generation_poll_timeout_secs=300` 被静默降为 120 — 修属性读取顺序或 UI 标灰 | §5 |
+| A5-3 | `image_global_concurrency` 下限语义 vs UI 显示不一致（配 10 显示 18）— 统一口径 | §5 |
+| A5-4 | 广告 vs 实际供给对齐：`get_stats` / `get_schedulable_breakdown` / `build_snapshot` 均需扣 warmup 封禁并加 warmup 桶 | A2 |
+| A5-5 | `image_tasks.db` 397MB/1 行治理：base64 拆列或落文件；`auto_vacuum=INCREMENTAL` 或离线 VACUUM | §8 |
+| A5-6 | `_cleanup_locked` 节流（当前挂在 `wait_for_result` 每 1.5s 一轮，持全局锁跑写事务） | §8 |
+| A5-7 | pre_ticket / ready_buffer / proxy_quarantine / cohort 四处缺 TTL 或缺衰减 — 逐项补 | §8 |
+| A5-8 | `schedule_trace` 补 `ss_wall_timeout` / `inflight_drift` / `ledger_forced_release` 事件（`27` §3 待做项） | `27` §3 |
+
+### 不做 / 暂缓
+
+- ACI ranker 重做（当前被 round-robin 作废，属白做功但无害）— 等 A4-3 落地后再评估是否保留 ACI。
+- Layer 2 账号/基础设施 Rust — 触发条件未到，见下文 Layer 2 条目。
+- **`cohort_id` 赋值** — 在 `_cohort_terminal_hits` 加衰减之前**不要赋值**，否则 2 次事件即全池 24h kill switch（`28` §8）。
+
 ## 当前主线（2026-07-25 起）
+
+### CF 准入与隔离纪律【P0 · 2026-07-26 已修】
+
+- **事故**：`webshare_cf_scan` 批量 `cf403_scan` 隔离整池 → 生图可用 **0**（`proxy_cf_ok` 打标仍 true）。
+- **已落地**：`proxy_cf_eligibility` 缓存优先；`webshare_cf_scan` 跳过已绑定 endpoint；`_tmp_recover_cf_quarantine.py`。
+- **运维**：号池看 **进调度 vs 生图可用** 用 `schedulable-breakdown`；详见 `17` §「批量 scan 隔离」。
 
 ### SLOT-RUST Layer 1 — SlotLedger + sS 75s 超时【P0 · 进行中】
 
 - **真相源**：[`26-slot-lifecycle-rust-roadmap.md`](./26-slot-lifecycle-rust-roadmap.md) §4–§5、[`27-pipeline-watchdog-monitoring-matrix.md`](./27-pipeline-watchdog-monitoring-matrix.md)
+- ⚠️ **2026-07-26 纠偏**：下列"已完成"指**代码已就位**，经 `28` 号审计确证**运行时未生效或方向有害**。整治项见本文 §AUDIT-28。
 - **已完成（2026-07-25）**：
   1. Rust `SlotLedger` FSM + watchdog FFI；Python `slot_ledger.py` fallback。
+     — ⚠️ Python fallback 的 `watchdog_tick` **非可重入锁自死锁**（`28` B3）；`.so` 加载失败静默降级。
   2. sS 75s 墙钟：`ss_stage_wall_timeout_secs` + `assert_ss_wall_ok`。
+     — ⚠️ **方向有害**：比所包裹的 120/300/360s 合法轮询短 1.6~4.8 倍，会丢弃已生成的图（`28` B1）。
   3. `pipeline_watchdog` + `reconcile_inflight()` + `/health` 扩展。
+     — ⚠️ 两个 `force` 硬编码 `False` → **只报不修**；无后台定时器（寄生 `/health`）；`ss_active/queued` 取错 key 恒为 0（`28` A4/A5）。
   4. `pre_ticket_pool` TTL 缓存 requirements。
+     — ⚠️ 与账号资格零关联，可对已失效号兑票；`evict_expired()` 无调度（活体 18 条全泄漏，`28` §8）。
   5. 基线脚本 + `BASELINE-pre-slotledger-*`。
+     — ⚠️ 其中 `ss_active`/`ss_queued` 两项恒为 0，横评前需先修 A3-3。
 - **待办**：
   1. Linux `.so` artifact 部署 Panda；FFI 全面持账。
   2. `failure_retry_enabled` / `failure_retry_max` API+UI。

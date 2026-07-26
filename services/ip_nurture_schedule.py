@@ -1,7 +1,14 @@
 """IP 出口养号时段表：7 天 × 12 个 2 小时槽（Asia/Singapore）。
 
 预设模板供 binding_key（proxy_binding_hash / proxy_egress_ip）绑定；
-权重 0.0–1.0，text_nurture 仅在当前槽权重 > 0.15 时允许出队。
+权重 0.0–1.0，text_nurture 仅在当前槽权重 >= 0.15（SLOT_ALLOW_THRESHOLD）时允许出队。
+
+A1-6：闸门原为**严格大于**，权重恰好等于阈值（如 `sg_remote` 的 0.15 底值）会被误挡；
+且 `business_hours` / `extended_business` 只填了周一至周五，周末保留 0.05 / 0.08 底值 →
+周末对全部 binding 全盲（`business_hours` 还是未配置 binding 的默认预设）。现在：
+闸门改为 `>=`（"权重达到阈值即放行"），并给工作日型预设补一档**明显低于工作日办公时段**
+的周末白天权重（减量而非停摆）。真要周末停摆的场景请用 `weekday_only` /
+`rest_weekend` / `rest_day_sun`，它们保持原语义不变。
 """
 
 from __future__ import annotations
@@ -74,6 +81,22 @@ _EVENING = _office_day((8, 9, 10, 11))  # 16:00–24:00
 _NIGHT = _office_day((0, 1, 2, 10, 11))  # 00-06 + 20-24
 _LUNCH_DIP = {6: 0.25}  # 12:00–14:00
 
+# A1-6：工作日型预设的周末白天档（10:00–20:00）。权重必须 >= SLOT_ALLOW_THRESHOLD
+# 才能放行，但要明显低于工作日办公时段的 0.85；深夜仍留在阈值以下 → 周末夜间照旧关闭。
+_WEEKEND_LIGHT_SLOTS = (5, 6, 7, 8, 9)  # 10:00–20:00
+_WEEKEND_LIGHT_WEIGHT = 0.25
+_WEEKEND_LIGHT_EXTENDED_WEIGHT = 0.30
+
+
+def _with_weekend_light(matrix: list[list[float]], *, weight: float, floor: float) -> list[list[float]]:
+    """给已填好工作日的矩阵补周末白天低权重档；周末其余槽压回 floor（低于阈值）。"""
+    return _fill_weekdays(
+        matrix,
+        slots=_office_day(_WEEKEND_LIGHT_SLOTS, weight),
+        value=floor,
+        weekdays=(5, 6),
+    )
+
 
 def _preset(preset_id: str, label: str, matrix: list[list[float]]) -> dict[str, Any]:
     return {"id": preset_id, "label": label, "weights": matrix}
@@ -81,8 +104,24 @@ def _preset(preset_id: str, label: str, matrix: list[list[float]]) -> dict[str, 
 
 _PRESETS: tuple[dict[str, Any], ...] = (
     _preset("uniform", "全天均匀", _blank_matrix(0.75)),
-    _preset("business_hours", "工作日办公时段", _fill_weekdays(_blank_matrix(0.05), slots=_OFFICE, weekdays=(0, 1, 2, 3, 4))),
-    _preset("extended_business", "工作日加长班", _fill_weekdays(_blank_matrix(0.08), slots=_EXTENDED, weekdays=(0, 1, 2, 3, 4))),
+    _preset(
+        "business_hours",
+        "工作日办公时段（周末减量）",
+        _with_weekend_light(
+            _fill_weekdays(_blank_matrix(0.05), slots=_OFFICE, weekdays=(0, 1, 2, 3, 4)),
+            weight=_WEEKEND_LIGHT_WEIGHT,
+            floor=0.05,
+        ),
+    ),
+    _preset(
+        "extended_business",
+        "工作日加长班（周末减量）",
+        _with_weekend_light(
+            _fill_weekdays(_blank_matrix(0.08), slots=_EXTENDED, weekdays=(0, 1, 2, 3, 4)),
+            weight=_WEEKEND_LIGHT_EXTENDED_WEIGHT,
+            floor=0.08,
+        ),
+    ),
     _preset("weekday_only", "仅工作日", _fill_weekdays(_blank_matrix(0.05), slots=_OFFICE, weekdays=(0, 1, 2, 3, 4))),
     _preset("weekend_only", "仅周末", _fill_weekdays(_blank_matrix(0.05), slots=_EXTENDED, weekdays=(5, 6))),
     _preset("night_owl", "夜猫子", _fill_weekdays(_blank_matrix(0.1), slots=_EVENING)),
@@ -90,8 +129,11 @@ _PRESETS: tuple[dict[str, Any], ...] = (
     _preset("off_peak", "错峰（夜间偏高）", _fill_weekdays(_blank_matrix(0.2), slots=_NIGHT)),
     _preset("lunch_break", "午休降权", _with_slots(weekday_values={d: {**_OFFICE, **_LUNCH_DIP} for d in range(5)})),
     _preset("sg_office", "新加坡办公室", _with_slots(weekday_values={d: {**_OFFICE, **_LUNCH_DIP} for d in range(5)} | {5: {4: 0.35, 5: 0.45, 6: 0.35}})),
+    # sg_remote 底值恰为 SLOT_ALLOW_THRESHOLD：闸门改 `>=` 后即按"弹性低频常开"生效。
     _preset("sg_remote", "新加坡远程弹性", _fill_weekdays(_blank_matrix(0.15), slots=_EXTENDED)),
-    _preset("minimal", "极低频", _blank_matrix(0.12)),
+    # A1-6：原为 0.12（全天低于阈值 → 任何时刻都跑不起来）。抬到刚过阈值，
+    # 保持 minimal < conservative(0.22) < light_touch(0.28) 的低频梯度。
+    _preset("minimal", "极低频", _blank_matrix(0.18)),
     _preset("aggressive", "高频全覆盖", _blank_matrix(0.95)),
     _preset("conservative", "保守低频", _blank_matrix(0.22)),
     _preset("monday_ramp", "周一缓启动", _with_slots(weekday_values={0: {4: 0.25, 5: 0.45, 6: 0.65, 7: 0.75, 8: 0.75}, **{d: _OFFICE for d in range(1, 5)}})),
@@ -118,8 +160,10 @@ _PRESETS: tuple[dict[str, Any], ...] = (
         ),
     ),
     _preset("midweek_core", "周中核心", _with_slots(weekday_values={d: _OFFICE for d in (1, 2, 3)})),
-    _preset("staggered_a", "错峰 A（奇数槽）", _with_slots(weekday_values={d: {slot: 0.75 if slot % 2 else 0.15 for slot in range(SLOTS_PER_DAY)} for d in range(7)})),
-    _preset("staggered_b", "错峰 B（偶数槽）", _with_slots(weekday_values={d: {slot: 0.75 if slot % 2 == 0 else 0.15 for slot in range(SLOTS_PER_DAY)} for d in range(7)})),
+    # 错峰 A/B 的错峰语义靠"关槽低于阈值"实现。闸门改 `>=` 后 0.15 会变成常开，
+    # 把关槽压到 0.12 以保住分时互补的本意（仍是低值，不是删除档位）。
+    _preset("staggered_a", "错峰 A（奇数槽）", _with_slots(weekday_values={d: {slot: 0.75 if slot % 2 else 0.12 for slot in range(SLOTS_PER_DAY)} for d in range(7)})),
+    _preset("staggered_b", "错峰 B（偶数槽）", _with_slots(weekday_values={d: {slot: 0.75 if slot % 2 == 0 else 0.12 for slot in range(SLOTS_PER_DAY)} for d in range(7)})),
     _preset("pulse_2h", "两小时脉冲", _with_slots(weekday_values={d: {slot: 0.85 if slot in (5, 8) else 0.18 for slot in range(SLOTS_PER_DAY)} for d in range(5)})),
     _preset("light_touch", "轻触达", _blank_matrix(0.28)),
 )
@@ -186,7 +230,8 @@ def slot_allowed(
     threshold: float = SLOT_ALLOW_THRESHOLD,
     now_utc: datetime | None = None,
 ) -> bool:
-    return current_slot_weight(matrix, tz_name=tz_name, now_utc=now_utc) > float(threshold)
+    # A1-6：`>=` 而非 `>` —— 权重恰好等于阈值表示"允许"（原严格大于会把 0.15 底值误判为关闭）。
+    return current_slot_weight(matrix, tz_name=tz_name, now_utc=now_utc) >= float(threshold)
 
 
 def _bindings_raw() -> dict[str, Any]:
@@ -230,7 +275,7 @@ def resolve_binding_matrix(binding_key: str, *, default_preset_id: str = "busine
         resolved = binding_schedule_from_config().get(key)
         if resolved is not None:
             return copy.deepcopy(resolved["weights"])
-        presets = list_presets()
+        presets = list(_PRESETS)
         if presets:
             tz = ZoneInfo(resolve_tz_name(DEFAULT_TZ))
             week = datetime.now(timezone.utc).astimezone(tz).isocalendar().week

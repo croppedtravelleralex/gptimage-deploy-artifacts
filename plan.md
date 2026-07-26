@@ -1,7 +1,12 @@
 # SLOT-RUST Layer 1 — 执行计划
 
-最后更新：**2026-07-25**  
-真相源：[`docs/26-slot-lifecycle-rust-roadmap.md`](docs/26-slot-lifecycle-rust-roadmap.md)、[`docs/27-pipeline-watchdog-monitoring-matrix.md`](docs/27-pipeline-watchdog-monitoring-matrix.md)
+最后更新：**2026-07-26**（纠偏）
+真相源：[`docs/26-slot-lifecycle-rust-roadmap.md`](docs/26-slot-lifecycle-rust-roadmap.md)、[`docs/27-pipeline-watchdog-monitoring-matrix.md`](docs/27-pipeline-watchdog-monitoring-matrix.md)、**[`docs/28-scheduling-queue-slot-audit-20260726.md`](docs/28-scheduling-queue-slot-audit-20260726.md)**
+
+> **纠偏（2026-07-26）** — `28` 号审计在 Panda 生产代码上确证：Phase 1 中若干 `[x]` 属
+> **代码已就位但运行时未生效或方向有害**。勾选状态保留（代码确实在位），受影响项已就地批注。
+> 整治批次见 `docs/04` §AUDIT-28 —— **必须先做批次 0**（打开 watchdog force 会引爆 Python
+> ledger 自死锁）。
 
 ## SLO（Layer 1 完成后复测）
 
@@ -9,7 +14,7 @@
 |------|------------------------|------|
 | conc10 成功率 | 4/10（040240Z）/ 10/10（023900Z） | ≥8/10 稳定 |
 | `image_inflight` 泄漏 | 曾 10/10 堵死 | 0 漂移（watchdog 告警） |
-| sS 假超时 225s | 6 路 `no conversation_id` | **75s** 墙钟失败+释槽 |
+| sS 假超时 225s | 6 路 `no conversation_id` | ~~**75s** 墙钟失败+释槽~~ → ⚠️ **目标需重定**：75s 同时落在成功路径正常区间（EWMA 初值即 60s），会连成功一起杀。改为 `> max(poll_timeout)+margin` 或仅覆盖 SSE 阶段（`28` B1） |
 | conc10 后 RSS | ~259 MB（修复后） | ≤280 MB |
 | account_queue 占比 | 0.1% | <5% |
 
@@ -38,10 +43,15 @@
 ### Python 集成
 
 - [x] `services/image_pipeline/slot_ledger.py`（Rust + Python fallback）
+  - ⚠️ Python fallback `watchdog_tick` 用非可重入 `Lock` 且锁内调 `release_*` → **自死锁**（`28` B3 / A0-1）
 - [x] `services/image_pipeline/pipeline_watchdog.py`（inflight 对账 + health 打点）
+  - ⚠️ **惰性**：`force_release_expired=False` 硬编码、无后台定时器（寄生 `/health`）；`ss_active/queued` 取错 key 恒为 0（`28` A4/A5 / A3-1~A3-3）
 - [x] `account_service.reconcile_inflight()`
+  - ⚠️ `force=False` 硬编码，修正分支 `if force and memory > expected` 为**死代码**（`28` A4 / A3-1）
 - [x] orchestrator：`acquire_ss`/`release_ss` 登记 SlotLedger
+  - ⚠️ `_ss_released_indices` 只增不减 → **重试永久泄漏 sS 槽**，10 次耗尽后无 timeout 挂死（`28` B2 / A1-3、A1-4）
 - [x] **sS 75s** 墙钟：`config.image_ss_stage_wall_timeout_secs` + `assert_ss_wall_ok`
+  - ⚠️ **方向有害**：75s 比所包裹的 120/300/360s 合法轮询短 1.6~4.8 倍，在图已生成并下载后抛错丢弃，且 `conversation_id` 被清空致续轮询短路（`28` B1 / A1-1、A1-2）
 - [ ] hard timeout / 异常路径全量 `release_account_ledger`
 - [ ] `failure_retry_enabled` / `failure_retry_max` API+UI
 

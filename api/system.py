@@ -87,8 +87,34 @@ class BackupDeleteRequest(BaseModel):
     key: str = ""
 
 
+def _start_pipeline_watchdog_loop() -> None:
+    """Bring up the pipeline watchdog background loop (audit 28 §A4 / fix A3-2).
+
+    ``tick()`` used to run only inside the ``/health`` handler, so with no
+    monitoring traffic the watchdog never ran at all and no registered slot
+    deadline was ever enforced. ``start_background()`` is idempotent and honours
+    ``image_pipeline_watchdog.enabled``.
+
+    RESOLVED (2026-07-26): the lifespan wiring has landed in ``api/app.py`` --
+    ``pipeline_watchdog_service.start_background()`` sits next to
+    ``account_warmup_service.start_background()`` with a matching
+    ``stop_background()`` in the ``finally`` block, so shutdown now joins the
+    thread. ``create_router`` no longer calls this. Kept as a manual fallback
+    entry point (e.g. for a REPL or a one-off diagnostic).
+    """
+    try:
+        from services.image_pipeline.pipeline_watchdog import pipeline_watchdog_service
+
+        pipeline_watchdog_service.start_background()
+    except Exception:
+        pass
+
+
 def create_router(app_version: str) -> APIRouter:
     router = APIRouter()
+    # 看门狗后台循环已改由 api/app.py 的 lifespan 启停（与其余 *_service 同规），
+    # 不在 create_router 里启动：那会早于配置就绪，且没有 shutdown join。
+    # _start_pipeline_watchdog_loop() 保留为手动兜底入口。
 
     @router.post("/auth/login")
     async def login(authorization: str | None = Header(default=None)):
@@ -387,7 +413,11 @@ def create_router(app_version: str) -> APIRouter:
                 "text_queue_depth": text_task_queue.depth(),
                 "image_queue_depth": int(getattr(image_task_service, "queue_depth", lambda: 0)()),
             }
-            stats_json["pipeline_watchdog"] = pipeline_watchdog_service.tick(force_release_expired=False)
+            # No explicit force flags: both are config-driven now
+            # (image_pipeline_watchdog.force_release_expired / .reconcile_force).
+            # Ticks inside the coalescing window reuse the last report, so
+            # scraping /health cannot double-apply a correction.
+            stats_json["pipeline_watchdog"] = pipeline_watchdog_service.tick()
             stats_json["pre_ticket_pool"] = pre_ticket_pool.snapshot()
         except Exception:
             pass

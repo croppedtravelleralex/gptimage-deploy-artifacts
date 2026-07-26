@@ -3322,6 +3322,53 @@ class OpenAIBackendAPI:
             return max(base, early_wait)
         return base
 
+    @staticmethod
+    def _resolve_poll_max_upstream_gets() -> int | None:
+        """Explicit conversation GET cap, or ``None`` to derive it from the wall.
+
+        The hidden default of 24 made the 300s/360s wall budgets unreachable
+        (audit 28 §B6 / fix A4-4); an operator who did configure the key keeps it.
+        """
+        if hasattr(config, "image_poll_max_upstream_gets_explicit"):
+            explicit = config.image_poll_max_upstream_gets_explicit
+            if explicit is None:
+                return None
+            try:
+                return max(1, int(explicit))
+            except (TypeError, ValueError):
+                return None
+        # Older config module without the explicit accessor: keep legacy behaviour.
+        try:
+            return max(1, int(config.image_poll_max_upstream_gets))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _resolve_poll_timeout_config_key(timeout_secs: float) -> tuple[str, str]:
+        """Map a wall budget back to the mode and the config key that governs it.
+
+        Per audit 28 §5 the top-level ``image_*_poll_timeout_secs`` keys are never
+        read: the nested ``image_task_queue.*`` values win. Naming the top-level key
+        in a timeout error sends operators to a knob that does nothing.
+        """
+        try:
+            wall = float(timeout_secs)
+        except (TypeError, ValueError):
+            return "", "image_poll_timeout_secs"
+        try:
+            multi = float(config.image_multi_reference_poll_timeout_secs)
+            edit = float(config.image_edit_poll_timeout_secs)
+            generation = float(config.image_generation_poll_timeout_secs)
+        except Exception:
+            return "", "image_poll_timeout_secs"
+        if wall >= multi:
+            return "multi_reference", "image_task_queue.multi_reference_poll_timeout_secs"
+        if wall >= edit:
+            return "edit", "image_task_queue.edit_poll_timeout_secs"
+        if wall >= generation:
+            return "generation", "image_task_queue.generation_poll_timeout_secs"
+        return "base", "image_poll_timeout_secs"
+
     def _poll_image_results(
             self,
             conversation_id: str,
@@ -3362,13 +3409,20 @@ class OpenAIBackendAPI:
         _raise_if_cancelled()
         from services.image_poll_budget import ImagePollBudget
 
+        interval = float(config.image_poll_interval_secs)
+        poll_mode, poll_timeout_key = self._resolve_poll_timeout_config_key(timeout_secs)
         budget = ImagePollBudget.create(
             timeout_secs=timeout_secs,
-            max_conversation_gets=config.image_poll_max_upstream_gets,
+            # None => derive the GET cap from the wall budget (audit 28 §B6 / fix
+            # A4-4). An explicitly configured image_poll_max_upstream_gets still
+            # wins verbatim so existing deployments keep their behaviour.
+            max_conversation_gets=self._resolve_poll_max_upstream_gets(),
             max_tasks_gets=config.image_poll_max_tasks_gets,
             tasks_every_n_attempts=config.image_poll_tasks_every_n_attempts,
+            poll_interval_secs=interval,
+            mode=poll_mode,
+            timeout_config_key=poll_timeout_key,
         )
-        interval = float(config.image_poll_interval_secs)
         initial_wait = self._resolve_poll_initial_wait_secs(sse_image_gen_ms)
         file_ids: list[str] = []
         sediment_ids: list[str] = []
@@ -3698,17 +3752,20 @@ class OpenAIBackendAPI:
             "event": "image_poll_timeout",
             "conversation_id": conversation_id,
             "timeout_secs": timeout_secs,
+            "elapsed_secs": round(budget.elapsed_wall(), 2),
+            "exhausted_reason": budget.effective_exhausted_reason(),
+            "poll_mode": poll_mode,
+            "timeout_config_key": poll_timeout_key,
             "attempts_made": budget.attempt,
             # attempts_made == 0 means the initial_wait consumed the entire budget — no HTTP attempted.
             "initial_wait_exhausted_budget": budget.attempt == 0,
             "poll_budget": budget.snapshot(),
             "last_task_error": last_task_error if last_task_error else None,
         })
-        exc = ImagePollTimeoutError(
-            f"ChatGPT 生图超时（已等待 {timeout_secs} 秒）。"
-            f"当前超时阈值可在 config.json 中调大 image_poll_timeout_secs，"
-            f"也可能是账号被限流或生图队列拥堵导致。"
-        )
+        # Real elapsed + real reason + the key that actually governs this mode
+        # (audit 28 §B6 / fix A4-4). The old text always claimed the wall timeout and
+        # pointed at image_poll_timeout_secs, which the queue modes never read.
+        exc = ImagePollTimeoutError(budget.exhaustion_message())
         if last_task_error:
             setattr(exc, "task_error", last_task_error)
         setattr(exc, "conversation_id", conversation_id or "")

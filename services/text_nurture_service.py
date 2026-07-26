@@ -20,8 +20,40 @@ from services.ip_nurture_schedule import resolve_binding_matrix, slot_allowed
 from services.log_service import log_llm_ops
 from services.openai_backend_api import OpenAIBackendAPI
 from services.protocol.conversation import ConversationRequest, collect_text
-from services.text_task_queue import text_task_queue
+from services.text_task_queue import TextQueueItem, text_task_queue
 from utils.log import logger
+
+# A1-5 — worker loop backoff. The old loop always waited exactly poll_interval_sec
+# with no consecutive-failure counter, so a permanently failing tick hammered the
+# upstream / the log at a fixed 3s cadence.
+LOOP_BACKOFF_FACTOR = 2.0
+LOOP_BACKOFF_MAX_SEC = 120.0
+LOOP_BACKOFF_MAX_EXP = 8
+
+# A1-5 — retryable vs terminal. Terminal means "retrying this exact payload can
+# never succeed" (malformed payload / forbidden prompt / caller bug), so it goes
+# straight to the dead-letter ring instead of consuming the retry budget.
+# Everything else (closed schedule gate, daily cap, upstream 503/401/500,
+# transport errors) is retryable and gets requeued with backoff.
+TERMINAL_ERROR_TYPES: tuple[type[BaseException], ...] = (
+    ValueError,
+    TypeError,
+    KeyError,
+    IndexError,
+    AttributeError,
+)
+
+FORBIDDEN_PROMPT_MARKERS: tuple[str, ...] = ("picture_v2", "generate an image")
+PAYLOAD_STR_FIELDS: tuple[str, ...] = ("prompt", "access_token", "email", "source", "model")
+
+
+class TerminalNurtureError(ValueError):
+    """Payload can never succeed as-is — retire it, do not retry."""
+
+
+def is_terminal_nurture_error(exc: BaseException) -> bool:
+    return isinstance(exc, TERMINAL_ERROR_TYPES)
+
 
 # Short, mundane prompts — real lightweight nurture, not image-tied spam.
 DEFAULT_NURTURE_PROMPTS: tuple[str, ...] = (
@@ -86,6 +118,7 @@ class TextNurtureService:
         self._last_error = ""
         self._last_ok_at = 0.0
         self._running = False
+        self._consecutive_errors = 0
 
     def _daily_key(self, settings: dict[str, Any]) -> str:
         tz = ZoneInfo(resolve_tz_name(str(settings.get("daily_reset_tz") or "Asia/Singapore")))
@@ -141,6 +174,14 @@ class TextNurtureService:
     def status(self) -> dict[str, Any]:
         settings = _settings()
         with self._lock:
+            day = self._daily_key(settings)
+            limit = int(settings.get("max_per_account_per_day") or 0)
+            today_total = sum(int(count) for (_, d), count in self._daily_counts.items() if d == day)
+            at_cap = (
+                sum(1 for (_, d), count in self._daily_counts.items() if d == day and int(count) >= limit)
+                if limit > 0
+                else 0
+            )
             return {
                 "enabled": settings["enabled"],
                 "worker_alive": bool(self._thread and self._thread.is_alive()),
@@ -150,10 +191,11 @@ class TextNurtureService:
                 "max_per_hour": settings["max_per_hour"],
                 "max_per_account_per_day": settings["max_per_account_per_day"],
                 "turns_per_session": settings["turns_per_session"],
-                "today_completed_total": self._today_completed_total(settings),
-                "accounts_at_cap": self._accounts_at_cap(settings),
+                "today_completed_total": today_total,
+                "accounts_at_cap": at_cap,
                 "last_error": self._last_error,
                 "last_ok_at": self._last_ok_at or None,
+                "consecutive_errors": self._consecutive_errors,
                 "require_persist_history": settings["require_persist_history"],
                 "auto_enqueue": settings["auto_enqueue"],
                 "prompt_count": len(settings["prompts"]),
@@ -235,7 +277,9 @@ class TextNurtureService:
         now = time.time()
         if now - self._last_auto_enqueue_at < float(settings["auto_enqueue_every_sec"]):
             return
-        if text_task_queue.depth() > 0:
+        # Pending includes items sitting out a retry backoff, and in-flight leases
+        # are real work too — don't pile duplicates on top of either.
+        if text_task_queue.depth() > 0 or text_task_queue.inflight_depth() > 0:
             return
         if not self._budget_ok(settings):
             return
@@ -358,6 +402,16 @@ class TextNurtureService:
             prompts.append(random.choice(follow_ups) if follow_ups else base)
         return prompts[:turns]
 
+    def _validate_payload(self, payload: dict[str, Any]) -> None:
+        """Terminal-error gate: reject payloads no retry could ever rescue."""
+        for key in PAYLOAD_STR_FIELDS:
+            value = payload.get(key)
+            if value is not None and not isinstance(value, str):
+                raise TerminalNurtureError(f"nurture payload field {key} must be a string")
+        lowered = str(payload.get("prompt") or "").lower()
+        if any(marker in lowered for marker in FORBIDDEN_PROMPT_MARKERS):
+            raise TerminalNurtureError("nurture prompts must not request image generation")
+
     def process_one(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         settings = _settings()
         data = dict(payload or {})
@@ -367,15 +421,61 @@ class TextNurtureService:
         if not self._budget_ok(settings):
             raise RuntimeError("text_nurture hourly budget exhausted")
         if not data.get("prompt") and not data.get("email") and not data.get("access_token"):
-            item = text_task_queue.dequeue()
-            if item is None:
-                raise RuntimeError("text nurture queue empty")
-            data = dict(item.payload)
-        elif not data.get("prompt"):
+            # Queue-driven path: lease instead of destroying, so a failed
+            # validation returns the work item to the queue (A1-5).
+            return self._process_leased(settings)
+        if not data.get("prompt"):
             try:
                 data["prompt"] = random.choice(settings["prompts"])
             except Exception:
                 data["prompt"] = "hi"
+        # Directed call (API / accounts UI): nothing was queued, so the error
+        # surfaces to the caller instead of being requeued.
+        return self._run_payload(data, settings)
+
+    def _process_leased(self, settings: dict[str, Any]) -> dict[str, Any]:
+        leased = text_task_queue.lease()
+        if leased is None:
+            snapshot = text_task_queue.snapshot()
+            delayed = int(snapshot.get("delayed_depth") or 0)
+            if delayed > 0:
+                raise RuntimeError(f"text nurture queue backing off (delayed={delayed})")
+            raise RuntimeError("text nurture queue empty")
+        try:
+            result = self._run_payload(dict(leased.payload), settings)
+        except BaseException as exc:
+            self._retire_lease(leased, exc)
+            raise
+        text_task_queue.commit(leased.item_id)
+        return result
+
+    def _retire_lease(self, leased: TextQueueItem, exc: BaseException) -> dict[str, Any]:
+        terminal = is_terminal_nurture_error(exc)
+        reason = f"{type(exc).__name__}: {exc}"[:240]
+        if terminal:
+            outcome = text_task_queue.dead_letter(leased.item_id, reason=reason, terminal=True)
+        else:
+            outcome = text_task_queue.requeue(leased.item_id, reason=reason)
+        # The lease is already resolved above; emitting the audit line must never
+        # be able to mask the real failure that is about to be re-raised.
+        try:
+            logger.warning(
+                {
+                    "event": "text_nurture_item_retired",
+                    "item_id": leased.item_id,
+                    "terminal": terminal,
+                    "attempts": outcome.get("attempts"),
+                    "dead_lettered": bool(outcome.get("dead_lettered")),
+                    "retry_in_sec": outcome.get("retry_in_sec"),
+                    "error": reason[:200],
+                }
+            )
+        except Exception:
+            pass
+        return outcome
+
+    def _run_payload(self, data: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+        self._validate_payload(data)
         token, account = self._resolve_token(data, settings)
         email = str(account.get("email") or data.get("email") or "").strip().lower()
         prompts = self._turn_prompts(data, settings)
@@ -385,15 +485,18 @@ class TextNurtureService:
         total_chars = 0
         completed_turns = 0
         try:
-            if isinstance(backend.account, dict):
-                backend.account = {
-                    **backend.account,
-                    "chat_persist_history": True,
-                    "chat_reuse_conversation": True,
-                }
             for idx, prompt in enumerate(prompts):
-                if idx > 0 and float(settings["turn_gap_sec"]) > 0:
-                    time.sleep(float(settings["turn_gap_sec"]))
+                if idx > 0:
+                    if float(settings["turn_gap_sec"]) > 0:
+                        time.sleep(float(settings["turn_gap_sec"]))
+                    # collect_text/stream_text_deltas close the backend after each turn.
+                    backend = OpenAIBackendAPI(access_token=token)
+                if isinstance(backend.account, dict):
+                    backend.account = {
+                        **backend.account,
+                        "chat_persist_history": True,
+                        "chat_reuse_conversation": True,
+                    }
                 text = collect_text(
                     backend,
                     ConversationRequest(model=model, prompt=prompt, messages=[{"role": "user", "content": prompt}]),
@@ -451,17 +554,51 @@ class TextNurtureService:
                 except Exception:
                     pass
 
+    def _note_tick_ok(self, *, worked: bool) -> None:
+        """Reset the failure streak on real progress, or when the queue went quiet."""
+        quiet = text_task_queue.depth() == 0 and text_task_queue.inflight_depth() == 0
+        if not worked and not quiet:
+            return
+        with self._lock:
+            self._consecutive_errors = 0
+
+    def _note_tick_error(self) -> int:
+        with self._lock:
+            self._consecutive_errors += 1
+            return self._consecutive_errors
+
+    def _loop_wait_sec(self, settings: dict[str, Any]) -> float:
+        base = max(2.0, float(settings.get("poll_interval_sec") or 3.0))
+        with self._lock:
+            streak = int(self._consecutive_errors)
+        if streak <= 0:
+            return base
+        wait = base * (LOOP_BACKOFF_FACTOR ** min(streak, LOOP_BACKOFF_MAX_EXP))
+        return float(min(wait, LOOP_BACKOFF_MAX_SEC))
+
     def _loop(self) -> None:
         while not self._stop.is_set():
             settings = _settings()
             self._running = bool(settings["enabled"] and settings["worker_enabled"])
+            worked = False
             try:
                 self._maybe_auto_enqueue(settings)
-                if self._running and self._budget_ok(settings) and text_task_queue.depth() > 0:
+                # due_depth skips items still sitting out their retry backoff.
+                if self._running and self._budget_ok(settings) and text_task_queue.due_depth() > 0:
+                    worked = True
                     self.process_one()
+                self._note_tick_ok(worked=worked)
             except Exception as exc:
-                logger.warning({"event": "text_nurture_tick_error", "error": str(exc)[:200]})
-            self._stop.wait(timeout=float(settings["poll_interval_sec"]))
+                streak = self._note_tick_error()
+                logger.warning(
+                    {
+                        "event": "text_nurture_tick_error",
+                        "error": str(exc)[:200],
+                        "consecutive_errors": streak,
+                        "queue": text_task_queue.snapshot(),
+                    }
+                )
+            self._stop.wait(timeout=self._loop_wait_sec(settings))
         self._running = False
 
 

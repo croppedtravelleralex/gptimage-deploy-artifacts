@@ -70,6 +70,9 @@ DEFAULT_IMAGE_TASK_QUEUE = {
     "submit_interval_adaptive": True,
     "timeout_pending_poll_secs": 180,
     "timeout_pending_max_attempts": 4,
+    # 同步等待预算中保留给排队/投递/CDN 的比例；其余部分是"首次尝试 + 全部续轮询"的总预算。
+    # 见 docs/28 §B7：阶梯总时长必须严格小于 newapi_image_sync_wait_timeout_secs。
+    "sync_ladder_reserve_ratio": 0.10,
     "generation_poll_timeout_secs": 120,
     "edit_poll_timeout_secs": 300,
     "multi_reference_poll_timeout_secs": 360,
@@ -96,6 +99,14 @@ DEFAULT_IMAGE_PIPELINE = {
     "account_lease_prewarm_enabled": True,
     "release_account_after_sse": True,
     "ss_stage_wall_timeout_secs": 75,
+    # Watchdog forced-release deadline for a whole sS/account lease (SSE + poll +
+    # resolve + download + return window). Must stay well above the largest poll
+    # budget (multi_reference 360s) plus download, otherwise the watchdog would yank
+    # slots out from under legitimate long polls.
+    "ss_slot_deadline_secs": 900,
+    # Max queue wait when acquiring an upload/pS/sS/download slot. Bounds the wait so a
+    # leaked slot degrades into a clean error instead of an unbounded Event.wait().
+    "pool_acquire_timeout_secs": 300,
     "pre_ticket_ttl_secs": 120,
     "pre_ticket_pool_enabled": True,
 }
@@ -110,13 +121,46 @@ DEFAULT_IMAGE_REFERENCE_ASSETS = {
 
 DEFAULT_IMAGE_DEADLOCK_GUARD = {
     "enabled": True,
+    # Fallback only. With cpu_budget_source="auto" the guard reads the real quota
+    # from cgroup v2 /sys/fs/cgroup/cpu.max (v1 and os.cpu_count() next), so this
+    # hand-typed number can no longer silently drift from compose `cpus:`.
+    # Set cpu_budget_source="config" to pin the budget to this value instead
+    # (audit 28 §B8 / fix A4-6).
     "cpu_budget_vcpu": 1.5,
+    "cpu_budget_source": "auto",
     "normal_cpu_p95": 70.0,
     "warning_cpu_p95": 80.0,
     "deadlock_cpu_threshold": 90.0,
     "sustain_seconds": 60.0,
     "recover_cpu_threshold": 65.0,
+    # Dwell time below deadlock_cpu_threshold that clears an already-tripped guard
+    # when CPU never drops to recover_cpu_threshold. Without it, CPU parked in the
+    # 65~90% band froze the image queue indefinitely (audit 28 §B8).
+    "recover_sustain_seconds": 30.0,
     "sample_interval_sec": 2.0,
+}
+
+# Pipeline watchdog (audit 28 §A4 / fixes A3-1, A3-2).
+#   enabled                 -- run the background loop at all
+#   interval_secs           -- loop period; /health still ticks on demand
+#   startup_delay_secs      -- let the app finish booting before the first tick
+#   min_tick_interval_secs  -- coalescing window shared by loop and /health,
+#                              capped internally at interval_secs / 2
+#   force_release_expired   -- drop expired *ledger* leases (near-cosmetic: the
+#                              ledger does not own _image_inflight)
+#   reconcile_force         -- THE TEETH. Lets reconcile_inflight() rewrite the
+#                              live _image_inflight map. Set false to make the
+#                              watchdog report-only without a code change.
+#   reconcile_confirm_ticks -- consecutive ticks a token must stay over-counted
+#                              before any correction is applied
+DEFAULT_IMAGE_PIPELINE_WATCHDOG = {
+    "enabled": True,
+    "interval_secs": 30.0,
+    "startup_delay_secs": 15.0,
+    "min_tick_interval_secs": 5.0,
+    "force_release_expired": True,
+    "reconcile_force": True,
+    "reconcile_confirm_ticks": 3,
 }
 
 DEFAULT_PROXY_RUNTIME_USER_AGENT = (
@@ -263,6 +307,16 @@ def _normalize_bool(value: object, default: bool = False) -> bool:
     return bool(value)
 
 
+def _normalize_ratio(value: object, default: float, *, minimum: float = 0.0, maximum: float = 1.0) -> float:
+    try:
+        normalized = float(value)
+    except (OverflowError, TypeError, ValueError):
+        normalized = float(default)
+    if normalized != normalized:  # NaN
+        normalized = float(default)
+    return max(float(minimum), min(float(maximum), normalized))
+
+
 def _normalize_positive_int(value: object, default: int, minimum: int = 0) -> int:
     try:
         normalized = int(value)
@@ -403,6 +457,12 @@ def _normalize_image_task_queue_settings(value: object) -> dict[str, object]:
         ),
         "timeout_pending_poll_secs": _normalize_positive_int(source.get("timeout_pending_poll_secs"), int(DEFAULT_IMAGE_TASK_QUEUE["timeout_pending_poll_secs"]), 5),
         "timeout_pending_max_attempts": _normalize_positive_int(source.get("timeout_pending_max_attempts"), int(DEFAULT_IMAGE_TASK_QUEUE["timeout_pending_max_attempts"]), 1),
+        "sync_ladder_reserve_ratio": _normalize_ratio(
+            source.get("sync_ladder_reserve_ratio"),
+            float(DEFAULT_IMAGE_TASK_QUEUE["sync_ladder_reserve_ratio"]),
+            minimum=0.0,
+            maximum=0.5,
+        ),
         "generation_poll_timeout_secs": _normalize_positive_int(source.get("generation_poll_timeout_secs"), int(DEFAULT_IMAGE_TASK_QUEUE["generation_poll_timeout_secs"]), 30),
         "edit_poll_timeout_secs": _normalize_positive_int(source.get("edit_poll_timeout_secs"), int(DEFAULT_IMAGE_TASK_QUEUE["edit_poll_timeout_secs"]), 30),
         "multi_reference_poll_timeout_secs": _normalize_positive_int(source.get("multi_reference_poll_timeout_secs"), int(DEFAULT_IMAGE_TASK_QUEUE["multi_reference_poll_timeout_secs"]), 30),
@@ -479,6 +539,16 @@ def _normalize_image_pipeline_settings(value: object) -> dict[str, object]:
             int(DEFAULT_IMAGE_PIPELINE["ss_stage_wall_timeout_secs"]),
             5,
         ),
+        "ss_slot_deadline_secs": _normalize_positive_int(
+            source.get("ss_slot_deadline_secs"),
+            int(DEFAULT_IMAGE_PIPELINE["ss_slot_deadline_secs"]),
+            30,
+        ),
+        "pool_acquire_timeout_secs": _normalize_positive_int(
+            source.get("pool_acquire_timeout_secs"),
+            int(DEFAULT_IMAGE_PIPELINE["pool_acquire_timeout_secs"]),
+            5,
+        ),
         "pre_ticket_ttl_secs": _normalize_positive_int(
             source.get("pre_ticket_ttl_secs"),
             int(DEFAULT_IMAGE_PIPELINE["pre_ticket_ttl_secs"]),
@@ -533,12 +603,49 @@ def _normalize_image_deadlock_guard_settings(value: object) -> dict[str, object]
     return {
         "enabled": _normalize_bool(source.get("enabled"), bool(DEFAULT_IMAGE_DEADLOCK_GUARD["enabled"])),
         "cpu_budget_vcpu": _float_value("cpu_budget_vcpu", float(DEFAULT_IMAGE_DEADLOCK_GUARD["cpu_budget_vcpu"]), 0.1),
+        "cpu_budget_source": (
+            "config"
+            if str(source.get("cpu_budget_source") or "").strip().lower() == "config"
+            else str(DEFAULT_IMAGE_DEADLOCK_GUARD["cpu_budget_source"])
+        ),
         "normal_cpu_p95": _float_value("normal_cpu_p95", float(DEFAULT_IMAGE_DEADLOCK_GUARD["normal_cpu_p95"]), 1.0),
         "warning_cpu_p95": _float_value("warning_cpu_p95", float(DEFAULT_IMAGE_DEADLOCK_GUARD["warning_cpu_p95"]), 1.0),
         "deadlock_cpu_threshold": _float_value("deadlock_cpu_threshold", float(DEFAULT_IMAGE_DEADLOCK_GUARD["deadlock_cpu_threshold"]), 1.0),
         "sustain_seconds": _float_value("sustain_seconds", float(DEFAULT_IMAGE_DEADLOCK_GUARD["sustain_seconds"]), 1.0),
         "recover_cpu_threshold": _float_value("recover_cpu_threshold", float(DEFAULT_IMAGE_DEADLOCK_GUARD["recover_cpu_threshold"]), 1.0),
+        "recover_sustain_seconds": _float_value("recover_sustain_seconds", float(DEFAULT_IMAGE_DEADLOCK_GUARD["recover_sustain_seconds"]), 0.0),
         "sample_interval_sec": _float_value("sample_interval_sec", float(DEFAULT_IMAGE_DEADLOCK_GUARD["sample_interval_sec"]), 0.5),
+    }
+
+
+def _normalize_image_pipeline_watchdog_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+
+    def _float_value(key: str, minimum: float) -> float:
+        default = float(DEFAULT_IMAGE_PIPELINE_WATCHDOG[key])
+        try:
+            return max(minimum, float(source.get(key, default) if source.get(key) is not None else default))
+        except (TypeError, ValueError):
+            return default
+
+    def _bool_value(key: str) -> bool:
+        return _normalize_bool(source.get(key), bool(DEFAULT_IMAGE_PIPELINE_WATCHDOG[key]))
+
+    try:
+        confirm_ticks = int(source.get("reconcile_confirm_ticks") or DEFAULT_IMAGE_PIPELINE_WATCHDOG["reconcile_confirm_ticks"])
+    except (TypeError, ValueError):
+        confirm_ticks = int(DEFAULT_IMAGE_PIPELINE_WATCHDOG["reconcile_confirm_ticks"])
+
+    return {
+        "enabled": _bool_value("enabled"),
+        "interval_secs": _float_value("interval_secs", 1.0),
+        "startup_delay_secs": _float_value("startup_delay_secs", 0.0),
+        "min_tick_interval_secs": _float_value("min_tick_interval_secs", 0.0),
+        "force_release_expired": _bool_value("force_release_expired"),
+        "reconcile_force": _bool_value("reconcile_force"),
+        # At least 2 samples: a single-tick over-count is indistinguishable from
+        # a task that is between acquiring its slot and being marked RUNNING.
+        "reconcile_confirm_ticks": max(2, min(100, confirm_ticks)),
     }
 
 
@@ -891,6 +998,11 @@ DEFAULT_WEBSHARE_CF_SCAN_SETTINGS: dict[str, object] = {
     "timezone": "Asia/Singapore",
     "startup_delay_sec": 120,
     "probe_timeout_sec": 45.0,
+    # Only CF-passing Webshare nodes may carry image traffic / be assigned.
+    "require_cf_ok_for_image": True,
+    "probe_on_assign": True,
+    "scan_stale_sec": 86400,
+    "block_unscanned_for_schedule": True,
 }
 
 DEFAULT_ACCOUNT_WARMUP_SETTINGS: dict[str, object] = {
@@ -907,9 +1019,24 @@ DEFAULT_ACCOUNT_WARMUP_SETTINGS: dict[str, object] = {
     "rotate_per_tick": 0,
     "hot_refresh_min_interval_sec": 300.0,
     "schedulable_only": True,
-    # 连续 CF 探活失败后暂停对该号的 warmup 探活（默认 24h）
+    # 连续 CF 探活失败后暂停对该号的 warmup 探活。
+    # A2-1：旧默认 86400s(24h) 下，实测封禁到达率 1.67 个/小时 × 24h ≈ 40 个在途封禁
+    # > 全池 19 个账号，该反馈环的不动点是可调度归零。改为分钟级基准 + 阶梯退避，
+    # 上限 3600s：最坏情形 1.67 × 1h ≈ 1.7 个在途封禁（占 19 池的 8.8%）。
     "cf_fail_max_streak": 2,
-    "cf_block_sec": 86400.0,
+    "cf_block_sec": 600.0,
+    # 阶梯退避上限；同时兼作"退避记忆"衰减窗口：清白超过该时长后 repeat 计数归零。
+    "cf_block_max_sec": 3600.0,
+    "cf_block_backoff_factor": 2.0,
+    # streak 滑动窗口：早于该时长的历史失败不再计入"连败"。
+    # 旧实现无窗口无衰减，相隔任意时长的两次失败也会累积成 streak。
+    # 600s = 10× tick(60s) = 2× hot_refresh(300s)，两次真正连续的探活失败仍会累积。
+    "cf_fail_window_sec": 600.0,
+    # A2-2 主动自愈：被封号按此间隔复探，每 tick 最多复探 N 个，避免猛打死号 / 重新制造 CF 压力。
+    "cf_reprobe_interval_sec": 300.0,
+    "cf_reprobe_max_per_tick": 2,
+    # 单次探活失败后的"仅探活"冷却（不影响派发）：缓解 max_hot 常年大于存活数导致的反复探活。
+    "cf_fail_probe_cooldown_sec": 120.0,
 }
 
 
@@ -1203,6 +1330,22 @@ def _normalize_webshare_cf_scan_settings(value: object) -> dict[str, object]:
             10.0,
             float(source.get("probe_timeout_sec", DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["probe_timeout_sec"]) or 45.0),
         ),
+        "require_cf_ok_for_image": _normalize_bool(
+            source.get("require_cf_ok_for_image"),
+            bool(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["require_cf_ok_for_image"]),
+        ),
+        "probe_on_assign": _normalize_bool(
+            source.get("probe_on_assign"),
+            bool(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["probe_on_assign"]),
+        ),
+        "scan_stale_sec": max(
+            300.0,
+            float(source.get("scan_stale_sec", DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["scan_stale_sec"]) or 86400),
+        ),
+        "block_unscanned_for_schedule": _normalize_bool(
+            source.get("block_unscanned_for_schedule"),
+            bool(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["block_unscanned_for_schedule"]),
+        ),
     }
 
 
@@ -1211,6 +1354,26 @@ def _normalize_account_warmup_settings(value: object) -> dict[str, object]:
     depth = str(source.get("depth") or DEFAULT_ACCOUNT_WARMUP_SETTINGS["depth"]).strip().lower()
     if depth not in {"bootstrap", "requirements"}:
         depth = str(DEFAULT_ACCOUNT_WARMUP_SETTINGS["depth"])
+    # A2-1 上限先算出来，cf_block_sec 再夹进 [300, 上限]。
+    # 向后兼容：历史配置里持久化的 cf_block_sec=86400 会被自动压到新上限，
+    # 无需人工改配置文件即可退出"24h 封禁 → 可调度归零"的反馈环。
+    cf_block_max_sec = min(
+        21600.0,
+        max(
+            300.0,
+            float(
+                source.get("cf_block_max_sec", DEFAULT_ACCOUNT_WARMUP_SETTINGS["cf_block_max_sec"])
+                or 3600.0
+            ),
+        ),
+    )
+    cf_block_sec = min(
+        cf_block_max_sec,
+        max(
+            300.0,
+            float(source.get("cf_block_sec", DEFAULT_ACCOUNT_WARMUP_SETTINGS["cf_block_sec"]) or 600.0),
+        ),
+    )
     return {
         "enabled": _normalize_bool(source.get("enabled"), bool(DEFAULT_ACCOUNT_WARMUP_SETTINGS["enabled"])),
         "interval_sec": max(
@@ -1284,9 +1447,55 @@ def _normalize_account_warmup_settings(value: object) -> dict[str, object]:
                 1,
             ),
         ),
-        "cf_block_sec": max(
-            300.0,
-            float(source.get("cf_block_sec", DEFAULT_ACCOUNT_WARMUP_SETTINGS["cf_block_sec"]) or 86400.0),
+        "cf_block_sec": cf_block_sec,
+        "cf_block_max_sec": cf_block_max_sec,
+        "cf_block_backoff_factor": min(
+            8.0,
+            max(
+                1.0,
+                float(
+                    source.get(
+                        "cf_block_backoff_factor",
+                        DEFAULT_ACCOUNT_WARMUP_SETTINGS["cf_block_backoff_factor"],
+                    )
+                    or 2.0
+                ),
+            ),
+        ),
+        "cf_fail_window_sec": max(
+            60.0,
+            float(
+                source.get("cf_fail_window_sec", DEFAULT_ACCOUNT_WARMUP_SETTINGS["cf_fail_window_sec"])
+                or 600.0
+            ),
+        ),
+        "cf_reprobe_interval_sec": max(
+            60.0,
+            float(
+                source.get(
+                    "cf_reprobe_interval_sec",
+                    DEFAULT_ACCOUNT_WARMUP_SETTINGS["cf_reprobe_interval_sec"],
+                )
+                or 300.0
+            ),
+        ),
+        "cf_reprobe_max_per_tick": max(
+            0,
+            _normalize_positive_int(
+                source.get("cf_reprobe_max_per_tick"),
+                int(DEFAULT_ACCOUNT_WARMUP_SETTINGS["cf_reprobe_max_per_tick"]),
+                0,
+            ),
+        ),
+        "cf_fail_probe_cooldown_sec": max(
+            0.0,
+            float(
+                source.get(
+                    "cf_fail_probe_cooldown_sec",
+                    DEFAULT_ACCOUNT_WARMUP_SETTINGS["cf_fail_probe_cooldown_sec"],
+                )
+                or 0.0
+            ),
         ),
     }
 
@@ -1494,12 +1703,45 @@ class ConfigStore:
 
     @property
     def image_ss_stage_wall_timeout_secs(self) -> float:
-        """Wall clock from acquire_ss until stream end; default 75s."""
+        """Fast-fail wall for the SSE streaming phase only; default 75s.
+
+        Armed at ``acquire_ss`` and disarmed when the SSE stream ends. It must NOT be
+        used to bound the conversation poll (120/300/360s), URL resolve, download or
+        return window — see ``PipelineRun.assert_ss_wall_ok`` and audit 28 §B1.
+        For the whole-lease watchdog deadline use ``image_ss_slot_deadline_secs``.
+        """
         try:
             settings = self.get_image_pipeline_settings()
             return max(5.0, float(settings.get("ss_stage_wall_timeout_secs") or 75))
         except (TypeError, ValueError):
             return 75.0
+
+    @property
+    def image_ss_slot_deadline_secs(self) -> float:
+        """Watchdog forced-release deadline for a whole sS/account lease; default 900s.
+
+        Covers SSE + poll + resolve + download + return window, so it must stay above
+        ``image_multi_reference_poll_timeout_secs`` plus download headroom.
+        """
+        try:
+            settings = self.get_image_pipeline_settings()
+            return max(30.0, float(settings.get("ss_slot_deadline_secs") or 900))
+        except (TypeError, ValueError):
+            return 900.0
+
+    @property
+    def image_pool_acquire_timeout_secs(self) -> float:
+        """Max queue wait for an upload/pS/sS/download slot; default 300s.
+
+        ``SlotPool.acquire``/``SemaphorePool.acquire`` fall back to an unbounded
+        ``Event.wait()`` when no timeout is supplied, so a single leaked slot used to
+        wedge every subsequent image request forever (audit 28 §B2).
+        """
+        try:
+            settings = self.get_image_pipeline_settings()
+            return max(5.0, float(settings.get("pool_acquire_timeout_secs") or 300))
+        except (TypeError, ValueError):
+            return 300.0
 
     @property
     def image_pre_conversation_max_attempts(self) -> int:
@@ -1557,11 +1799,37 @@ class ConfigStore:
 
     @property
     def image_poll_max_upstream_gets(self) -> int:
-        """Hard cap on conversation document GETs per logical poll loop."""
+        """Legacy hard cap on conversation GETs per poll loop (default 24).
+
+        NOTE (audit 28 §B6 / fix A4-4): 24 GETs × 3s interval ≈ 82~120s of wall
+        clock, which made the configured 300s/360s poll budgets unreachable. The
+        poll loop now uses ``image_poll_max_upstream_gets_explicit``: when the key
+        is absent the cap is derived from the wall budget so the wall binds. This
+        property remains the value reported by ``get()`` and the fallback for
+        callers that want a plain int.
+        """
         try:
             return max(1, int(self.data.get("image_poll_max_upstream_gets", 24)))
         except (TypeError, ValueError):
             return 24
+
+    @property
+    def image_poll_max_upstream_gets_explicit(self) -> int | None:
+        """``image_poll_max_upstream_gets`` when the operator set it, else ``None``.
+
+        ``None`` means "derive the GET cap from the wall budget" (fix A4-4). An
+        explicitly configured value is still honoured verbatim so existing
+        deployments do not silently change behaviour.
+        """
+        if "image_poll_max_upstream_gets" not in self.data:
+            return None
+        raw = self.data.get("image_poll_max_upstream_gets")
+        if raw is None or raw is False or raw == "":
+            return None
+        try:
+            return max(1, int(raw))
+        except (TypeError, ValueError):
+            return None
 
     @property
     def image_poll_max_tasks_gets(self) -> int:
@@ -1984,6 +2252,7 @@ class ConfigStore:
         data["image_task_queue"] = self.get_image_task_queue_settings()
         data["image_reference_assets"] = self.get_image_reference_assets_settings()
         data["image_deadlock_guard"] = self.get_image_deadlock_guard_settings()
+        data["image_pipeline_watchdog"] = self.get_image_pipeline_watchdog_settings()
         data["proxy_runtime"] = self.get_public_proxy_runtime_settings()
         data["third_party_apps"] = self.get_third_party_apps_settings()
         data["account_refresh_all"] = self.get_account_refresh_all_settings()
@@ -2091,6 +2360,10 @@ class ConfigStore:
             next_data["image_deadlock_guard"] = _normalize_image_deadlock_guard_settings(
                 next_data.get("image_deadlock_guard")
             )
+        if "image_pipeline_watchdog" in next_data:
+            next_data["image_pipeline_watchdog"] = _normalize_image_pipeline_watchdog_settings(
+                next_data.get("image_pipeline_watchdog")
+            )
         if "third_party_apps" in next_data:
             next_data["third_party_apps"] = _normalize_third_party_apps_settings(next_data.get("third_party_apps"))
         if "account_refresh_all" in next_data:
@@ -2147,6 +2420,9 @@ class ConfigStore:
 
     def get_image_deadlock_guard_settings(self) -> dict[str, object]:
         return _normalize_image_deadlock_guard_settings(self.data.get("image_deadlock_guard"))
+
+    def get_image_pipeline_watchdog_settings(self) -> dict[str, object]:
+        return _normalize_image_pipeline_watchdog_settings(self.data.get("image_pipeline_watchdog"))
 
     def get_storage_backend(self) -> StorageBackend:
         """获取存储后端实例（单例）"""

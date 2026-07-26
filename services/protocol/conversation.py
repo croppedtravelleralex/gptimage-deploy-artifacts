@@ -1357,6 +1357,13 @@ def stream_image_outputs(
             request.pipeline_run.mark_sse_stream_end()
         except Exception:
             pass
+        try:
+            # SSE 阶段结束 → 解除 sS 快速失败墙钟。后续轮询（120/300/360s 预算）、
+            # URL resolve、下载、回传窗口各有自己的预算，不能被 75s 墙钟盖住，
+            # 否则上游已生成/已计费/已下载的图会在成功那一刻被丢弃（审计 28 §B1）。
+            request.pipeline_run.note_ss_stream_phase_end(image_index=index)
+        except Exception:
+            pass
     if request.progress_callback:
         request.progress_callback("image_stream_resolve_start")
     if message and not file_ids and not sediment_ids and last.get("blocked"):
@@ -1758,6 +1765,13 @@ def stream_codex_image_outputs(
         size=request.size,
         quality=request.quality,
     )))
+    if request.pipeline_run is not None:
+        try:
+            # 与 stream_image_outputs 同一纪律：上游响应消费完即解除 sS 墙钟，
+            # 剩下的格式化 / 回传窗口不受墙钟约束（审计 28 §B1）。
+            request.pipeline_run.note_ss_stream_phase_end(image_index=index)
+        except Exception:
+            pass
     if not images:
         raise ImageGenerationError("No image result found in response")
     try:
@@ -1809,6 +1823,10 @@ def _generate_single_image(
     poll_timeout_retry_count = 0
     pre_conversation_transient_count = 0
     account_email = ""
+    # 已知的上游 conversation_id。一旦上游建立了会话，任何终态错误都必须带上它，
+    # 否则 image_task_service 的 timeout_pending 续轮询分支（要求 conversation_id
+    # 非空）被短路，已生成的图无从恢复（审计 28 §B1 第 5-6 步）。
+    last_conversation_id = ""
     pipeline_run = request.pipeline_run
 
     while True:
@@ -1897,6 +1915,10 @@ def _generate_single_image(
                 stream_fn = stream_codex_image_outputs if is_codex_image_model(request.model) else stream_image_outputs
                 outputs: list[ImageOutput] = []
                 for output in stream_fn(backend, request, index, total):
+                    # 必须在墙钟检查之前记录：墙钟正是在成功结果 yield 的那一刻抛超时，
+                    # 此时 conversation_id 只在这个 output 上。
+                    if output.conversation_id:
+                        last_conversation_id = output.conversation_id
                     if pipeline_run is not None:
                         pipeline_run.assert_ss_wall_ok(image_index=index)
                     if account_email and not output.account_email:
@@ -1955,7 +1977,7 @@ def _generate_single_image(
                 account_service.mark_image_result(token, False, error=exc)
                 if account_email:
                     setattr(exc, "account_email", account_email)
-                conversation_id = _conversation_id_from_exception(exc)
+                conversation_id = _conversation_id_from_exception(exc) or last_conversation_id
                 if conversation_id:
                     logger.warning({
                         "event": "image_poll_token_invalid_timeout_pending",
@@ -1987,14 +2009,14 @@ def _generate_single_image(
                 raise ImageGenerationError(
                     image_stream_error_message(str(exc)),
                     account_email=account_email,
-                    conversation_id=getattr(exc, "conversation_id", ""),
+                    conversation_id=_conversation_id_from_exception(exc) or last_conversation_id,
                     access_token=token,
                 ) from exc
             except ImagePollTimeoutError as exc:
                 account_service.mark_image_result(token, False, error=exc)
                 if account_email:
                     setattr(exc, "account_email", account_email)
-                conversation_id = str(getattr(exc, "conversation_id", "") or "").strip()
+                conversation_id = str(getattr(exc, "conversation_id", "") or "").strip() or last_conversation_id
                 if conversation_id:
                     logger.warning({
                         "event": "image_poll_timeout_pending",
@@ -2057,7 +2079,7 @@ def _generate_single_image(
                     error_type="invalid_request_error",
                     code="content_policy_violation",
                     account_email=account_email,
-                    conversation_id=getattr(exc, "conversation_id", ""),
+                    conversation_id=_conversation_id_from_exception(exc) or last_conversation_id,
                 ) from exc
             except ImageGenerationError as exc:
                 account_service.mark_image_result(token, False, error=exc)
@@ -2096,7 +2118,7 @@ def _generate_single_image(
                         error_type="server_error",
                         code="upstream_text_reply",
                         account_email=account_email,
-                        conversation_id=getattr(exc, "conversation_id", ""),
+                        conversation_id=_conversation_id_from_exception(exc) or last_conversation_id,
                         access_token=token,
                     ) from exc
                 logger.warning({
@@ -2165,7 +2187,8 @@ def _generate_single_image(
                     raise ImageGenerationError(
                         image_stream_error_message(last_error),
                         account_email=account_email,
-                        conversation_id="",
+                        conversation_id=_conversation_id_from_exception(exc) or last_conversation_id,
+                        access_token=token,
                     ) from exc
                 if not emitted_for_token and is_pre_conversation_transient_error(last_error):
                     pre_conversation_transient_count += 1
@@ -2198,7 +2221,15 @@ def _generate_single_image(
                         "index": index,
                         "error": last_error[:200],
                     })
-                raise ImageGenerationError(image_stream_error_message(last_error), account_email=account_email, conversation_id="") from exc
+                # 禁止清空 conversation_id：上游已建会话时必须把它带出去，
+                # 否则 image_task_service:1668 的 timeout_pending 续轮询分支被短路，
+                # 已生成（已计费、已下载）的图直接终态 ERROR（审计 28 §B1）。
+                raise ImageGenerationError(
+                    image_stream_error_message(last_error),
+                    account_email=account_email,
+                    conversation_id=_conversation_id_from_exception(exc) or last_conversation_id,
+                    access_token=token,
+                ) from exc
             finally:
                 close = getattr(backend, "close", None)
                 if callable(close):
