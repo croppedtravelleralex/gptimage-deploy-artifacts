@@ -77,6 +77,9 @@ def run_generation_sync(
     base_url: str,
     n: int = 1,
     preferred_account_email: str = "",
+    prompt_enhance: bool = False,
+    prompt_enhance_locale: str = "en",
+    multi_image_mode: str = "fast",
 ) -> dict[str, Any]:
     task_id = new_client_task_id()
     prefer = str(preferred_account_email or _preferred_account_email() or "").strip()
@@ -91,6 +94,9 @@ def run_generation_sync(
         base_url=base_url,
         n=n,
         preferred_account_email=prefer,
+        prompt_enhance=bool(prompt_enhance),
+        prompt_enhance_locale=str(prompt_enhance_locale or "en"),
+        multi_image_mode=str(multi_image_mode or "fast"),
     )
     task = image_task_service.wait_for_result(
         identity,

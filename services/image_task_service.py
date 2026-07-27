@@ -1969,21 +1969,28 @@ class ImageTaskService:
                 pipeline_run,
             )
         finally:
-            self._finalize_pipeline_run(key, pipeline_run)
-            self._finalize_schedule_trace(key)
+            phase_timings = self._finalize_pipeline_run(key, pipeline_run)
+            trace_payload = self._finalize_schedule_trace(key)
             schedule_trace.unbind(trace_token)
+            pending = outcome.get("pending_call_log")
+            if isinstance(pending, dict):
+                if isinstance(phase_timings, dict) and phase_timings:
+                    pending["phase_timings_ms"] = phase_timings
+                if isinstance(trace_payload, dict) and trace_payload:
+                    pending["schedule_trace"] = trace_payload
         self._emit_pending_call_log(key, outcome, identity, mode, model, started)
 
-    def _finalize_schedule_trace(self, key: str) -> None:
+    def _finalize_schedule_trace(self, key: str) -> dict[str, Any] | None:
         trace = schedule_trace.pop(key)
         if trace is None:
-            return
+            return None
         try:
             trace.emit("task_terminal")
             payload = trace.finish()
             self._update_task(key, schedule_trace=payload)
+            return payload if isinstance(payload, dict) else None
         except Exception:
-            pass
+            return None
 
     def _emit_pending_call_log(
         self,
@@ -2014,13 +2021,19 @@ class ImageTaskService:
             task_key=key,
             usage=usage,
             traffic_fields=_call_log_traffic_fields(pending),
+            phase_timings_ms=pending.get("phase_timings_ms")
+            if isinstance(pending.get("phase_timings_ms"), dict)
+            else None,
+            schedule_trace_payload=pending.get("schedule_trace")
+            if isinstance(pending.get("schedule_trace"), dict)
+            else None,
         )
 
-    def _finalize_pipeline_run(self, key: str, pipeline_run: object | None) -> None:
+    def _finalize_pipeline_run(self, key: str, pipeline_run: object | None) -> dict[str, int] | None:
         if pipeline_run is None:
             # Nothing was ever published for this key (pipeline disabled, or begin_run
             # failed), so there is no registry entry to reclaim.
-            return
+            return None
         with self._lock:
             self._active_pipeline_runs.pop(key, None)
         try:
@@ -2028,8 +2041,9 @@ class ImageTaskService:
             # here rather than a double-decrement of the global admission counter.
             timings = pipeline_run.finish().to_dict()
             self._update_task(key, phase_timings_ms=timings, pipeline_phase="delivered")
+            return timings if isinstance(timings, dict) else None
         except Exception:
-            pass
+            return None
 
     def _task_call_log_urls(self, task: dict[str, Any]) -> list[str]:
         data = task.get("data")
@@ -2848,6 +2862,8 @@ class ImageTaskService:
         task_key: str = "",
         usage: dict[str, Any] | None = None,
         traffic_fields: dict[str, int] | None = None,
+        phase_timings_ms: dict[str, int] | None = None,
+        schedule_trace_payload: dict[str, Any] | None = None,
     ) -> None:
         endpoint = "/v1/images/edits" if mode == "edit" else "/v1/images/generations"
         summary_prefix = "图生图" if mode == "edit" else "文生图"
@@ -2886,10 +2902,14 @@ class ImageTaskService:
                 value = task.get(timing_field)
                 if value is not None and value != "":
                     detail[timing_field] = value
-            phase_timings = task.get("phase_timings_ms")
-            if isinstance(phase_timings, dict) and phase_timings:
-                detail["phase_timings_ms"] = dict(phase_timings)
-                for phase_key, phase_ms in phase_timings.items():
+            resolved_phase_timings = (
+                phase_timings_ms
+                if isinstance(phase_timings_ms, dict) and phase_timings_ms
+                else task.get("phase_timings_ms")
+            )
+            if isinstance(resolved_phase_timings, dict) and resolved_phase_timings:
+                detail["phase_timings_ms"] = dict(resolved_phase_timings)
+                for phase_key, phase_ms in resolved_phase_timings.items():
                     if not str(phase_key).endswith("_ms"):
                         continue
                     try:
@@ -2904,9 +2924,13 @@ class ImageTaskService:
             pipeline_phase = _clean(task.get("pipeline_phase"))
             if pipeline_phase:
                 detail["pipeline_phase"] = pipeline_phase
-            schedule_trace_payload = task.get("schedule_trace")
-            if isinstance(schedule_trace_payload, dict) and schedule_trace_payload:
-                detail["schedule_trace"] = schedule_trace_payload
+            resolved_schedule_trace = (
+                schedule_trace_payload
+                if isinstance(schedule_trace_payload, dict) and schedule_trace_payload
+                else task.get("schedule_trace")
+            )
+            if isinstance(resolved_schedule_trace, dict) and resolved_schedule_trace:
+                detail["schedule_trace"] = resolved_schedule_trace
         resolved_usage: dict[str, Any] | None = None
         if isinstance(usage, dict) and usage:
             resolved_usage = usage

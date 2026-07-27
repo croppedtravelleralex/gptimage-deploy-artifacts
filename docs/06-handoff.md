@@ -23,18 +23,17 @@
 
 - **新号**：`16` + `outlook_camoufox_stable_register.py` → `identity_isolated` → 成熟后 `verified_ready`
 - **生图栈**：curl_cffi + VM Turnstile + sticky Webshare；**不做**真 Chrome 开票（`22` §9）
-- **验收**：STAB-A1 API serial5 **5/5**；multiacct conc10 **10/10**（`STAB-conc10-20260724T110344Z`）；**PROD serial10 10/10** + **PROD conc10 10/10**（`PROD-conc10-20260724T150152Z`；对比：conc10 新增 sS 8.6% + task_queue 9.7%，SSE 仍 ~78%）
-- **CF**：`17` — 换出口/暖号/探活；非 FlareSolverr 根方案
-- **暖号**：`account_warmup` 已部署；`GET /api/ops/warmup/status`
-- **可观测性**：VERIFY-001 pass；call log 阶段 chips + token/traffic
+- **验收**：mixed conc10 **10/10** + conc20 **20/20**；`b64_json` vs `url` 对照见 `02` §六号池（同步回包 1.8MB vs 0.7KB）
+- **监控**：`/health` 三件套正常；call log phase 竞态已修并部署
 
 ## 本周（见 `plan.md` / `30-throughput-10-plan.md`）
 
 | 优先级 | 任务 | 状态 |
 |--------|------|------|
 | **P0** | **THROUGHPUT-10**：submit_workers=10、sS=10、队列背压 requeue、带宽追踪 | 代码已落地 |
-| **P0** | **住宅 20 + 机房 100 双池** + 分配时 CF live probe | 本地 secret 已安装 |
-| **P0** | **溯源修复** P29-1/P29-2 + conc10 验收 | 部署脚本已备 |
+| **P0** | **住宅 20 + 机房 100 双池** + 分配时 CF live probe | secret 已装；**20/20 Panda 探活通过**（`captures/infra/webshare20-panda-probe-bandwidth-20260727.md`） |
+| **P0** | **溯源修复** P29-1/P29-2 + conc10/15/20 验收 | **conc10/15/20 已通过** |
+| **P0** | call log phase 竞态 + `prompt_enhance` 同步透传 | **已部署** `deploy/codex/phase-log-fix-20260727` |
 | **P0** | 额度 60s 循环 + `mark_image_result` 事件刷新 | 已接线 |
 | P1 | Ops health：`slot_topology` / `proxy_pool` / `bandwidth` | 已暴露 |
 | **P2** | 账号/基础设施 Rust（**N>50 后**） |
@@ -52,6 +51,7 @@ Panda build/scp 发业务码 · Panda IP 作 backend 出口 · 宣称协议绕�
 | 主题 | 文件 |
 |------|------|
 | 池面事实 | `02-current-state.md` |
+| **Webshare20 探活 / Panda 带宽** | `captures/infra/webshare20-panda-probe-bandwidth-20260727.md` |
 | 待办池 | `04-improvement-backlog.md` |
 | 协议 HAR | `captures/spa/README.md` §Camoufox |
 | 调度 | `21-image-scheduling-and-pipeline.md` |

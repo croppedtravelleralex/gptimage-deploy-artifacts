@@ -215,6 +215,9 @@ class ImageGenerationRequest(BaseModel):
     client_task_id: str | None = None
     panda_async: bool | None = None
     panda_task_id: str | None = None
+    prompt_enhance: bool = False
+    prompt_enhance_locale: str = "en"
+    multi_image_mode: str = "fast"
 
 
 class ChatCompletionRequest(BaseModel):
@@ -531,6 +534,9 @@ def create_router() -> APIRouter:
             "base_url": payload["base_url"],
             "n": body.n,
             "preferred_account_email": preferred_email,
+            "prompt_enhance": bool(body.prompt_enhance),
+            "prompt_enhance_locale": body.prompt_enhance_locale,
+            "multi_image_mode": body.multi_image_mode,
         }
         return await _run_image_sync_or_auto_async_call(
             call,

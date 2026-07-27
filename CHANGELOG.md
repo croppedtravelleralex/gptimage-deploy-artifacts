@@ -2,7 +2,16 @@
 
 ## Unreleased
 
-+ [架构/THROUGHPUT-10] 2026-07-27：`submit_workers=10`、`per_user_running=10`、`max_hot=17`；管线满时任务 requeue 而非 ERROR；`slot_topology`/`proxy_pool`/`bandwidth` health 扩展；分配代理时 CF live probe；`mark_image_result` 触发额度事件刷新；住宅 20 + 机房 100 双池 secret 安装脚本。
++ [探测/运维] 2026-07-27：Webshare SG 住宅 **20/20** Panda 串行探活全通过（本机无白名单不可外推）；专页 `docs/captures/infra/webshare20-panda-probe-bandwidth-20260727.md`；脚本 `_tmp_panda_webshare20_serial_probe.py`；证据 `data/runlogs/webshare20_panda_batch_1_19.json`。
++ [运维] 2026-07-27：Panda 公网带宽实测（无代理）——出 **~33Mbps** / 入 **~194Mbps**，与腾讯云公网监控一致；套餐 30Mbps 仅指出网封顶。见同上专页。
++ [chore/web_dist] 2026-07-27：`web_dist` 纳入 git（152 文件 + manifest），git-only 部署前端不再破碎。
++ [fix/sync-admission] 2026-07-27：同步 `/v1/images/*` 满席时阻塞排队（`_await_image_sync_admission`），不再立即 429；`admission_max=10` / `max_eta=540s`。
++ [验收] 2026-07-27：混合 prompt **conc10 10/10** + **conc20 20/20**（`PROD-mixed-conc*-20260727T*`）；脚本 `_tmp_run_mixed_prompt_conc_test.py`。
++ [修复/可观测] 2026-07-27：call log `phase_timings_ms` 竞态——`compact_task_heavy_fields` 早于 `_emit_pending_call_log` 清空 task；改为 `pending_call_log` 携带 finalize 快照。
++ [修复/API] 2026-07-27：同步 `/v1/images/generations` 透传 `prompt_enhance` / `multi_image_mode`（混合测试 short_ps 此前未真正走 pS）。
++ [验收] 2026-07-27：`b64_json` vs `url` conc10 对照——同步响应体 mean **1.88MB vs 701B**；失败均为上游 429，非带宽；见 `PROD-mixed-*-20260727T034302Z/034650Z`。
++ [部署] 2026-07-27：`deploy/codex/phase-log-fix-20260727` — call log phase 竞态修复 + `prompt_enhance` 透传。
++ [文档] 2026-07-27：澄清 `url` 回包语义（非禁止显示，而是拆分同步回包与二次 GET）。
 + [修复/A1-6] 2026-07-27：`resolve_binding_matrix` hash fallback 限定周末安全预设子集。
 + [修复/yumail] 2026-07-27：西语 OTP 正则 + pool `subject_contains` 默认放宽。
 + [修复/A4-3] 2026-07-27：`_image_slot_available_locked` 与候选池 binding 席位语义对齐。

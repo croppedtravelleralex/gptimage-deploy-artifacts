@@ -1,6 +1,6 @@
 # 当前状态
 
-最后更新：**2026-07-27 09:30**（Asia/Shanghai）
+最后更新：**2026-07-27 12:00**（Asia/Shanghai）
 来源：`29-prod-provenance-audit-20260726.md`（溯源审计）+ 5 路架构分析（slots/proxy/quota/monitor/deploy）
 
 > 下方为本次整体更新后的权威事实。历史流水已归档 `docs/logs/2026/2026-07.md` 与 `docs/archive/`。
@@ -218,16 +218,51 @@ warmup 稳态上游负载: ~4 探测/min ≈ 8 上游请求/min（17 账号 / 10
 
 ## 六号池（带宽与可观测性）
 
-### 每图字节流量
+### 每图字节流量（文生图）
 
-| 阶段 | 每图字节 | 并发数 | 文件:行 |
-|------|---------|--------|---------|
-| SSE 流 | ~0（仅元数据/URL） | 10（sS 池） | 流处理 |
-| 下载 | **~2.5MB** | 8（下载信号量） | `orchestrator.py:451-466` |
-| 存储写入 | ~2.5MB | 序列化 | SQLite json blob |
-| 客户端响应 | ~3.3MB（base64 膨胀） | 序列化 | 轮询 |
+| 阶段 | 方向（Panda 公网口） | 每图字节 | 说明 |
+|------|---------------------|---------|------|
+| 客户端请求 | 入站（下行） | ~KB | prompt JSON |
+| SSE 开票 | 出站（上行） | ~KB | 元数据 |
+| 上游拉图 | **入站（下行）** | **~2.5 MB** | `download_image_bytes`；`bandwidth_tracker` 只统计这段 |
+| 存盘 | 本地 | ~2.5 MB | `image_storage_service.save` |
+| **API 同步回包 `b64_json`** | **出站（上行）** | **~3.3 MB** | JSON 内嵌 base64（默认）；当前实现**同时带 `url` 字段** |
+| **API 同步回包 `url`** | **出站（上行）** | **~0.5 KB** | 仅返回 `https://…/images/YYYY/MM/DD/xxx.png` |
+| 客户端拉图（仅 `url` 模式） | **出站（上行）** | **~2.5 MB** | `GET /images/{path}`，无 base64 膨胀 |
 
-**每图总字节**: ~5.8-8.3MB（启用存储）。10 concurrent、每图 60s 壁钟 → 持续 ~0.97 MB/s（7.7 Mbps），在 100Mbps 链路内。峰值（8 同时下载）~53 Mbps。
+**文生图无大图上传**，带宽突发主要在：**上游拉图（下行）** + **给客户端回图（上行）**。
+
+### `response_format`：`url` vs `b64_json`
+
+实现：`services/protocol/conversation.py` → `format_image_result()` + `save_image_bytes()`。
+
+**`url` 不是「不让客户端看图」**——图片仍会存到 Panda 并生成公网链接；客户端用返回的 `url` 做 `GET /images/...` 或 `<img src="...">` **照常显示**，与直接嵌 b64 效果相同。
+
+区别在于**字节何时、经哪条 HTTP 传输**：
+
+| 格式 | 同步 API 响应体 | 客户端后续 | 典型用途 |
+|------|----------------|-----------|----------|
+| `b64_json`（默认） | ~2.8 MB/张（内嵌 base64；当前实现**同时带 `url` 字段**） | 可直接用 `b64_json` 显示，也可改用 `url` | 单请求拿全量、NewAPI 透传简单 |
+| `url` | ~0.7 KB/张（仅 JSON + 链接字符串） | **再请求一次** `GET {url}` 取原图 ~2.5 MB | 高并发时避免同步 JSON 撑爆 33 Mbps 出网；客户端可错峰拉图 |
+
+**换来的不是「不能显示」，而是：**
+1. 同步回包极小 → 多路同时完成时不挤占出网带宽；
+2. 总上行略少（无 base64 膨胀）；
+3. 客户端可多一步 GET（需自己处理二次请求）。
+
+### PROD 对照实测（2026-07-27，混合 prompt conc10）
+
+| 指标 | `b64_json` | `url` |
+|------|-----------|-------|
+| 通过 | 7/10 | **9/10** |
+| 并发墙钟 | 147.11 s | **92.41 s** |
+| 同步响应体 mean | **1,877,738 B** | **701 B** |
+| `bandwidth.current_mbps` 峰值 | 2 | 2 |
+| 失败原因 | 上游 poll **429** ×3 | 上游 poll **429** ×1 |
+
+证据：`PROD-mixed-b64_json-conc10-20260727T034302Z`、`PROD-mixed-url-conc10-20260727T034650Z`。失败与 Panda 带宽无关；`url` 已验证同步回包体积下降约 **3000×**。
+
+压测对照：`scripts/_tmp_run_mixed_prompt_conc_test.py --response-format b64_json|url`。
 
 ### 新带宽追踪器（THROUGHPUT-10）
 
@@ -358,6 +393,101 @@ ssh panda 'docker exec chatgpt2api-local /app/.venv/bin/python3 -c \
 | AUDIT-28 9 回归套件（201 tests） | **全部通过** | 2026-07-27 00:42 |
 | 全量 pytest（826 tests） | 58 failed — 全部 `ConnectionRefusedError`（需本地 localhost:8000 起服务），非代码缺陷 | 2026-07-26 |
 | THROUGHPUT-10 新增代码 | import 通过 + `ast.parse` 通过 | 2026-07-27 |
+| **混合 prompt conc10 `b64_json`** | 7/10（3×上游 429） | `PROD-mixed-b64_json-conc10-20260727T034302Z` |
+| **混合 prompt conc10 `url`** | **9/10**（1×上游 429） | `PROD-mixed-url-conc10-20260727T034650Z` |
+| **混合 prompt conc10**（首轮） | **10/10** | `PROD-mixed-conc10-20260727T022823Z` |
+| **混合 prompt conc20** | **20/20** | `PROD-mixed-conc20-20260727T023538Z` |
+| conc15（同步准入修复后） | **15/15** | `PROD-conc10-20260727T014433Z` |
+| conc10 | **10/10** | `PROD-conc10-20260727T011758Z` |
+
+### 混合 prompt 验收要点（2026-07-27）
+
+- 配比：50% 长 prompt（不走 pS）+ 25% 短 `prompt_enhance=true` + 25% 短默认关 pS。
+- conc10：服务端墙钟 ~33–38s，几乎无准入排队；conc20：`admission_max=10` 导致后 10 路 HTTP 膨胀 34–44s（同步等待），服务端墙钟仍 ~31–48s。
+- **阶段日志缺口（已定位）**：call log 仅 1/10 有 `phase_timings_ms`——根因是 `wait_for_result` 返回后 `compact_task_heavy_fields` 与 worker `_emit_pending_call_log` 竞态，非埋点未设计。修复：`pending_call_log` 携带 finalize 后的 phase/trace 快照（`image_task_service.py`）。
+- **pS 透传缺口（已修）**：同步 `/v1/images/generations` 此前未把 `prompt_enhance` 传入 `submit_generation`；混合测试中 short_ps 路实际未走 pS。已补 `ImageGenerationRequest` + `run_generation_sync` 接线。
+
+---
+
+## 八点五池（监控埋点状态，2026-07-27 Panda 实测）
+
+| 埋点 | 设计 | 开关 | 运行态 | 说明 |
+|------|------|------|--------|------|
+| `bandwidth` | `services/bandwidth_tracker.py` | 无开关，始终 on | **正常** | `/health` 暴露 `last_5m/1h/24h_bytes` + `current_mbps`；`record_bytes` 在 `openai_backend_api` 下载路径。空闲后 `current_mbps=0` 属预期 |
+| `quota_refresh` | `image_quota_refresh_service.py` | lifespan 接线 | **正常** | `worker_alive=true`，`ticks=49/refreshed=647/errors=0` |
+| `slot_topology` | `orchestrator` + `pools.py` | 无开关 | **正常** | `ps/ss_capacity=10`，inflight/queued 实时 |
+| `proxy_pool` | `proxy_pool_service.py` | 配置启用 | **正常** | residential/datacenter 节点计数 |
+| `schedule_trace` | Rust `.so` + Python fallback | `schedule_trace_enabled=true`（默认） | **运行但 call log 落盘受竞态影响** | 见上「阶段日志缺口」 |
+| `phase_timings_ms` | `PipelineRun.finish()` → call log | 管线 enabled 时必有 | **同上** | 修复前 9/10 路为空；应用修复后应 10/10 |
+| 前端日志 chips | `web_dist` 日志页 | 已部署 | **依赖 call log detail** | detail 无 phase 则 UI 无 chips |
+
+**结论**：监控**已设计且已打开**，health 三件套正常；阶段分解在 call log **运行失败（竞态丢字段）**，非未实现。
+
+---
+
+## 八点六池（带宽与并发上限）
+
+### Panda 链路实测（无代理，2026-07-27）
+
+| 方向 | 实测 | 套餐/监控 |
+|------|------|-----------|
+| 下行 | **~194 Mbps** | 充裕 |
+| 上行（出网） | **~33 Mbps** | 腾讯云套餐封顶 30Mbps，实测略高 |
+
+### conc20 仅 ~10 Mbps 的原因
+
+`bandwidth_tracker.current_mbps` 只统计**上游图片下载**（`openai_backend_api` 收字节），不含 SSE 元数据、不含 **b64_json 回传客户端** 的上行。
+
+| 流量 | 每图 | conc20 分摊 |
+|------|------|-------------|
+| 上游下载 | ~2.5 MB | 20 图 / 85s 墙钟 ≈ **4.7 Mbps** 均值 |
+| 客户端上行（b64） | ~3.3 MB | 峰值可冲 **30 Mbps 出网封顶**，但生成阶段长达 ~35s，下载/回传错峰 |
+| SSE | ~KB 级 | 可忽略 |
+
+**结论**：10 Mbps 是「上游下载均值」，不代表链路打满；真正瓶颈仍是 **sS 槽 10 + 同步准入 10**，不是 190 Mbps 下行。
+
+### 并发上限估算
+
+| 约束 | 当前值 | 估算上限 | 说明 |
+|------|--------|----------|------|
+| sS 槽（硬闸） | 10 | **10** 路同时开票 | 第一个饱和点 |
+| 同步准入 | 10 | **10** 路 HTTP 挂起 | >10 排队，HTTP +30–40s |
+| 账号池 | 17 可派发 × conc=2 | ~20–24 理论（binding 打折） | 需 live 验证 |
+| 下载信号量 | 8 | 峰值 ~80 Mbps 突发 | 低于 194 下行 |
+| 出网 b64 回传 | 33 Mbps | ~**10 路同时回传** 饱和 | 用 `response_format=url` 可剥离同步 JSON 压力 |
+
+**推荐稳态目标**：**15 并发**（需同步提升 `sse_slots` + `admission_max` + `per_user_running`）；**17 并发**对齐号池需 sS=17 且压测无 CF 退化。
+
+### 扩容方案（THROUGHPUT-15/17）
+
+**Phase 1 — 可观测修复（P0，已编码待部署）**
+
+- 修复 call log phase 竞态（`pending_call_log` 携带 `phase_timings_ms` / `schedule_trace`）。
+- 同步 API 透传 `prompt_enhance`。
+- 复跑 `scripts/_tmp_run_mixed_prompt_conc_test.py --count 10/15/20`，验收 call log **100% 有 phase**。
+
+**Phase 2 — 配置抬升（P1，小步）**
+
+| 键 | 现值 | 目标 | 文件 |
+|----|------|------|------|
+| `sse_slots` | 10 | **15** | `config.json` + `patch_throughput10_config.py` |
+| `prompt_slots` | 10 | **15** | 同上 |
+| `newapi_image_sync_admission_max` | 10 | **15** | 同上 |
+| `per_user_running_max` | 10 | **15** | `image_task_queue` |
+| `download_concurrency` | 8 | **12** | `image_pipeline` |
+
+**Phase 3 — 压测矩阵（每档必采）**
+
+1. 混合 prompt conc N（N=10,15,17,20）。
+2. 每 5s 拉 `/health`：`bandwidth.current_mbps`、`slot_topology`、`quota_refresh`。
+3. call log：`phase_timings_ms` 覆盖率、SSE 占墙钟%、`sync_wait` 分布。
+4. 对照组：`response_format=url`（剥离出网上限）vs `b64_json`。
+5. 通过线：成功率 100%；p95 HTTP < 90s（conc15）；`ps_queue_ms`/`ss_queue_ms` p95 < 5s；无 CF 封禁增量。
+
+**Phase 4 — 号池对齐（P2）**
+
+- sS=17 + 17 账号全派发；监控 `cf_fail` 与 `proxy_cf_ok` 24h 曲线。
+- 若 CF 退化，回退 sS 或拉长 `submit_start_min_interval_ms`。
 
 ---
 
@@ -367,7 +497,7 @@ ssh panda 'docker exec chatgpt2api-local /app/.venv/bin/python3 -c \
 |---|------|--------|------|
 | 1 | AUDIT-28 11864 行悬在 Panda index — 一次 `reset --hard` 静默回滚 | CRITICAL | `29` §2 — **P29-1 部署脚本已含封存 commit** |
 | 2 | 16 个活文件在 GitHub 零副本 | CRITICAL | `29` §3.1 — **本次 push 到 `deploy/codex/throughput10-20260727`** |
-| 3 | AUDIT-28 零生图流量验证（B1/B2/B4/B9 仍只静态确证） | CRITICAL | **conc10 验收为部署后必跑项** |
+| 3 | AUDIT-28 零生图流量验证（B1/B2/B4/B9 仍只静态确证） | CRITICAL | **conc10/15/20 混合 prompt 已通过** |
 | 4 | sS 池 10 硬上限 — 第一个并发闸门 | HIGH | `arch-slots` §2 |
 | 5 | `yumail_otp.py` 西语 OTP 已补正则 + pool 默认 subject 放宽 | HIGH | 已修复，随本次部署 |
 | 6 | 住宅/机房双池 + `probe_on_assign` 分配时活体探测 | HIGH | `proxy_pool_service` + `account_service` 已接线 |
@@ -375,11 +505,13 @@ ssh panda 'docker exec chatgpt2api-local /app/.venv/bin/python3 -c \
 | 8 | ~~57/152 `web_dist` 文件 gitignored~~ → **已入 git**（152 文件 + `web_dist-manifest.json`） | RESOLVED | 2026-07-27 |
 | 9 | `docker-compose.panda.yml` 含 `build:` 键 → 一次 `compose up` 在 Panda 编译 | HIGH | `arch-deploy` §3 |
 | 10 | `get_schedulable_breakdown()` 无 warmup_block 桶 | MEDIUM | `arch-quota` §4 |
-| 11 | `update_account` 伪造 `last_quota_refresh_at`（Q6b） | MEDIUM | `arch-quota` §2 |
-| 12 | `image_tasks.db` 397MB / 0 rows，磁盘 79% | MEDIUM | `29` §4 |
-| 13 | 本地 branch tracks `deploy/main`（1-file wiped 分支） | MEDIUM | `arch-deploy` §2 |
-| 14 | 13 个 `_tmp_deploy_*.py` 用 `scp` 直接违背部署铁律 | MEDIUM | `29` §11 |
-| 15 | `domain_intel.py` 505 行孤儿死代码仅在 prod 存在 | LOW | `29` §3.2 |
+| 11 | call log `phase_timings_ms` 与 `compact_task_heavy_fields` 竞态 | HIGH | **已修**（`deploy/codex/phase-log-fix-20260727` 部署） |
+| 12 | 同步 API 未透传 `prompt_enhance` | MEDIUM | **已修**（同上部署） |
+| 13 | `update_account` 伪造 `last_quota_refresh_at`（Q6b） | MEDIUM | `arch-quota` §2 |
+| 14 | `image_tasks.db` 397MB / 0 rows，磁盘 79% | MEDIUM | `29` §4 |
+| 15 | 本地 branch tracks `deploy/main`（1-file wiped 分支） | MEDIUM | `arch-deploy` §2 |
+| 16 | 13 个 `_tmp_deploy_*.py` 用 `scp` 直接违背部署铁律 | MEDIUM | `29` §11 |
+| 17 | `domain_intel.py` 505 行孤儿死代码仅在 prod 存在 | LOW | `29` §3.2 |
 
 ---
 
@@ -393,6 +525,8 @@ ssh panda 'docker exec chatgpt2api-local /app/.venv/bin/python3 -c \
 | 辅助容器 | `gptimage-gateway-rs-helper`（运行 protocol_bridge.py，共享 bind mount） |
 | Compose 文件 | `/root/gptimage/docker-compose.panda.yml` |
 | 对外端口 | `8012 -> container 80` |
+| 公网 IP | `43.156.233.219`（腾讯云 SG 轻量） |
+| **公网带宽（实测 2026-07-27）** | **出 ~30Mbps 封顶**（speedtest 32.8 / 监控峰 28.8）；**入 ~200Mbps**（speedtest 193.6 / 监控峰 202.2）；见 `captures/infra/webshare20-panda-probe-bandwidth-20260727.md` |
 | 容器资源 | ~1.5 vCPU / 1.5GiB（`cpu.max=150000 100000`） |
 | 代码送达 | bind mount（`:ro`）→ 改文件 + 重启即生效 |
 | 公网域名 | `https://gptimage.relai.asia` |
