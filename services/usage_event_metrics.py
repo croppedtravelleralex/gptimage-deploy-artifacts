@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from services.config import config
+from services.account_identity import binding_key_for_account
 from services.log_service import LOG_TYPE_CALL, LOG_TYPE_LLM_OPS, log_service
 
 _USAGE_KINDS = frozenset({"images_api", "images_chat", "dialogues_real", "dialogues_nurture"})
@@ -90,10 +90,7 @@ def get_binding_usage_slots(*, days: int = 28, account_service: Any) -> dict[str
             email = str(account.get("email") or "").strip().lower()
             if not email:
                 continue
-            binding = str(account.get("proxy_binding_hash") or account.get("proxy_egress_ip") or "").strip()
-            if not binding:
-                binding = f"email:{email}"
-            email_to_binding[email] = binding
+            email_to_binding[email] = binding_key_for_account(account)
 
     hash_to_email: dict[str, str] = {}
     with account_service._lock:

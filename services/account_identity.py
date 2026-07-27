@@ -80,6 +80,35 @@ def proxy_binding_hash(value: object) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
 
 
+def binding_key_for_account(account: dict[str, Any] | None) -> str:
+    """与 web/src/app/accounts/page.tsx bindingKeyForAccount 对齐的绑定组 key。"""
+    if not isinstance(account, dict):
+        return "default"
+    binding = _text(account.get("proxy_binding_hash"))
+    if not binding:
+        binding = proxy_binding_hash(account.get("proxy"))
+    if binding:
+        return binding
+    egress = _text(account.get("proxy_egress_ip"))
+    if egress:
+        return f"egress:{egress}"
+    raw = _text(account.get("proxy"))
+    if raw:
+        candidate = raw if "://" in raw else f"http://{raw}"
+        try:
+            parsed = urlsplit(candidate)
+            host = parsed.hostname or ""
+            port = parsed.port
+            endpoint = f"{host}:{port}" if port else host
+            if endpoint:
+                return f"proxy:{endpoint}"
+        except ValueError:
+            stripped = raw.replace("://", "@").split("@")[-1].split("/")[0]
+            if stripped:
+                return f"proxy:{stripped}"
+    return "default"
+
+
 def is_proxy_reachable_from_panda(value: object) -> bool:
     raw = _text(getattr(value, "url", value))
     if not raw:

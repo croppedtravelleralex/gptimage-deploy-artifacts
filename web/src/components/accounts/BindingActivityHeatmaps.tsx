@@ -67,7 +67,7 @@ function ActivityHeatmap({ metric, matrix, days }: { metric: ActivityMetric; mat
                 <div
                   key={`${day}-${slot}`}
                   title={`${DAY_LABELS[day]} ${SLOT_LABELS[slot]} · ${METRIC_LABELS[metric]} ${count} 次 · 近${days}天`}
-                  className={cn("size-2.5 rounded-[2px]", colorForCount(count, metric))}
+                  className={cn("size-3 rounded-[2px]", colorForCount(count, metric))}
                 />
               )),
             )}
@@ -97,7 +97,7 @@ export function BindingActivityHeatmaps({ matrices, days = 28, className }: Prop
         ))}
       </div>
       <div className="text-[9px] text-stone-400">
-        活动热力 · 近 {days} 天 · Asia/Singapore{hasData ? "" : " · 暂无记录"}
+        活动热力 · 近 {days} 天 · Asia/Singapore{hasData ? " · 悬停格子看次数" : " · 暂无记录（需分组视图且近 28 天有调用日志）"}
       </div>
     </div>
   );

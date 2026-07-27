@@ -8,6 +8,7 @@ set -euo pipefail
 ROOT="${GPTIMAGE_ROOT:-/root/gptimage}"
 COMPOSE_FILE="${GPTIMAGE_COMPOSE:-$ROOT/docker-compose.panda.yml}"
 CONTAINER="${GPTIMAGE_CONTAINER:-chatgpt2api-local}"
+SERVICE="${GPTIMAGE_SERVICE:-app}"
 BASE_URL="${GPTIMAGE_BASE_URL:-http://127.0.0.1:8012}"
 TARBALL="${1:-}"
 
@@ -50,7 +51,7 @@ test -f "$STAGING/index.html"
 rsync -a --delete "$STAGING"/ "$ROOT/web_dist/"
 
 cd "$ROOT"
-docker compose -f "$COMPOSE_FILE" restart "$CONTAINER"
+docker compose -f "$COMPOSE_FILE" restart "$SERVICE"
 sleep 8
 verify_web_dist "post-deploy"
 echo "deploy_web_dist_ok=1"

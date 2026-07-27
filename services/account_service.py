@@ -416,6 +416,44 @@ class AccountService:
         return quota
 
     @staticmethod
+    def _ensure_proxy_cf_stamped(account: dict) -> dict:
+        """导入/换绑后若缺 CF 戳记则探活一次，避免 proxy_cf_ok=false 卡死在调度外。"""
+        if not isinstance(account, dict):
+            return account
+        proxy = str(account.get("proxy") or "").strip()
+        if not proxy:
+            return account
+        try:
+            from services.proxy_cf_eligibility import (
+                account_cf_cache_ok,
+                cf_probe_account_fields,
+                probe_on_assign,
+                require_cf_ok_for_image,
+            )
+            from services.proxy_cf_probe import probe_proxy_cf
+            from services.proxy_quarantine import proxy_endpoint_key
+
+            if not require_cf_ok_for_image() or not probe_on_assign():
+                return account
+            if account_cf_cache_ok(account, proxy_url=proxy):
+                return account
+            endpoint = proxy_endpoint_key(proxy)
+            cached_endpoint = str(account.get("proxy_cf_probe_endpoint") or "").strip().lower()
+            try:
+                ok_at = float(account.get("proxy_cf_ok_at") or 0)
+            except (TypeError, ValueError):
+                ok_at = 0.0
+            # 同一出口 1h 内已探过（含失败）则跳过，避免 normalize 热路径反复打 CF。
+            if ok_at > 0 and cached_endpoint == endpoint and (time.time() - ok_at) < 3600:
+                return account
+            probe = probe_proxy_cf(proxy, timeout=45.0)
+            stamped = dict(account)
+            stamped.update(cf_probe_account_fields(proxy, probe))
+            return stamped
+        except Exception:
+            return account
+
+    @staticmethod
     def _lazy_refresh_jitter_seconds(account: dict) -> float:
         """Stable per-account stagger after restore_at so free-tier windows don't wake together."""
         try:
@@ -1365,13 +1403,14 @@ class AccountService:
         ).lower()
         return "account_deactivated" in error_text or "deleted or deactivated" in error_text
 
-    def _normalize_account(self, item: dict) -> dict | None:
+    def _normalize_account(self, item: dict, *, stamp_cf: bool = False) -> dict | None:
         if not isinstance(item, dict):
             return None
         access_token = item.get("access_token") or item.get("accessToken") or ""
         if not access_token:
             return None
         normalized = dict(item)
+        probe_cf = bool(stamp_cf)
         normalized.pop("accessToken", None)
         normalized["access_token"] = access_token
         if str(normalized.get("type") or "").strip().lower() == "codex":
@@ -1403,15 +1442,7 @@ class AccountService:
                 normalized["proxy_pool"] = "datacenter"
             if assigned:
                 normalized["proxy"] = assigned
-                try:
-                    from services.proxy_cf_eligibility import cf_probe_account_fields, probe_on_assign
-                    from services.proxy_cf_probe import probe_proxy_cf
-
-                    if probe_on_assign():
-                        probe = probe_proxy_cf(assigned, timeout=45.0)
-                        normalized.update(cf_probe_account_fields(assigned, probe))
-                except Exception:
-                    pass
+                probe_cf = True
         source_type = normalized.get("source_type")
         if not source_type and str(normalized.get("export_type") or "").strip().lower() == "codex":
             source_type = "codex"
@@ -1529,6 +1560,8 @@ class AccountService:
             normalized["proxy_cf_ok_at"] = 0.0
         normalized["proxy_cf_probe_endpoint"] = str(normalized.get("proxy_cf_probe_endpoint") or "").strip().lower()
         normalized["proxy_cf_classification"] = str(normalized.get("proxy_cf_classification") or "").strip()
+        if probe_cf:
+            normalized = AccountService._ensure_proxy_cf_stamped(normalized)
         return normalized
 
     @staticmethod
@@ -3424,7 +3457,8 @@ class AccountService:
                         **incoming,
                         "access_token": access_token,
                         "type": str(incoming.get("type") or current.get("type") or "free"),
-                    }
+                    },
+                    stamp_cf=bool(str(incoming.get("proxy") or current.get("proxy") or "").strip()),
                 )
                 if account is not None:
                     account = self._enforce_shared_binding_isolation(account, access_token)
