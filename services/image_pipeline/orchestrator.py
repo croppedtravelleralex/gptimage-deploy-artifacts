@@ -86,6 +86,18 @@ class ImagePipelineScheduler:
         base["ready_buffer"] = ready_buffer_tracker.snapshot()
         base["segments"] = segments
         base["total_queue_depth"] = base.get("ss_queue_depth", 0) + base.get("ps_queue_depth", 0)
+        ps = base.get("ps") or {}
+        ss = base.get("ss") or {}
+        base["slot_topology"] = {
+            "ps_capacity": int(ps.get("limit") or 0),
+            "ss_capacity": int(ss.get("limit") or 0),
+            "ps_inflight": int(ps.get("active") or 0),
+            "ss_inflight": int(ss.get("active") or 0),
+            "ps_queued": int(ps.get("queued") or 0),
+            "ss_queued": int(ss.get("queued") or 0),
+            "overflow_pending": int(base.get("total_queue_depth") or 0),
+            "pipeline_in_flight": int(base.get("in_flight") or 0),
+        }
         return base
 
     def begin_run(

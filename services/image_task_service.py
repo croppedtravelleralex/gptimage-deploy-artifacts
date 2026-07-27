@@ -1361,6 +1361,28 @@ class ImageTaskService:
         if len(owner_unfinished) >= owner_limit:
             raise ImageTaskQueueFullError(f"image task queue is full for current user ({len(owner_unfinished)}/{owner_limit})")
 
+    def _requeue_task_for_pipeline_backpressure(self, key: str, reason: str) -> None:
+        """Put a RUNNING task back on the queue when pipeline slots are saturated."""
+        with self._condition:
+            task = self._tasks.get(key)
+            if not isinstance(task, dict):
+                return
+            if task.get("status") != TASK_STATUS_RUNNING:
+                return
+            now_ts = time.time()
+            task.update({
+                "status": TASK_STATUS_QUEUED,
+                "progress": "queued",
+                "error": "",
+                "pipeline_backpressure": str(reason or "")[:240],
+                "updated_at": _now_iso(),
+                "updated_ts": now_ts,
+            })
+            task.pop("started_ts", None)
+            task.pop("worker_started_ts", None)
+            self._save_task_locked(key)
+            self._condition.notify_all()
+
     def _deadlock_guard_tripped_locked(self) -> bool:
         guard = self.deadlock_guard
         if guard is None:
@@ -1917,21 +1939,11 @@ class ImageTaskService:
             try:
                 pipeline_run = image_pipeline_scheduler.begin_run(task_key=key, mode=mode, payload=payload)
             except ImagePoolStarvedError as exc:
-                self._update_task(
-                    key,
-                    status=TASK_STATUS_ERROR,
-                    progress="failed",
-                    error=str(exc),
-                )
+                self._requeue_task_for_pipeline_backpressure(key, str(exc))
                 return
             except RuntimeError as exc:
                 if "queue is full" in str(exc).lower():
-                    self._update_task(
-                        key,
-                        status=TASK_STATUS_ERROR,
-                        progress="failed",
-                        error=str(exc),
-                    )
+                    self._requeue_task_for_pipeline_backpressure(key, str(exc))
                     return
                 raise
         if pipeline_run is not None:

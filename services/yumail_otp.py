@@ -125,7 +125,11 @@ def _extract_otp_from_text(*parts: object) -> str | None:
     blob = "\n".join(str(part or "") for part in parts)
     if not blob.strip():
         return None
-    match = re.search(r"(?:Verification code|code is|代码为|验证码)[:\s]*(\d{6})", blob, re.I)
+    match = re.search(
+        r"(?:Verification code|code is|代码为|验证码|código(?: de un solo uso)?|codigo)[:\s]*(\d{6})",
+        blob,
+        re.I,
+    )
     if match and match.group(1) not in _OTP_NOISE_CODES:
         return match.group(1)
     for hit in _OTP_RE.findall(blob):
@@ -437,7 +441,7 @@ def wait_for_pool_otp(
     timeout_sec: float = 120.0,
     poll_interval: float = 8.0,
     sender_contains: str = "openai",
-    subject_contains: str = "验证码",
+    subject_contains: str = "",
     api_base: str | None = None,
     api_key: str | None = None,
 ) -> str:

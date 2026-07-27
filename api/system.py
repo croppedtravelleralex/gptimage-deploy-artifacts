@@ -423,6 +423,15 @@ def create_router(app_version: str) -> APIRouter:
             stats_json["pre_ticket_pool"] = pre_ticket_pool.snapshot()
             stats_json["quota_refresh"] = image_quota_refresh_service.snapshot()
             stats_json["bandwidth"] = bandwidth_tracker.snapshot()
+            try:
+                from services.image_pipeline.orchestrator import image_pipeline_scheduler
+                from services.proxy_pool_service import proxy_pool_service
+
+                pipe = image_pipeline_scheduler.snapshot()
+                stats_json["slot_topology"] = pipe.get("slot_topology") or {}
+                stats_json["proxy_pool"] = proxy_pool_service.snapshot()
+            except Exception:
+                pass
         except Exception:
             pass
         try:

@@ -269,13 +269,29 @@ def binding_schedule_from_config() -> dict[str, dict[str, Any]]:
     return out
 
 
+# A1-6：hash fallback 不得抽到 weekday_only / rest_weekend / pulse_2h 等周末全关预设。
+_HASH_FALLBACK_PRESET_IDS: frozenset[str] = frozenset({
+    "uniform",
+    "business_hours",
+    "extended_business",
+    "balanced_week",
+    "aggressive",
+    "minimal",
+    "sg_remote",
+})
+
+
 def resolve_binding_matrix(binding_key: str, *, default_preset_id: str = "business_hours") -> list[list[float]]:
     key = str(binding_key or "").strip()
     if key:
         resolved = binding_schedule_from_config().get(key)
         if resolved is not None:
             return copy.deepcopy(resolved["weights"])
-        presets = list(_PRESETS)
+        safe_presets = [
+            preset for preset in _PRESETS
+            if str(preset.get("id") or "") in _HASH_FALLBACK_PRESET_IDS
+        ]
+        presets = safe_presets or list(_PRESETS)
         if presets:
             tz = ZoneInfo(resolve_tz_name(DEFAULT_TZ))
             week = datetime.now(timezone.utc).astimezone(tz).isocalendar().week

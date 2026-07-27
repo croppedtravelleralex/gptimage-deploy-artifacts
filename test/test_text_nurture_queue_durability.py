@@ -465,3 +465,10 @@ def test_default_preset_covers_the_weekend() -> None:
     weights = resolve_binding_matrix("", default_preset_id="business_hours")
     assert slot_allowed(weights, now_utc=SAT_14_SGT)
     assert slot_allowed(weights, now_utc=SUN_11_SGT)
+
+
+def test_hash_fallback_preset_is_weekend_safe() -> None:
+    """A1-6: hash fallback must not pick weekday_only / rest_weekend presets."""
+    weights = resolve_binding_matrix("unconfigured-binding-hash-key-12345")
+    assert slot_allowed(weights, now_utc=SAT_14_SGT)
+    assert slot_allowed(weights, now_utc=SUN_11_SGT)

@@ -4069,8 +4069,16 @@ class OpenAIBackendAPI:
                         headers["Authorization"] = f"Bearer {self.access_token}"
                     response = self.session.get(url, headers=headers, timeout=120)
                     ensure_ok(response, "image_download")
-                    if response.content not in images:
-                        images.append(response.content)
+                    content = response.content
+                    if content:
+                        try:
+                            from services.bandwidth_tracker import bandwidth_tracker
+
+                            bandwidth_tracker.record_bytes(len(content))
+                        except Exception:
+                            pass
+                    if content not in images:
+                        images.append(content)
                     last_exc = None
                     break
                 except UpstreamHTTPError as exc:

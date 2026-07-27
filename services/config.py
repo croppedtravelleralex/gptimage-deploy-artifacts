@@ -51,14 +51,14 @@ DEFAULT_CHAT_COMPLETION_CACHE = {
 
 DEFAULT_IMAGE_TASK_QUEUE = {
     "enabled": True,
-    "submit_workers": 6,
-    "submit_workers_max": 8,
+    "submit_workers": 10,
+    "submit_workers_max": 12,
     "poll_workers": 24,
     "download_workers": 4,
     "global_queue_max": 200,
-    "per_user_running_max": 6,
-    "per_user_running_base": 6,
-    "per_user_running_burst": 8,
+    "per_user_running_max": 10,
+    "per_user_running_base": 10,
+    "per_user_running_burst": 12,
     "burst_enabled": False,
     "burst_min_queued": 6,
     "burst_min_dispatchable_candidates": 8,
@@ -1008,7 +1008,7 @@ DEFAULT_WEBSHARE_CF_SCAN_SETTINGS: dict[str, object] = {
 DEFAULT_ACCOUNT_WARMUP_SETTINGS: dict[str, object] = {
     "enabled": True,
     "interval_sec": 60.0,
-    "max_hot": 10,
+    "max_hot": 17,
     "max_sessions_per_hot": 3,
     "demote_cooldown_sec": 180.0,
     "freq_window_sec": 60.0,

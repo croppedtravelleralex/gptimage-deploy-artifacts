@@ -2,6 +2,11 @@
 
 ## Unreleased
 
++ [架构/THROUGHPUT-10] 2026-07-27：`submit_workers=10`、`per_user_running=10`、`max_hot=17`；管线满时任务 requeue 而非 ERROR；`slot_topology`/`proxy_pool`/`bandwidth` health 扩展；分配代理时 CF live probe；`mark_image_result` 触发额度事件刷新；住宅 20 + 机房 100 双池 secret 安装脚本。
++ [修复/A1-6] 2026-07-27：`resolve_binding_matrix` hash fallback 限定周末安全预设子集。
++ [修复/yumail] 2026-07-27：西语 OTP 正则 + pool `subject_contains` 默认放宽。
++ [修复/A4-3] 2026-07-27：`_image_slot_available_locked` 与候选池 binding 席位语义对齐。
++ [部署] 2026-07-27：`scripts/deploy_throughput10_panda.sh` + `patch_throughput10_config.py` 合规 git 部署链。
 + [审计/溯源] 2026-07-26（夜）：`docs/29-prod-provenance-audit-20260726.md` —— AUDIT-28 已上线 Panda 且**运行时确认生效**（watchdog 独立线程 + `force_release_expired=true`、`ss` 池计数恢复、`cpu_budget_source=cgroup_v2`），但 ① 28 个文件**悬在 index**、HEAD 停在快照分支（一次 `git reset --hard` 即静默回滚）；② **19 个文件不在任何 commit 里**（16 个与本地未提交工作树相同、`domain_intel.py` 505 行本地不存在、`yumail_otp.py` prod 落后于已提交修复）；③ 上线后**零生图流量验证**。新发现活体缺陷：`resolve_binding_matrix` hash fallback 撞到无周末档预设 → **17/19 账号 `slot_allowed=False`**（A1-6 未修完）。推翻三条错误结论（抽样外推、CRLF 证据、`grep -ci error` 计数），详见 `29` §6。
 + [修复/CF] 2026-07-26：`proxy_cf_eligibility` — 账号 `proxy_cf_ok` 缓存优先于 `cf403_scan` 批量隔离；`webshare_cf_scan` `auto_quarantine` 跳过已绑定 endpoint；恢复脚本 `_tmp_recover_cf_quarantine.py`。
 + [运维/换绑] 2026-07-25：9 个 `cf_fail` 号换绑至 CF-ok 空闲节点，**单 IP 2 号**（`proxy_binding_max_accounts=2`）；`_tmp_rebind_cf_fail_shared_ip.py`；证据 `captures/spa/T-cf-fail-rebind-shared-ip-20260725.json`。

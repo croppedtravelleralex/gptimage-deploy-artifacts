@@ -1,8 +1,8 @@
 # 交接摘要
 
-日期：2026-07-26
+日期：2026-07-27
 
-**执行计划**：根目录 [`plan.md`](../plan.md)（**SLOT-RUST Layer 1**）  
+**执行计划**：根目录 [`plan.md`](../plan.md)（**THROUGHPUT-10**）  
 **文档导航**：[`docs/README.md`](README.md)  
 **槽位 / Rust**：[`26-slot-lifecycle-rust-roadmap.md`](26-slot-lifecycle-rust-roadmap.md)  
 **看门狗矩阵**：[`27-pipeline-watchdog-monitoring-matrix.md`](27-pipeline-watchdog-monitoring-matrix.md)  
@@ -28,15 +28,15 @@
 - **暖号**：`account_warmup` 已部署；`GET /api/ops/warmup/status`
 - **可观测性**：VERIFY-001 pass；call log 阶段 chips + token/traffic
 
-## 本周（见 `plan.md`）
+## 本周（见 `plan.md` / `30-throughput-10-plan.md`）
 
-| 优先级 | 任务 |
-|--------|------|
-| **P0** | **THROUGHPUT-10**：双槽/调度/队列重构，跑满 10 并发，>10 进完整排队；瓶颈收敛到 Panda 带宽 |
-| **P0** | **住宅代理入池**：20 个 Webshare `staticresidential`（IP 白名单 43.156.233.219，无带宽限制）作生图优先层；100 机房节点质量升级后复评 |
-| **P0** | **溯源修复**（`29`）：Panda staged→commit；本地 22 commit + 16 漂移文件推源码远端 |
-| **P0** | 额度实时化 + 探针扩容（调度池额度准确性） |
-| P1 | A1-6 补完（`resolve_binding_matrix` 周末档）；`yumail_otp.py` 补发；`domain_intel.py` 定性 |
+| 优先级 | 任务 | 状态 |
+|--------|------|------|
+| **P0** | **THROUGHPUT-10**：submit_workers=10、sS=10、队列背压 requeue、带宽追踪 | 代码已落地 |
+| **P0** | **住宅 20 + 机房 100 双池** + 分配时 CF live probe | 本地 secret 已安装 |
+| **P0** | **溯源修复** P29-1/P29-2 + conc10 验收 | 部署脚本已备 |
+| **P0** | 额度 60s 循环 + `mark_image_result` 事件刷新 | 已接线 |
+| P1 | Ops health：`slot_topology` / `proxy_pool` / `bandwidth` | 已暴露 |
 | **P2** | 账号/基础设施 Rust（**N>50 后**） |
 | 不做 | 真 Chrome 票池 · 全量 SSE Rust |
 

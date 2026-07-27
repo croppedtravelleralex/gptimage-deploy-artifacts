@@ -870,14 +870,14 @@ class AccountService:
         if not token:
             return False
         max_concurrency = max(1, int(config.image_account_concurrency or 1))
-        binding_limit = self._image_binding_inflight_max() * max(1, getattr(config, "image_account_concurrency", 2))
+        binding_limit = self._image_binding_inflight_max()
         current = int(self._image_inflight.get(token, 0))
         if current >= max_concurrency:
             return False
         account = self._accounts.get(token) or {}
         binding = self._account_binding_hash(account)
-        # per-binding 检查：binding 上所有 token 在途请求总数
-        if binding and self._binding_image_inflight_locked(binding) >= binding_limit:
+        # A4-3：与 _list_available_candidate_tokens 同一席位语义（排除自身）。
+        if binding and self._binding_image_account_seats_locked(binding, exclude_token=token) >= binding_limit:
             return False
         if not skip_global_limit:
             ready_count = len(self._list_ready_candidate_tokens())
@@ -1040,7 +1040,9 @@ class AccountService:
             try:
                 from services.proxy_cf_eligibility import is_proxy_cf_ok_for_image, require_cf_ok_for_image
 
-                if require_cf_ok_for_image() and not is_proxy_cf_ok_for_image(proxy, account=account):
+                if require_cf_ok_for_image() and not is_proxy_cf_ok_for_image(
+                    proxy, account=account, allow_live_probe=True,
+                ):
                     return False
             except Exception:
                 return False
@@ -1318,6 +1320,15 @@ class AccountService:
                 normalized["proxy_pool"] = "datacenter"
             if assigned:
                 normalized["proxy"] = assigned
+                try:
+                    from services.proxy_cf_eligibility import cf_probe_account_fields, probe_on_assign
+                    from services.proxy_cf_probe import probe_proxy_cf
+
+                    if probe_on_assign():
+                        probe = probe_proxy_cf(assigned, timeout=45.0)
+                        normalized.update(cf_probe_account_fields(assigned, probe))
+                except Exception:
+                    pass
         source_type = normalized.get("source_type")
         if not source_type and str(normalized.get("export_type") or "").strip().lower() == "codex":
             source_type = "codex"
@@ -3785,6 +3796,13 @@ class AccountService:
             self._accounts[access_token] = account
             if account != current:
                 self._persist_upsert_accounts([account])
+        if success:
+            try:
+                from services.image_quota_refresh_service import image_quota_refresh_service
+
+                image_quota_refresh_service.schedule_refresh(access_token)
+            except Exception:
+                pass
         # 被动 CF 灯：成功记 ok；失败若是 CF 只记 cf，否则记 image_fail（避免双计）
         if not skip_cf_sample:
             try:

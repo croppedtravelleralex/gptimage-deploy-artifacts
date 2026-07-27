@@ -156,5 +156,14 @@ class ProxyPoolService:
         with self._lock:
             return len(self._residential) if t is ProxyTier.RESIDENTIAL else len(self._datacenter)
 
+    def snapshot(self) -> dict[str, int]:
+        """Return pool sizes for health / ops dashboards."""
+        self._ensure_loaded()
+        with self._lock:
+            return {
+                "residential": len(self._residential),
+                "datacenter": len(self._datacenter),
+            }
+
 
 proxy_pool_service = ProxyPoolService()

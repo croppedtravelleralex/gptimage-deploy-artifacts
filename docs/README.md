@@ -1,17 +1,18 @@
 # 文档导航
 
-最后更新：2026-07-26
+最后更新：**2026-07-27 01:00**
 
-**冲突优先级**：代码/命令结果 > `28`（调度/队列/槽位专项审计） > `02-current-state.md` > `04-improvement-backlog.md` > `06-handoff.md` > `logs/`
+**冲突优先级**：代码/命令结果 > `28`（调度/队列/槽位专项审计） > `29`（生产溯源审计） > `02-current-state.md` > `04-improvement-backlog.md` > `06-handoff.md` > `logs/`
 
 ## 三秒上手
 
 | 你要… | 读 |
 |--------|-----|
 | **现在在干什么** | 根目录 [`plan.md`](../plan.md) |
-| **生产池面事实** | [`02-current-state.md`](02-current-state.md)（只看文首摘要） |
+| **生产池面事实**（10 并发全貌） | [`02-current-state.md`](02-current-state.md) |
 | **接着上次干** | [`06-handoff.md`](06-handoff.md) |
 | **待办池** | [`04-improvement-backlog.md`](04-improvement-backlog.md) |
+| **每次部署前必读** | [`29-prod-provenance-audit-20260726.md`](29-prod-provenance-audit-20260726.md) |
 
 ## 按目录
 
@@ -35,8 +36,11 @@
 | **槽位释槽 / Rust 演进** | `26-slot-lifecycle-rust-roadmap.md` |
 | 看门狗 / 监控矩阵 | `27-pipeline-watchdog-monitoring-matrix.md`（多处 ✅ 已被 `28` 推翻） |
 | **调度/队列/槽位审计** | `28-scheduling-queue-slot-audit-20260726.md` ← **读这份再动调度代码** |
+| **生产溯源审计** | `29-prod-provenance-audit-20260726.md` ← **每部署前必读** |
+| **THROUGHPUT-10 架构** | `30-throughput-10-plan.md` ← 双池/双槽/实时额度/带宽设计 |
 | **前端首访/图片加速** | `25-frontend-performance-plan.md` |
 | 协议逆向 HAR 链 | `19-protocol-full-reverse-catalog.md` → `captures/spa/` |
+| **架构报告**（2026-07-27） | 详细结论已汇入 `02-current-state.md` 一～九号池；原始分析见各 `arch-*` agent 报告 |
 
 ## 已归档 / 勿重复维护
 
