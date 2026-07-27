@@ -25,6 +25,8 @@ import {
   LoaderCircle,
   Paperclip,
   Pencil,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pin,
   Plus,
   RotateCcw,
@@ -37,7 +39,7 @@ import remarkGfm from "remark-gfm";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { fetchAccounts, fetchModels, type Account } from "@/lib/api";
+import { fetchAccounts, fetchModels, prewarmChatAccount, allocateChatSession, releaseChatSession, type Account } from "@/lib/api";
 import {
   absolutizeHref,
   humanizeUpstreamError,
@@ -307,11 +309,27 @@ function exportSingleMessage(m: ChatMessage, title: string) {
 
 function sessionSubtitle(s: ChatSession, accounts: Account[]): string {
   const email = String(s.accountEmail || s.preferredEmail || "").trim().toLowerCase();
-  if (!email) return "未绑定账号";
+  if (!email) return "自动调度";
   const acc = accounts.find((a) => String(a.email || "").trim().toLowerCase() === email);
   if (!acc) return "已绑定";
   const quota = typeof acc.quota === "number" ? acc.quota : "-";
-  return `额度 ${quota}`;
+  const mode = s.allocateMode === "shared" ? " · 共号" : s.allocateMode === "degraded" ? " · 降级" : "";
+  return `额度 ${quota}${mode}`;
+}
+
+const CHAT_UI_STORAGE_KEY = "gptimage.chat.ui.v1";
+const TEXT_CONVERSATION_TTL_DAYS = 14;
+
+function conversationExpiryNotice(createdAt?: string | null): string | null {
+  const raw = String(createdAt || "").trim();
+  if (!raw) return null;
+  const created = Date.parse(raw);
+  if (!Number.isFinite(created)) return null;
+  const expires = created + TEXT_CONVERSATION_TTL_DAYS * 86400000;
+  const daysLeft = Math.ceil((expires - Date.now()) / 86400000);
+  if (daysLeft > 3) return null;
+  if (daysLeft <= 0) return "上游会话已过期（本地记录仍保留），请及时导出 md/txt";
+  return `上游会话约 ${daysLeft} 天后清理，请及时导出 md/txt`;
 }
 
 export function ConversationWorkbench() {
@@ -329,6 +347,7 @@ export function ConversationWorkbench() {
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [showArchived, setShowArchived] = useState(false);
   const [showEmailDetail, setShowEmailDetail] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [accountSwitchNote, setAccountSwitchNote] = useState("");
   const [turnCursor, setTurnCursor] = useState(0);
   const startedAtRef = useRef(0);
@@ -357,6 +376,22 @@ export function ConversationWorkbench() {
   }, [active?.id, turnIndices.length]);
 
   useEffect(() => {
+    try {
+      setSidebarCollapsed(localStorage.getItem(CHAT_UI_STORAGE_KEY) === "1");
+    } catch {
+      setSidebarCollapsed(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHAT_UI_STORAGE_KEY, sidebarCollapsed ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
     void fetchAccounts({ offset: 0, limit: 100 })
       .then((res) => setAccounts(res.items || []))
       .catch(() => setAccounts([]));
@@ -381,6 +416,21 @@ export function ConversationWorkbench() {
   }, [active?.id, active?.model, updateActive]);
 
   useEffect(() => {
+    const email = String(preferredEmail || active?.accountEmail || "").trim();
+    if (!email) return;
+    const timer = window.setTimeout(() => {
+      void prewarmChatAccount(email).catch(() => null);
+    }, 250);
+    const keepalive = window.setInterval(() => {
+      void prewarmChatAccount(email).catch(() => null);
+    }, 90_000);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearInterval(keepalive);
+    };
+  }, [preferredEmail, active?.accountEmail, active?.id]);
+
+  useEffect(() => {
     const el = inputRef.current;
     if (!el) return;
     el.style.height = "0px";
@@ -402,16 +452,26 @@ export function ConversationWorkbench() {
   }, [active?.id, active?.accountEmail, active?.preferredEmail]);
 
   useEffect(() => {
-    if (!activeLoading || !startedAtRef.current) return;
+    if (!active?.id || String(active.accountEmail || "").trim()) return;
+    void allocateChatSession(active.id)
+      .then((alloc) => {
+        if (!alloc.email) return;
+        updateActive({
+          accountEmail: alloc.email,
+          preferredEmail: alloc.email,
+          allocateMode: alloc.mode,
+        });
+        void prewarmChatAccount(alloc.email).catch(() => null);
+      })
+      .catch(() => {
+        updateActive({ allocateMode: "degraded" });
+      });
+  }, [active?.id, active?.accountEmail, updateActive]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => setElapsedMs(Date.now() - startedAtRef.current), 100);
     return () => window.clearInterval(timer);
   }, [activeLoading]);
-
-  const accountOptions = useMemo(() => {
-    return accounts
-      .filter((a) => a.status !== "禁用" && a.status !== "异常" && String(a.email || "").trim())
-      .map((a) => String(a.email || "").trim());
-  }, [accounts]);
 
   const boundAccount = useMemo(() => {
     const email = String(active?.accountEmail || preferredEmail || "")
@@ -438,13 +498,45 @@ export function ConversationWorkbench() {
 
   const switchAccountNote = useMemo(() => {
     if (accountSwitchNote) return accountSwitchNote;
-    const bound = String(active?.accountEmail || "").trim();
-    const prefer = preferredEmail.trim();
-    if (prefer && bound && prefer.toLowerCase() !== bound.toLowerCase()) {
-      return `换号续聊：将把当前历史发给 ${prefer}（新开上游对话，非同一 conversation_id）`;
+    if (active?.allocateMode === "shared") {
+      return "当前会话与其他窗口共用账号（满池最少负载）";
+    }
+    if (active?.allocateMode === "degraded") {
+      return "当前为自动调度模式（未独占账号），首句可能略慢";
     }
     return "";
-  }, [active?.accountEmail, preferredEmail, accountSwitchNote]);
+  }, [active?.allocateMode, accountSwitchNote]);
+
+  const upstreamExpiryNote = useMemo(
+    () => conversationExpiryNotice(boundAccount?.text_conversation_created_at),
+    [boundAccount?.text_conversation_created_at],
+  );
+
+  const handleNewSession = useCallback(async () => {
+    const id = createSession(active?.model || "auto");
+    try {
+      const alloc = await allocateChatSession(id);
+      if (alloc.email) {
+        updateSession(id, {
+          accountEmail: alloc.email,
+          preferredEmail: alloc.email,
+          allocateMode: alloc.mode,
+        });
+        void prewarmChatAccount(alloc.email).catch(() => null);
+      }
+    } catch {
+      updateSession(id, { allocateMode: "degraded" });
+    }
+  }, [active?.model, createSession, updateSession]);
+
+  const handleDeleteSession = useCallback(
+    (id: string) => {
+      const session = store.sessions.find((s) => s.id === id);
+      void releaseChatSession(id, session?.accountEmail || "").catch(() => null);
+      deleteSession(id);
+    },
+    [deleteSession, store.sessions],
+  );
 
   const scrollToTurn = (turnIdx: number) => {
     if (turnIdx < 0 || turnIdx >= turnIndices.length) return;
@@ -551,6 +643,11 @@ export function ConversationWorkbench() {
     const patchThis = (patch: Partial<ChatSession>) => updateSession(sessionId, patch);
 
     try {
+      const prewarmEmail = String(lockedBefore || preferredEmail || active?.accountEmail || "").trim();
+      if (prewarmEmail && !useWebSearch) {
+        void prewarmChatAccount(prewarmEmail).catch(() => null);
+      }
+
       if (useWebSearch) {
         const prompt = buildSearchPrompt(content, files);
         const images = files.filter((f) => f.kind === "image" && f.dataUrl).map((f) => String(f.dataUrl));
@@ -777,8 +874,33 @@ export function ConversationWorkbench() {
   const turnDisplay = turnTotal === 0 ? 0 : Math.min(turnCursor + 1, turnTotal);
 
   return (
-    <div className="grid h-full min-h-0 gap-2 overflow-hidden lg:grid-cols-[300px_minmax(0,1fr)]">
-      <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-border bg-card/90 p-2.5 shadow-sm">
+    <div
+      className={cn(
+        "relative grid h-full min-h-0 gap-2 overflow-hidden transition-[grid-template-columns] duration-300 ease-in-out",
+        sidebarCollapsed
+          ? "lg:grid-cols-[0_minmax(0,1fr)]"
+          : "lg:grid-cols-[300px_minmax(0,1fr)]",
+      )}
+    >
+      <Button
+        type="button"
+        size="icon"
+        variant="outline"
+        className={cn(
+          "absolute left-0 top-3 z-20 hidden h-8 w-8 rounded-r-lg rounded-l-none border-l-0 bg-card shadow-sm lg:inline-flex",
+          sidebarCollapsed ? "translate-x-0" : "translate-x-[300px]",
+        )}
+        title={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
+        onClick={() => setSidebarCollapsed((v) => !v)}
+      >
+        {sidebarCollapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+      </Button>
+      <aside
+        className={cn(
+          "flex min-h-0 flex-col overflow-hidden rounded-2xl border border-border bg-card/90 p-2.5 shadow-sm transition-all duration-300",
+          sidebarCollapsed ? "hidden lg:flex lg:max-w-0 lg:overflow-hidden lg:border-0 lg:p-0 lg:opacity-0" : "",
+        )}
+      >
         <div className="mb-2 flex shrink-0 items-center justify-between gap-2 px-0.5">
           <div className="text-sm font-medium text-foreground">会话</div>
           <div className="flex items-center gap-1">
@@ -795,7 +917,7 @@ export function ConversationWorkbench() {
               size="sm"
               variant="outline"
               className="h-8 rounded-lg px-2"
-              onClick={() => createSession(active?.model || "auto")}
+              onClick={() => void handleNewSession()}
             >
               <Plus className="size-4" />
             </Button>
@@ -846,7 +968,7 @@ export function ConversationWorkbench() {
                 <button
                   type="button"
                   className="text-muted-foreground opacity-0 group-hover:opacity-100"
-                  onClick={() => deleteSession(s.id)}
+                  onClick={() => handleDeleteSession(s.id)}
                   aria-label="删除会话"
                 >
                   <Trash2 className="size-3.5" />
@@ -869,6 +991,11 @@ export function ConversationWorkbench() {
           <div className="shrink-0 border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
             {String(boundAccount.email || "")} · 状态 {boundAccount.status} · 额度{" "}
             {typeof boundAccount.quota === "number" ? boundAccount.quota : "—"}
+          </div>
+        ) : null}
+        {upstreamExpiryNote ? (
+          <div className="shrink-0 border-b border-rose-100 bg-rose-50 px-4 py-2 text-xs text-rose-800">
+            {upstreamExpiryNote}
           </div>
         ) : null}
         {switchAccountNote ? (
@@ -909,7 +1036,7 @@ export function ConversationWorkbench() {
           </div>
         ) : null}
 
-        <div ref={messagesScrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
+        <div ref={messagesScrollRef} className="hide-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
           {(active?.messages || []).length === 0 ? (
             <div className="flex h-full min-h-48 items-center justify-center text-sm text-muted-foreground">
               发送一条消息开始对话。可同时开多路会话（最多 {MAX_CONCURRENT_SSE}）。
@@ -1125,24 +1252,6 @@ export function ConversationWorkbench() {
               {modelOptions.map((id) => (
                 <option key={id} value={id}>
                   {id}
-                </option>
-              ))}
-            </select>
-            <span className="text-xs text-muted-foreground">账号</span>
-            <select
-              className="h-8 max-w-[220px] rounded-lg border border-input bg-background px-2 text-xs text-foreground"
-              value={preferredEmail}
-              onChange={(e) => {
-                const v = e.target.value;
-                setPreferredEmail(v);
-                updateActive({ preferredEmail: v, accountEmail: v || undefined });
-                setAccountSwitchNote("");
-              }}
-            >
-              <option value="">自动调度</option>
-              {accountOptions.map((email) => (
-                <option key={email} value={email}>
-                  {email}
                 </option>
               ))}
             </select>

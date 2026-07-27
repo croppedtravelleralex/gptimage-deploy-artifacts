@@ -567,7 +567,7 @@ class AccountWarmupService:
             backend = OpenAIBackendAPI(access_token=token)
             if depth == "requirements":
                 backend._ensure_bootstrap(soft_fail=True)
-                backend._get_chat_requirements_once()
+                backend._get_chat_requirements()
             else:
                 backend._ensure_bootstrap()
             account_service.record_cf_sample(token, kind="ok")

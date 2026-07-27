@@ -4774,7 +4774,15 @@ class OpenAIBackendAPI:
         conversation_id: str = "",
     ) -> None:
         """SPA text path: POST /f/conversation/prepare (conduit optional; SPA often omits X-Conduit-Token)."""
+        from services.image_pipeline.chat_prepare_cache import chat_prepare_cache
         from services.protocol.chatgpt_web_request import build_text_prepare_body, timezone_offset_min
+
+        if self.access_token and chat_prepare_cache.get(
+            self.access_token,
+            conversation_id=conversation_id,
+            model=model,
+        ):
+            return
 
         path = "/backend-api/f/conversation/prepare"
         tz = self._chat_timezone()
@@ -4808,6 +4816,38 @@ class OpenAIBackendAPI:
             )
         except Exception:
             pass
+        if self.access_token:
+            chat_prepare_cache.put(
+                self.access_token,
+                conversation_id=conversation_id,
+                model=model,
+            )
+
+    def delete_text_conversation(self, conversation_id: str) -> bool:
+        cid = str(conversation_id or "").strip()
+        if not cid or not self.access_token:
+            return False
+        path = f"/backend-api/conversation/{cid}"
+        try:
+            response = self.session.patch(
+                self.base_url + path,
+                headers=self._editable_conversation_document_headers(path, cid),
+                json={"is_visible": False},
+                timeout=30,
+            )
+            if int(getattr(response, "status_code", 0) or 0) in {200, 204}:
+                return True
+        except Exception:
+            pass
+        try:
+            response = self.session.delete(
+                self.base_url + path,
+                headers=self._editable_conversation_document_headers(path, cid),
+                timeout=30,
+            )
+            return int(getattr(response, "status_code", 0) or 0) in {200, 204, 404}
+        except Exception:
+            return False
 
 
     def list_models(self) -> Dict[str, Any]:

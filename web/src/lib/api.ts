@@ -97,6 +97,7 @@ export type Account = {
   outlook_recovery_terminal_reason?: string | null;
   outlook_recovery_terminal_at?: string | null;
   outlook_recovery_last_attempt_at?: string | null;
+  text_conversation_created_at?: string | null;
   outlook_recovery_last_error?: string | null;
 };
 
@@ -1366,6 +1367,54 @@ export async function enqueueNurture(body: { prompt?: string; email?: string; so
     method: "POST",
     body,
   });
+}
+
+export async function prewarmChatAccount(email: string) {
+  const trimmed = email.trim();
+  if (!trimmed) {
+    return { ok: false, email: "", turnstile: false };
+  }
+  return httpRequest<{ ok: boolean; email: string; turnstile: boolean }>("/api/ops/chat/prewarm", {
+    method: "POST",
+    body: { email: trimmed },
+  });
+}
+
+export type ChatAllocateMode = "exclusive" | "shared" | "degraded";
+
+export async function allocateChatSession(sessionId: string) {
+  return httpRequest<{ ok: boolean; email: string; mode: ChatAllocateMode; session_id: string }>(
+    "/api/chat/sessions/allocate",
+    {
+      method: "POST",
+      body: { session_id: sessionId },
+    },
+  );
+}
+
+export async function releaseChatSession(sessionId: string, email = "") {
+  return httpRequest<{ ok: boolean }>("/api/chat/sessions/release", {
+    method: "POST",
+    body: { session_id: sessionId, email },
+  });
+}
+
+export type BindingUsageSlotsResponse = {
+  days: number;
+  timezone: string;
+  by_binding: Record<
+    string,
+    {
+      images_api?: number[][];
+      images_chat?: number[][];
+      dialogues_nurture?: number[][];
+      dialogues_real?: number[][];
+    }
+  >;
+};
+
+export async function fetchBindingUsageSlots(days = 28) {
+  return httpRequest<BindingUsageSlotsResponse>(`/api/accounts/usage/binding-slots?days=${days}`);
 }
 
 export async function processNurtureOne(

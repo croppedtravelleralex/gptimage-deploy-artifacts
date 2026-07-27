@@ -2124,14 +2124,14 @@ class ConfigStore:
 
     @property
     def text_chat_persist_history(self) -> bool:
-        value = self.data.get("text_chat_persist_history", False)
+        value = self.data.get("text_chat_persist_history", True)
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(value)
 
     @property
     def text_chat_reuse_conversation(self) -> bool:
-        value = self.data.get("text_chat_reuse_conversation", False)
+        value = self.data.get("text_chat_reuse_conversation", True)
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(value)

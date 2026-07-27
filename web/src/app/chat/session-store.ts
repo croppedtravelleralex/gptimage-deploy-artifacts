@@ -31,6 +31,8 @@ export type ChatSession = {
   archived?: boolean;
   /** Pin to top of session list */
   pinned?: boolean;
+  /** allocate API mode: exclusive | shared | degraded */
+  allocateMode?: "exclusive" | "shared" | "degraded";
 };
 
 export type SearchSnapshot = {

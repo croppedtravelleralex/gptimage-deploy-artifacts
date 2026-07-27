@@ -376,12 +376,13 @@ def _accounts_list_payload(offset: int, limit: int) -> dict:
     items = account_service.list_accounts()
     total = len(items)
     page_items = items[offset: offset + limit] if limit > 0 else []
+    stats = account_service.get_stats(enriched_accounts=items)
     return {
         "items": page_items,
         "total": total,
         "offset": offset,
         "limit": limit,
-        "stats": account_service.get_stats(),
+        "stats": stats,
     }
 
 
@@ -505,6 +506,17 @@ def create_router() -> APIRouter:
         """号池「记录」列：今日 + 过去若干日的生图/对话次数。"""
         require_admin(authorization)
         return await run_in_threadpool(account_service.get_accounts_usage_recent, days)
+
+    @router.get("/api/accounts/usage/binding-slots")
+    async def get_binding_usage_slots(
+            authorization: str | None = Header(default=None),
+            days: int = Query(default=28, ge=7, le=90),
+    ):
+        """IP 绑定组 7×12 活动热力图（api/对话生图/拟人/真实）。"""
+        require_admin(authorization)
+        from services.usage_event_metrics import get_binding_usage_slots
+
+        return await run_in_threadpool(lambda: get_binding_usage_slots(days=days, account_service=account_service))
 
     @router.post("/api/accounts/soft-band")
     async def set_account_soft_band(
@@ -695,6 +707,7 @@ def create_router() -> APIRouter:
             )
 
         progress_id = str(uuid.uuid4())
+        account_service.init_refresh_progress(progress_id, len(access_tokens))
 
         async def _do_refresh():
             try:
@@ -835,6 +848,7 @@ def create_router() -> APIRouter:
             raise HTTPException(status_code=400, detail={"error": "access_tokens is required"})
 
         progress_id = str(uuid.uuid4())
+        account_service.init_relogin_progress(progress_id, len(access_tokens))
 
         async def _do_relogin():
             try:

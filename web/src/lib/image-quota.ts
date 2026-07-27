@@ -132,9 +132,13 @@ export function formatPoolQuotaDetail(stats?: AccountStatsQuotaFields | null) {
   const available = Number(stats.available_image_quota ?? stats.verified_total_quota ?? 0);
   const book = Number(stats.total_quota ?? 0);
   const refresh = formatQuotaRefreshAgeFromIso(
-    (stats as AccountStatsQuotaFields & { latest_quota_refresh_at?: string | null }).latest_quota_refresh_at,
+    (stats as AccountStatsQuotaFields & {
+      latest_quota_refresh_at?: string | null;
+      oldest_quota_refresh_at?: string | null;
+    }).oldest_quota_refresh_at
+      ?? (stats as AccountStatsQuotaFields & { latest_quota_refresh_at?: string | null }).latest_quota_refresh_at,
   );
-  const refreshPart = refresh ? ` · ${refresh}` : "";
+  const refreshPart = refresh ? ` · 核对 ${refresh}` : "";
   return `可用 ${available} · 账面 ${book} · 生图候选 ${schedulable} · 可派发 ${dispatchable}${refreshPart}`;
 }
 
@@ -149,17 +153,17 @@ export function formatQuotaRefreshAgeFromIso(raw?: string | null) {
   const diffMs = Math.max(0, Date.now() - at.getTime());
   const diffMin = Math.floor(diffMs / 60_000);
   if (diffMin < 1) {
-    return "刚刚刷新";
+    return "1分钟内";
   }
   if (diffMin < 60) {
-    return `${diffMin}分钟前刷新`;
+    return `${diffMin}分钟前`;
   }
   const diffHr = Math.floor(diffMin / 60);
   if (diffHr < 48) {
-    return `${diffHr}小时前刷新`;
+    return `${diffHr}小时前`;
   }
   const diffDay = Math.floor(diffHr / 24);
-  return `${diffDay}天前刷新`;
+  return `${diffDay}天前`;
 }
 
 export function formatQuotaRefreshAge(account: Pick<Account, "last_quota_refresh_at">) {

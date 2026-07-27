@@ -9,7 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
-from api.support import require_admin, require_identity, resolve_image_base_url
+from api.support import require_admin, require_identity, resolve_image_base_url, web_dist_health
 from services.backup_service import BackupError, backup_service
 from services.config import config
 
@@ -69,12 +69,17 @@ def _build_health_dashboard(app_version: str) -> tuple[dict, dict, bool]:
     stats = acct_svc.get_stats()
     storage = config.get_storage_backend()
     storage_health = storage.health_check()
-    healthy = stats["active"] > 0 or stats["unlimited_quota_count"] > 0 or stats.get("unknown_quota_count", 0) > 0
+    web_dist = web_dist_health()
+    healthy = (
+        (stats["active"] > 0 or stats["unlimited_quota_count"] > 0 or stats.get("unknown_quota_count", 0) > 0)
+        and bool(web_dist.get("ok"))
+    )
 
     stats_json: dict = {
         "status": "ok" if healthy else "degraded",
         "healthy": healthy,
         "version": app_version,
+        "web_dist": web_dist,
         "storage": {"backend": storage.get_backend_info(), "health": storage_health},
         "proxy_runtime": proxy_settings.get_runtime_status(),
         "accounts": stats,

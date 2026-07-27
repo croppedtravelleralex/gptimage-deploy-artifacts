@@ -27,6 +27,13 @@
 | 18 | `18-openai-web-reverse-proxy-brief.md` — 反代任务书（挖矿已完成） |
 | 19 | `19-protocol-full-reverse-catalog.md` — A–F 目录；§0.1 Camoufox HAR 链 |
 
+## 对话与前端 UX
+
+| # | 文件 |
+|---|------|
+| 25 | `25-frontend-performance-plan.md` |
+| 31 | `31-chat-ux-optimization-plan.md` — 对话绑号、TTFT、侧栏、跨账号续聊 |
+
 ## 账号与运维
 
 | # | 文件 |

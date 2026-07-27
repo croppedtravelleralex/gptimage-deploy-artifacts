@@ -28,6 +28,7 @@ import {
 import { toast } from "sonner";
 
 import { BindingSgHeatmap, normalizeBindingWeights } from "@/components/accounts/BindingSgHeatmap";
+import { BindingActivityHeatmaps } from "@/components/accounts/BindingActivityHeatmaps";
 import { AccountUsageHeatstrip } from "@/components/accounts/AccountUsageHeatstrip";
 import { CfStatusLight, summarizeCfDay, type CfDayPoint } from "@/components/accounts/CfStatusLight";
 import { EgressDriftLights } from "@/components/accounts/EgressDriftLights";
@@ -66,7 +67,6 @@ import {
 import {
   deleteAccounts,
   fetchAccounts,
-  reloadAccountsFromStorage,
   fetchAccountMaintenanceLoopStatus,
   fetchModels,
   fetchOutlookAccountRecoveryProgress,
@@ -83,6 +83,7 @@ import {
   stopRefreshAllAccounts,
   syncAccountsToPanda,
   fetchAccountsUsageRecent,
+  fetchBindingUsageSlots,
   fetchIpNurtureBindings,
   fetchIpNurturePresets,
   processNurtureOne,
@@ -101,6 +102,7 @@ import {
   type AccountRefreshResponse,
   type AccountStatus,
   type AccountUsageRecentResponse,
+  type BindingUsageSlotsResponse,
   type IpNurtureBinding,
   type IpNurturePreset,
   type Model,
@@ -718,6 +720,10 @@ function AccountsPageContent() {
   const [nurturePresets, setNurturePresets] = useState<IpNurturePreset[]>([]);
   const [nurtureBindings, setNurtureBindings] = useState<Record<string, IpNurtureBinding>>({});
   const [bindingSaveBusy, setBindingSaveBusy] = useState<Set<string>>(new Set());
+  const [bindingUsageSlots, setBindingUsageSlots] = useState<BindingUsageSlotsResponse["by_binding"]>({});
+  const [weightEditKey, setWeightEditKey] = useState<string | null>(null);
+  const [weightEditPreset, setWeightEditPreset] = useState("");
+  const [weightEditMatrix, setWeightEditMatrix] = useState<number[][]>([]);
   const [isRelogining, setIsRelogining] = useState(false);
   const [isStartingRefreshAll, setIsStartingRefreshAll] = useState(false);
   const [isStoppingRefreshAll, setIsStoppingRefreshAll] = useState(false);
@@ -790,7 +796,6 @@ function AccountsPageContent() {
   const handlePageRefresh = async () => {
     setIsLoading(true);
     try {
-      await reloadAccountsFromStorage();
       await loadAccounts(true, { bustCache: true });
       setPage(1);
       await Promise.all([
@@ -808,7 +813,6 @@ function AccountsPageContent() {
   };
 
   const refreshAccountPage = async () => {
-    await reloadAccountsFromStorage().catch(() => null);
     await loadAccounts(true, { bustCache: true });
     setPage(1);
   };
@@ -840,6 +844,9 @@ function AccountsPageContent() {
         }
       }
       setNurtureBindings(map);
+      void fetchBindingUsageSlots(28)
+        .then((res) => setBindingUsageSlots(res.by_binding || {}))
+        .catch(() => setBindingUsageSlots({}));
     } catch {
       // 后端未部署时静默降级
     }
@@ -1678,10 +1685,12 @@ function AccountsPageContent() {
     progressId: string,
     onUpdate: (p: RefreshProgressResponse) => void,
   ): Promise<void> => {
+    let missingRetries = 0;
     return new Promise<void>((resolve, reject) => {
       const timer = setInterval(async () => {
         try {
           const p = await fetchRefreshProgress(progressId);
+          missingRetries = 0;
           if (p.done) {
             clearInterval(timer);
             if (p.error) {
@@ -1692,6 +1701,11 @@ function AccountsPageContent() {
             }
           }
         } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (message.includes("progress not found") && missingRetries < 12) {
+            missingRetries += 1;
+            return;
+          }
           clearInterval(timer);
           reject(err);
         }
@@ -2586,13 +2600,21 @@ function AccountsPageContent() {
                                     </SelectContent>
                                   </Select>
                                 </div>
-                                <BindingSgHeatmap
-                                  weights={weights}
-                                  editable={!saving && nurturePresets.length > 0}
-                                  onChange={(next) => {
-                                    void saveBindingPreset(block.key, presetId || nurturePresets[0]?.id || "default", next);
+                                <BindingActivityHeatmaps matrices={bindingUsageSlots[block.key] || {}} />
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg px-2 text-xs"
+                                  disabled={saving || nurturePresets.length === 0}
+                                  onClick={() => {
+                                    setWeightEditKey(block.key);
+                                    setWeightEditPreset(presetId);
+                                    setWeightEditMatrix(weights);
                                   }}
-                                />
+                                >
+                                  编辑权重
+                                </Button>
                               </div>
                             </div>
                           </td>
@@ -2996,6 +3018,46 @@ function AccountsPageContent() {
           </CardContent>
         </Card>
       </section>
+
+      <Dialog
+        open={Boolean(weightEditKey)}
+        onOpenChange={(open) => {
+          if (!open) setWeightEditKey(null);
+        }}
+      >
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>养号时段权重</DialogTitle>
+            <DialogDescription>点击格子循环调整 0 → 0.25 → 0.5 → 0.75 → 1（Asia/Singapore）</DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <BindingSgHeatmap
+              weights={weightEditMatrix}
+              editable
+              onChange={(next) => setWeightEditMatrix(next)}
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setWeightEditKey(null)}>
+              取消
+            </Button>
+            <Button
+              type="button"
+              disabled={!weightEditKey}
+              onClick={() => {
+                if (!weightEditKey) return;
+                void saveBindingPreset(
+                  weightEditKey,
+                  weightEditPreset || nurturePresets[0]?.id || "default",
+                  weightEditMatrix,
+                ).then(() => setWeightEditKey(null));
+              }}
+            >
+              保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

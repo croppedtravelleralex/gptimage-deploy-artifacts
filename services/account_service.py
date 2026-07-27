@@ -8,6 +8,7 @@ import secrets
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Condition, Lock, RLock, Thread
@@ -47,6 +48,35 @@ def inflight_token_fingerprint(token: object) -> str:
     走 `self.` 查找会要求每个替身都补绑这个辅助函数。
     """
     return hashlib.blake2b(str(token or "").encode("utf-8"), digest_size=6).hexdigest()
+
+
+@dataclass(frozen=True)
+class _SchedPeerIndex:
+    """O(1) binding/egress peer counts — built once per list/stats pass."""
+
+    binding_counts: dict[str, int]
+    egress_counts: dict[str, int]
+    binding_max: int
+
+    def binding_duplicate(self, account: dict) -> bool:
+        from services.account_identity import proxy_binding_hash
+
+        binding = str(account.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(account.get("proxy"))
+        if not binding:
+            return False
+        return int(self.binding_counts.get(binding) or 0) > self.binding_max
+
+    def egress_duplicate(self, account: dict) -> bool:
+        egress = str(account.get("proxy_egress_ip") or account.get("proxy_egress_hash") or "").strip()
+        if not egress:
+            return False
+        return int(self.egress_counts.get(egress) or 0) > self.binding_max
+
+
+_usage_recent_cache: dict[int, tuple[float, dict[str, Any]]] = {}
+_USAGE_RECENT_TTL_SEC = 45.0
+_runtime_stats_cache: tuple[float, dict[str, int | float | bool]] | None = None
+_RUNTIME_STATS_TTL_SEC = 5.0
 
 
 class AccountService:
@@ -335,7 +365,13 @@ class AccountService:
         except Exception:
             return False
 
-    def image_quota_state(self, account: dict) -> str:
+    def image_quota_state(
+        self,
+        account: dict,
+        *,
+        schedulable: bool | None = None,
+        peer_index: _SchedPeerIndex | None = None,
+    ) -> str:
         """UI/运维用额度状态：unlimited/unknown/ready/unverified/stale/blocked/refresh_pending/exhausted."""
         if not isinstance(account, dict):
             return "exhausted"
@@ -344,7 +380,9 @@ class AccountService:
         if bool(account.get("image_quota_unknown")):
             return "unknown"
         quota = int(account.get("quota") or 0)
-        if self._is_image_account_schedulable(account) and quota > 0:
+        if schedulable is None:
+            schedulable = self._is_image_account_schedulable(account, peer_index=peer_index)
+        if schedulable and quota > 0:
             refreshed_at = self._image_quota_refresh_time(account)
             if refreshed_at is None:
                 return "unverified"
@@ -357,13 +395,15 @@ class AccountService:
             return "refresh_pending"
         return "exhausted"
 
-    def available_image_quota_for_account(self, account: dict) -> int:
+    def available_image_quota_for_account(self, account: dict, *, schedulable: bool | None = None) -> int:
         """单账号当前可参与生图调度的账面额度（0=不可用，-1=无限额）。"""
         if not isinstance(account, dict):
             return 0
         if self._is_true_unlimited_image_account(account):
             return -1
-        if not self._is_image_account_schedulable(account):
+        if schedulable is None:
+            schedulable = self._is_image_account_schedulable(account)
+        if not schedulable:
             return 0
         if not self._has_confirmed_image_quota(account):
             return 0
@@ -920,6 +960,35 @@ class AccountService:
                 peers += 1
         return peers
 
+    def _build_sched_peer_index_locked(self) -> _SchedPeerIndex:
+        """Single O(n) scan for binding/egress peer counts used by list/stats."""
+        from services.account_identity import proxy_binding_hash
+
+        binding_counts: dict[str, int] = {}
+        egress_counts: dict[str, int] = {}
+        for item in self._accounts.values():
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status") or "")
+            if status in {"禁用", "限流", "异常"}:
+                continue
+            if str(item.get("outlook_recovery_state") or "").strip().lower() == "terminal":
+                continue
+            receive = str(item.get("panda_receive_state") or "").strip().lower()
+            if receive in {"identity_isolated", "rejected"}:
+                continue
+            binding = str(item.get("proxy_binding_hash") or "").strip() or proxy_binding_hash(item.get("proxy"))
+            if binding:
+                binding_counts[binding] = int(binding_counts.get(binding) or 0) + 1
+            egress = self._account_egress_key(item)
+            if egress:
+                egress_counts[egress] = int(egress_counts.get(egress) or 0) + 1
+        return _SchedPeerIndex(
+            binding_counts=binding_counts,
+            egress_counts=egress_counts,
+            binding_max=self._proxy_binding_max_accounts(),
+        )
+
     def _active_proxy_binding_duplicate(self, account: dict) -> bool:
         """同一活跃 proxy_binding 超过承载上限时禁止进入生图调度。"""
         from services.account_identity import proxy_binding_hash
@@ -1015,7 +1084,13 @@ class AccountService:
             return next_updates
         return updates
 
-    def _is_image_account_schedulable(self, account: dict, *, allow_live_cf_probe: bool = True) -> bool:
+    def _is_image_account_schedulable(
+        self,
+        account: dict,
+        *,
+        allow_live_cf_probe: bool = True,
+        peer_index: _SchedPeerIndex | None = None,
+    ) -> bool:
         if not self._is_image_account_available(account):
             return False
         if not self._has_confirmed_image_quota(account):
@@ -1031,10 +1106,16 @@ class AccountService:
                     return False
         elif config.image_require_recent_quota_refresh and not self._is_recent_image_quota(account):
             return False
-        if self._active_proxy_binding_duplicate(account):
-            return False
-        if self._active_proxy_egress_duplicate(account):
-            return False
+        if peer_index is not None:
+            if peer_index.binding_duplicate(account):
+                return False
+            if peer_index.egress_duplicate(account):
+                return False
+        else:
+            if self._active_proxy_binding_duplicate(account):
+                return False
+            if self._active_proxy_egress_duplicate(account):
+                return False
         proxy = str(account.get("proxy") or "").strip()
         if proxy:
             try:
@@ -2192,13 +2273,14 @@ class AccountService:
             hot_emails = set()
         with self._lock:
             accounts = [dict(item) for item in self._accounts.values()]
+            peer_index = self._build_sched_peer_index_locked()
             for item in accounts:
                 token = str(item.get("access_token") or "")
                 email_key = str(item.get("email") or "").strip().lower()
                 if config.dispatch_hot_only and hot_emails and email_key not in hot_emails:
                     continue
                 if (
-                        self._is_image_account_schedulable(item)
+                        self._is_image_account_schedulable(item, peer_index=peer_index)
                         and self._is_image_interval_ready(item)
                         and not self._cohort_paused(item)
                         and not self._is_warmup_dispatch_blocked(item)
@@ -2267,6 +2349,13 @@ class AccountService:
         - available_candidate_count：ready 里未达到单账号并发上限的候选数。
         - dispatchable_candidate_count：再扣除全局并发闸门后，当前真正可派发的候选数。
         """
+        global _runtime_stats_cache
+        if plan_type is None and source_type is None and not plan_types:
+            now = time.time()
+            cached = _runtime_stats_cache
+            if cached is not None and cached[0] > now:
+                return dict(cached[1])
+
         max_account_concurrency = max(1, int(config.image_account_concurrency or 1))
         queue_timeout = float(config.image_global_queue_timeout_secs or 0.0)
 
@@ -2301,7 +2390,7 @@ class AccountService:
             global_limit_reached = global_limit > 0 and image_inflight_count >= global_limit
 
         available_candidate_count = len(available_tokens)
-        return {
+        result = {
             "preflight_backoff_count": preflight_backoff_count,
             "ready_candidate_count": len(ready_tokens),
             "schedulable_candidate_count": len(ready_tokens),
@@ -2313,6 +2402,9 @@ class AccountService:
             "image_global_queue_timeout_secs": queue_timeout,
             "image_global_limit_reached": global_limit_reached,
         }
+        if plan_type is None and source_type is None and not plan_types:
+            _runtime_stats_cache = (time.time() + _RUNTIME_STATS_TTL_SEC, dict(result))
+        return result
 
     def get_schedulable_breakdown(self, *, allow_live_cf_probe: bool = False) -> dict[str, Any]:
         """Explain why accounts are excluded from image scheduling (SCHED-001).
@@ -2326,6 +2418,7 @@ class AccountService:
         now = time.time()
         with self._lock:
             items = list(self._accounts.values())
+            peer_index = self._build_sched_peer_index_locked()
             preflight_until = dict(self._image_preflight_failed_until)
             inflight = dict(self._image_inflight)
 
@@ -2387,11 +2480,11 @@ class AccountService:
                 buckets["excluded_by_quota_freshness"] += 1
                 primary = primary or "quota_freshness"
                 _sample("excluded_by_quota_freshness", account)
-            if self._active_proxy_binding_duplicate(account):
+            if peer_index.binding_duplicate(account):
                 buckets["excluded_by_dup_binding"] += 1
                 primary = primary or "dup_binding"
                 _sample("excluded_by_dup_binding", account)
-            if self._active_proxy_egress_duplicate(account):
+            if peer_index.egress_duplicate(account):
                 buckets["excluded_by_dup_egress"] += 1
                 primary = primary or "dup_egress"
                 _sample("excluded_by_dup_egress", account)
@@ -2399,6 +2492,7 @@ class AccountService:
             schedulable = self._is_image_account_schedulable(
                 account,
                 allow_live_cf_probe=allow_live_cf_probe,
+                peer_index=peer_index,
             )
             if schedulable:
                 buckets["schedulable"] += 1
@@ -2791,6 +2885,8 @@ class AccountService:
             next_item = dict(current)
             if cid:
                 next_item["text_conversation_id"] = cid
+                if not str(current.get("text_conversation_id") or "").strip():
+                    next_item["text_conversation_created_at"] = datetime.now(timezone.utc).isoformat()
             if parent:
                 next_item["text_parent_message_id"] = parent
             account = self._normalize_account(next_item)
@@ -2798,6 +2894,29 @@ class AccountService:
                 return
             self._accounts[access_token] = account
             self._persist_upsert_accounts([account])
+
+    def clear_text_conversation(self, access_token: str) -> None:
+        if not access_token:
+            return
+        with self._lock:
+            access_token = self._resolve_access_token_locked(access_token)
+            current = self._accounts.get(access_token)
+            if current is None:
+                return
+            next_item = dict(current)
+            next_item.pop("text_conversation_id", None)
+            next_item.pop("text_parent_message_id", None)
+            next_item.pop("text_conversation_created_at", None)
+            account = self._normalize_account(next_item)
+            if account is None:
+                return
+            self._accounts[access_token] = account
+            self._persist_upsert_accounts([account])
+
+    def count_text_ready_candidates(self) -> int:
+        from services.chat_session_service import chat_session_service
+
+        return chat_session_service.count_text_ready(self)
 
     def record_account_traffic(
             self,
@@ -3053,6 +3172,7 @@ class AccountService:
             return max(0, int(math.ceil(float(ts) - now)))
 
         with self._lock:
+            peer_index = self._build_sched_peer_index_locked()
             result = []
             for item in self._accounts.values():
                 account = dict(item)
@@ -3083,12 +3203,21 @@ class AccountService:
                 account["text_next_ok_at"] = _iso_utc(text_next if text_next > 0 else None)
                 account["text_next_ok_in_sec"] = _secs_until(text_next if text_next > 0 else None)
 
-                account["image_schedulable"] = self._is_image_account_schedulable(
+                schedulable = self._is_image_account_schedulable(
                     account,
                     allow_live_cf_probe=allow_live_cf_probe,
+                    peer_index=peer_index,
                 )
-                account["image_quota_state"] = self.image_quota_state(account)
-                account["available_image_quota"] = self.available_image_quota_for_account(account)
+                account["image_schedulable"] = schedulable
+                account["image_quota_state"] = self.image_quota_state(
+                    account,
+                    schedulable=schedulable,
+                    peer_index=peer_index,
+                )
+                account["available_image_quota"] = self.available_image_quota_for_account(
+                    account,
+                    schedulable=schedulable,
+                )
 
                 result.append(account)
             return result
@@ -3358,11 +3487,15 @@ class AccountService:
             incoming = self._preserve_identity_isolated(current, incoming)
             protected, conflicts = merge_account_identity(current, incoming, allow_rebind=False)
             merged = {**current, **incoming, **protected, "access_token": access_token}
-            if any(
-                key in incoming
-                for key in ("quota", "limits_progress", "image_quota_unknown", "restore_at", "status")
-            ):
-                merged["last_quota_refresh_at"] = datetime.now(timezone.utc).isoformat()
+            quota_fields = ("quota", "limits_progress", "image_quota_unknown", "restore_at")
+            if any(key in incoming for key in quota_fields):
+                quota_changed = any(
+                    incoming.get(key) != current.get(key)
+                    for key in quota_fields
+                    if key in incoming
+                )
+                if quota_changed:
+                    merged["last_quota_refresh_at"] = datetime.now(timezone.utc).isoformat()
             if conflicts:
                 merged["identity_conflict_count"] = int(current.get("identity_conflict_count") or 0) + 1
                 merged["identity_last_conflict_fields"] = conflicts
@@ -3430,6 +3563,10 @@ class AccountService:
     def get_accounts_usage_recent(self, days: int = 6) -> dict[str, Any]:
         """按邮箱聚合今日+过去 N-1 日的生图/对话次数（供号池「记录」列）。"""
         days = max(1, min(int(days or 6), 14))
+        now = time.time()
+        cached = _usage_recent_cache.get(days)
+        if cached and cached[0] > now:
+            return cached[1]
         today = datetime.now(timezone(timedelta(hours=8))).date()
         dates = [(today - timedelta(days=offset)).isoformat() for offset in range(days - 1, -1, -1)]
         empty_day = {
@@ -3501,7 +3638,9 @@ class AccountService:
             email: [{"date": day, **daymap[day]} for day in dates]
             for email, daymap in buckets.items()
         }
-        return {"days": days, "dates": dates, "by_email": by_email}
+        result = {"days": days, "dates": dates, "by_email": by_email}
+        _usage_recent_cache[days] = (now + _USAGE_RECENT_TTL_SEC, result)
+        return result
 
     @classmethod
     def is_manual_scheduling_enabled(cls, account: dict | None) -> bool:
@@ -3648,7 +3787,6 @@ class AccountService:
             next_item["last_invalid_at"] = None
             next_item["last_refresh_error"] = None
             next_item["last_refresh_error_at"] = None
-            next_item["last_quota_refresh_at"] = datetime.now(timezone.utc).isoformat()
             next_item["last_quota_refresh_error"] = None
             next_item["quota_refresh_fail_count"] = 0
             next_item["quota_refresh_failure_kind"] = None
@@ -4230,16 +4368,40 @@ class AccountService:
             items.append(item)
         return items
 
-    def get_stats(self, *, allow_live_cf_probe: bool = False) -> dict:
-        with self._lock:
-            items = list(self._accounts.values())
-            runtime_candidate_stats = self.get_image_candidate_runtime_stats()
+    def get_stats(
+        self,
+        *,
+        allow_live_cf_probe: bool = False,
+        enriched_accounts: list[dict] | None = None,
+    ) -> dict:
+        if enriched_accounts is not None:
+            items = enriched_accounts
 
-        def _schedulable(account: dict) -> bool:
-            return self._is_image_account_schedulable(
-                account,
-                allow_live_cf_probe=allow_live_cf_probe,
-            )
+            def _schedulable(account: dict) -> bool:
+                return bool(account.get("image_schedulable"))
+
+            def _available_quota(account: dict) -> int:
+                try:
+                    return max(0, int(account.get("available_image_quota") or 0))
+                except (TypeError, ValueError):
+                    return 0
+        else:
+            with self._lock:
+                items = list(self._accounts.values())
+                peer_index = self._build_sched_peer_index_locked()
+
+            def _schedulable(account: dict) -> bool:
+                return self._is_image_account_schedulable(
+                    account,
+                    allow_live_cf_probe=allow_live_cf_probe,
+                    peer_index=peer_index,
+                )
+
+            def _available_quota(account: dict) -> int:
+                sched = _schedulable(account)
+                return self.available_image_quota_for_account(account, schedulable=sched)
+
+        runtime_candidate_stats = self.get_image_candidate_runtime_stats()
         total = len(items)
         active = sum(1 for a in items if a.get("status") == "正常")
         limited = sum(1 for a in items if a.get("status") == "限流")
@@ -4276,13 +4438,16 @@ class AccountService:
             for a in items
             if self._is_image_account_available(a) and not self._is_recent_image_quota(a)
         )
-        verified_total_quota = sum(
-            max(0, self.available_image_quota_for_account(a))
-            for a in items
-            if self.available_image_quota_for_account(a) > 0
-        )
+        verified_total_quota = 0
+        for a in items:
+            if not _schedulable(a):
+                continue
+            quota = _available_quota(a)
+            if quota > 0:
+                verified_total_quota += max(0, quota)
         available_image_quota = verified_total_quota
         latest_quota_refresh_at: str | None = None
+        oldest_quota_refresh_at: str | None = None
         for a in items:
             if not _schedulable(a):
                 continue
@@ -4292,12 +4457,16 @@ class AccountService:
             iso = ts.isoformat()
             if latest_quota_refresh_at is None or iso > latest_quota_refresh_at:
                 latest_quota_refresh_at = iso
+            if oldest_quota_refresh_at is None or iso < oldest_quota_refresh_at:
+                oldest_quota_refresh_at = iso
         total_success = sum(int(a.get("success") or 0) for a in items)
         total_fail = sum(int(a.get("fail") or 0) for a in items)
         by_type = {}
         for a in items:
             t = a.get("type", "unknown")
             by_type[t] = by_type.get(t, 0) + 1
+        text_ready_count = self.count_text_ready_candidates()
+        text_concurrent_target = 30
         return {
             "total": total,
             "cumulative_total": self._cumulative_total,
@@ -4333,10 +4502,14 @@ class AccountService:
             "verified_total_quota": verified_total_quota,
             "available_image_quota": available_image_quota,
             "latest_quota_refresh_at": latest_quota_refresh_at,
+            "oldest_quota_refresh_at": oldest_quota_refresh_at,
             **runtime_candidate_stats,
             "total_success": total_success,
             "total_fail": total_fail,
             "by_type": by_type,
+            "text_ready_count": text_ready_count,
+            "text_concurrent_target": text_concurrent_target,
+            "text_capacity_gap": max(0, text_concurrent_target - text_ready_count),
         }
 
     def get_activity_daily(self, days: int = 14) -> dict[str, Any]:

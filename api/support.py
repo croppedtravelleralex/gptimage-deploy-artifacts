@@ -190,3 +190,42 @@ def resolve_web_asset(requested_path: str) -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def web_dist_health() -> dict[str, object]:
+    """Return static frontend mount health (served from WEB_DIST_DIR inside container)."""
+    required = (
+        "index.html",
+        "accounts/index.html",
+        "chat/index.html",
+        "login/index.html",
+    )
+    missing: list[str] = []
+    sizes: dict[str, int] = {}
+    for rel in required:
+        path = WEB_DIST_DIR / rel
+        if not path.is_file():
+            missing.append(rel)
+            continue
+        try:
+            sizes[rel] = int(path.stat().st_size)
+        except OSError:
+            missing.append(rel)
+    manifest_path = WEB_DIST_DIR / "web_dist-manifest.json"
+    build_id = ""
+    if manifest_path.is_file():
+        try:
+            import json
+
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            build_id = str(data.get("git_commit") or data.get("built_at") or "")
+        except Exception:
+            build_id = ""
+    ok = not missing and int(sizes.get("index.html") or 0) > 0
+    return {
+        "ok": ok,
+        "dir": str(WEB_DIST_DIR),
+        "missing": missing,
+        "index_bytes": int(sizes.get("index.html") or 0),
+        "build_id": build_id,
+    }

@@ -395,6 +395,9 @@ mv web_dist web_dist.bak.$(date +%Y%m%d-%H%M%S)
 mv web_dist_new web_dist
 ```
 
+> **禁止**：`rm -rf web_dist && mv web_dist.new web_dist` 后不重启容器。Docker bind mount 会保留已删除目录的 inode，容器内 `/app/web_dist` 会变成**空目录**，所有页面返回 `{"detail":"Not Found"}`。  
+> **推荐**：使用 `scripts/deploy_web_dist_panda.sh`（rsync 原地同步 + 强制 restart + 路由验收），或本地 `scripts/push_web_dist_panda.ps1`。
+
 **4. 重建容器**
 
 ```bash

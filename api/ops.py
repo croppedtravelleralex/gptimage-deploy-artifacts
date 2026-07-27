@@ -18,6 +18,7 @@ from services.risk_dashboard_service import build_calendar, build_dashboard
 from services.risk_metrics_store import list_reports
 from services.text_nurture_service import text_nurture_service
 from services.account_warmup_service import account_warmup_service
+from services.account_service import account_service
 from services.webshare_cf_scan_service import webshare_cf_scan_service
 from services.image_pipeline import image_pipeline_scheduler
 
@@ -41,6 +42,19 @@ class NurtureProcessRequest(BaseModel):
 
 
 class WarmupUnblockRequest(BaseModel):
+    email: str = ""
+
+
+class ChatPrewarmRequest(BaseModel):
+    email: str = ""
+
+
+class ChatAllocateRequest(BaseModel):
+    session_id: str = ""
+
+
+class ChatReleaseRequest(BaseModel):
+    session_id: str = ""
     email: str = ""
 
 
@@ -126,6 +140,121 @@ def create_router() -> APIRouter:
             return await run_in_threadpool(account_warmup_service.clear_all_blocks, reason="manual_api")
         except Exception as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+
+    @router.post("/api/ops/chat/prewarm")
+    async def chat_prewarm(
+        body: ChatPrewarmRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        """预热对话 sentinel/turnstile ticket，缩短首字 TTFT。"""
+        require_admin(authorization)
+        email = str(body.email or "").strip().lower()
+        if not email:
+            raise HTTPException(status_code=400, detail={"error": "email is required"})
+
+        def _run() -> dict[str, object]:
+            token = ""
+            for account in account_service.list_accounts():
+                if str(account.get("email") or "").strip().lower() == email:
+                    token = str(account.get("access_token") or "").strip()
+                    break
+            if not token:
+                raise ValueError(f"account not found: {email}")
+            from services.openai_backend_api import OpenAIBackendAPI
+
+            backend = OpenAIBackendAPI(access_token=token)
+            try:
+                backend._ensure_bootstrap(soft_fail=True)
+                requirements = backend._get_chat_requirements()
+                turnstile = bool(getattr(requirements, "turnstile_token", ""))
+                try:
+                    from services.config import config
+                    from services.image_pipeline.pre_ticket_pool import PreTicketBundle, pre_ticket_pool
+
+                    if bool(config.get_image_pipeline_settings().get("pre_ticket_pool_enabled", True)):
+                        pre_ticket_pool.put(
+                            token,
+                            PreTicketBundle(requirements=requirements, turnstile_solved=turnstile),
+                        )
+                except Exception:
+                    pass
+                return {
+                    "ok": True,
+                    "email": email,
+                    "turnstile": turnstile,
+                }
+            finally:
+                backend.close()
+
+        try:
+            return await run_in_threadpool(_run)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail={"error": str(exc)}) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+    @router.post("/api/chat/sessions/allocate")
+    async def chat_session_allocate(
+        body: ChatAllocateRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        require_admin(authorization)
+        from services.chat_session_service import chat_session_service
+
+        def _run() -> dict[str, object]:
+            result = chat_session_service.allocate(account_service, session_id=str(body.session_id or ""))
+            if not result.get("ok"):
+                raise ValueError(str(result.get("error") or "allocate_failed"))
+            email = str(result.get("email") or "").strip()
+            if email:
+                from services.openai_backend_api import OpenAIBackendAPI
+                from services.image_pipeline.pre_ticket_pool import PreTicketBundle, pre_ticket_pool
+                from services.config import config
+
+                token = str(result.get("access_token") or "")
+                if token:
+                    backend = OpenAIBackendAPI(access_token=token)
+                    try:
+                        backend._ensure_bootstrap(soft_fail=True)
+                        requirements = backend._get_chat_requirements()
+                        if bool(config.get_image_pipeline_settings().get("pre_ticket_pool_enabled", True)):
+                            pre_ticket_pool.put(
+                                token,
+                                PreTicketBundle(
+                                    requirements=requirements,
+                                    turnstile_solved=bool(getattr(requirements, "turnstile_token", "")),
+                                ),
+                            )
+                    except Exception:
+                        pass
+                    finally:
+                        backend.close()
+            return {
+                "ok": True,
+                "email": email,
+                "mode": str(result.get("mode") or "exclusive"),
+                "session_id": str(result.get("session_id") or body.session_id or ""),
+            }
+
+        try:
+            return await run_in_threadpool(_run)
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail={"error": str(exc)}) from exc
+
+    @router.post("/api/chat/sessions/release")
+    async def chat_session_release(
+        body: ChatReleaseRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        require_admin(authorization)
+        from services.chat_session_service import chat_session_service
+
+        await run_in_threadpool(
+            chat_session_service.release,
+            session_id=str(body.session_id or ""),
+            email=str(body.email or ""),
+        )
+        return {"ok": True}
 
     @router.post("/api/ops/nurture/enable")
     async def nurture_enable(body: NurtureEnableRequest, authorization: str | None = Header(default=None)):

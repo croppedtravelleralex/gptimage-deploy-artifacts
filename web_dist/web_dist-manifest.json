@@ -1,8 +1,8 @@
 ﻿{
-    "built_at":  "2026-07-27T01:24:01.0353428Z",
-    "git_commit":  "ef457cb",
+    "built_at":  "2026-07-27T12:33:22.2358639Z",
+    "git_commit":  "329d008",
     "project_root":  "D:\\SelfMadeTool\\AutoRegister\\gptimage",
     "accounts_chunk":  "/_next/static/chunks/10hm6buodq71m.js",
-    "index_html_sha256":  "b8bd56896fe7dfe6f6e7b3f7d28077a882618151d653f26240caf94784b28036",
-    "accounts_html_sha256":  "0219aff3166ea4a5042e6b29e2936cfd0bb4655353e3fbc266f2f9a29761c4e0"
+    "index_html_sha256":  "366b4130d654b99559b4c1d0f898f806f9abdb76cabcb9f00737603f8ab452d0",
+    "accounts_html_sha256":  "5389aafa65c2c720e8a56dc69000c2d1624bf1b1d25263d683f2c44362e080c7"
 }
