@@ -5,7 +5,7 @@ build/
 dist/
 wheels/
 *.egg-info
-web_dist
+# web_dist is tracked for git-only Panda deploy (see docs/02 §七号池)
 # Virtual environments
 .venv
 .idea
