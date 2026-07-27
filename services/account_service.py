@@ -3606,7 +3606,9 @@ class AccountService:
             if account is None:
                 return None
             proxy_keys = ("proxy", "proxy_binding_hash", "proxy_egress_hash")
+            cf_meta_keys = ("proxy_cf_ok", "proxy_cf_ok_at", "proxy_cf_probe_endpoint", "proxy_cf_classification")
             if any(str(account.get(k) or "") != str(current.get(k) or "") for k in proxy_keys):
+                incoming_cf = {k: incoming.get(k) for k in cf_meta_keys if k in incoming}
                 account = dict(account)
                 account["cf_daily"] = []
                 account["egress_daily"] = []
@@ -3614,11 +3616,12 @@ class AccountService:
                 account["proxy_cf_ok_at"] = 0
                 account["proxy_cf_probe_endpoint"] = ""
                 account["proxy_cf_classification"] = ""
+                if incoming_cf:
+                    account.update(incoming_cf)
                 account = self._normalize_account(account)
                 if account is None:
                     return None
             self._accounts[access_token] = account
-            cf_meta_keys = ("proxy_cf_ok", "proxy_cf_ok_at", "proxy_cf_probe_endpoint", "proxy_cf_classification")
             force_persist = any(key in incoming for key in cf_meta_keys)
             if account != current or force_persist:
                 self._persist_upsert_accounts([account])
