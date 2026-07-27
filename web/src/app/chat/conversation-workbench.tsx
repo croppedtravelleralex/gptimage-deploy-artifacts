@@ -100,6 +100,18 @@ async function copyText(text: string) {
   }
 }
 
+/** Wait for sentinel prewarm up to `ms` so first token is less likely to pay prepare inline. */
+async function prewarmChatWithTimeout(email: string, ms = 6000) {
+  const target = String(email || "").trim();
+  if (!target) return;
+  await Promise.race([
+    prewarmChatAccount(target).catch(() => null),
+    new Promise<void>((resolve) => {
+      window.setTimeout(resolve, ms);
+    }),
+  ]);
+}
+
 function SourcesCollapsible({ sources }: { sources: SearchSource[] }) {
   if (!sources.length) return null;
   return (
@@ -645,7 +657,7 @@ export function ConversationWorkbench() {
     try {
       const prewarmEmail = String(lockedBefore || preferredEmail || active?.accountEmail || "").trim();
       if (prewarmEmail && !useWebSearch) {
-        void prewarmChatAccount(prewarmEmail).catch(() => null);
+        await prewarmChatWithTimeout(prewarmEmail, 6000);
       }
 
       if (useWebSearch) {
