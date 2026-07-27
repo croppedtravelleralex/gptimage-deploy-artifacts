@@ -62,6 +62,62 @@ from services.proxy_service import proxy_settings, test_proxy
 from services.bandwidth_tracker import bandwidth_tracker
 
 
+def _build_health_dashboard(app_version: str) -> tuple[dict, dict, bool]:
+    """Collect /health payload off the event loop (sync upstream + watchdog tick)."""
+    from services.account_service import account_service as acct_svc
+
+    stats = acct_svc.get_stats()
+    storage = config.get_storage_backend()
+    storage_health = storage.health_check()
+    healthy = stats["active"] > 0 or stats["unlimited_quota_count"] > 0 or stats.get("unknown_quota_count", 0) > 0
+
+    stats_json: dict = {
+        "status": "ok" if healthy else "degraded",
+        "healthy": healthy,
+        "version": app_version,
+        "storage": {"backend": storage.get_backend_info(), "health": storage_health},
+        "proxy_runtime": proxy_settings.get_runtime_status(),
+        "accounts": stats,
+    }
+    try:
+        from services.config import config as cfg
+        from services.image_task_service import image_task_service
+        from services.text_task_queue import text_task_queue
+        from services.image_pipeline.pipeline_watchdog import pipeline_watchdog_service
+        from services.image_pipeline.pre_ticket_pool import pre_ticket_pool
+
+        stats_json["workload"] = {
+            **cfg.get_workload_settings(),
+            "text_queue_depth": text_task_queue.depth(),
+            "image_queue_depth": int(getattr(image_task_service, "queue_depth", lambda: 0)()),
+        }
+        stats_json["pipeline_watchdog"] = pipeline_watchdog_service.tick()
+        stats_json["pre_ticket_pool"] = pre_ticket_pool.snapshot()
+        stats_json["quota_refresh"] = image_quota_refresh_service.snapshot()
+        stats_json["bandwidth"] = bandwidth_tracker.snapshot()
+        try:
+            from services.image_pipeline.orchestrator import image_pipeline_scheduler
+            from services.proxy_pool_service import proxy_pool_service
+
+            pipe = image_pipeline_scheduler.snapshot()
+            stats_json["slot_topology"] = pipe.get("slot_topology") or {}
+            stats_json["proxy_pool"] = proxy_pool_service.snapshot()
+        except Exception:
+            pass
+    except Exception:
+        pass
+    try:
+        from utils.process_memory import process_memory_snapshot
+
+        mem = process_memory_snapshot()
+        if mem:
+            stats_json["process_memory"] = mem
+        stats_json["image_runtime"] = acct_svc.get_image_candidate_runtime_stats()
+    except Exception:
+        pass
+    return stats_json, stats, healthy
+
+
 class SettingsUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -389,60 +445,7 @@ def create_router(app_version: str) -> APIRouter:
 
     @router.get("/health", response_model=None)
     async def health_dashboard(format: str = Query(default="html")):
-        from services.account_service import account_service as acct_svc
-        stats = acct_svc.get_stats()
-        storage = config.get_storage_backend()
-        storage_health = storage.health_check()
-        healthy = stats["active"] > 0 or stats["unlimited_quota_count"] > 0 or stats.get("unknown_quota_count", 0) > 0
-
-        stats_json = {
-            "status": "ok" if healthy else "degraded",
-            "healthy": healthy,
-            "version": app_version,
-            "storage": {"backend": storage.get_backend_info(), "health": storage_health},
-            "proxy_runtime": proxy_settings.get_runtime_status(),
-            "accounts": stats,
-        }
-        try:
-            from services.config import config as cfg
-            from services.image_task_service import image_task_service
-            from services.text_task_queue import text_task_queue
-            from services.image_pipeline.pipeline_watchdog import pipeline_watchdog_service
-            from services.image_pipeline.pre_ticket_pool import pre_ticket_pool
-
-            stats_json["workload"] = {
-                **cfg.get_workload_settings(),
-                "text_queue_depth": text_task_queue.depth(),
-                "image_queue_depth": int(getattr(image_task_service, "queue_depth", lambda: 0)()),
-            }
-            # No explicit force flags: both are config-driven now
-            # (image_pipeline_watchdog.force_release_expired / .reconcile_force).
-            # Ticks inside the coalescing window reuse the last report, so
-            # scraping /health cannot double-apply a correction.
-            stats_json["pipeline_watchdog"] = pipeline_watchdog_service.tick()
-            stats_json["pre_ticket_pool"] = pre_ticket_pool.snapshot()
-            stats_json["quota_refresh"] = image_quota_refresh_service.snapshot()
-            stats_json["bandwidth"] = bandwidth_tracker.snapshot()
-            try:
-                from services.image_pipeline.orchestrator import image_pipeline_scheduler
-                from services.proxy_pool_service import proxy_pool_service
-
-                pipe = image_pipeline_scheduler.snapshot()
-                stats_json["slot_topology"] = pipe.get("slot_topology") or {}
-                stats_json["proxy_pool"] = proxy_pool_service.snapshot()
-            except Exception:
-                pass
-        except Exception:
-            pass
-        try:
-            from utils.process_memory import process_memory_snapshot
-
-            mem = process_memory_snapshot()
-            if mem:
-                stats_json["process_memory"] = mem
-            stats_json["image_runtime"] = acct_svc.get_image_candidate_runtime_stats()
-        except Exception:
-            pass
+        stats_json, stats, healthy = await run_in_threadpool(_build_health_dashboard, app_version)
         if format == "json":
             return stats_json
         return HTMLResponse(f"""<!DOCTYPE html>

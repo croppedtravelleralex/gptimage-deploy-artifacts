@@ -1015,7 +1015,7 @@ class AccountService:
             return next_updates
         return updates
 
-    def _is_image_account_schedulable(self, account: dict) -> bool:
+    def _is_image_account_schedulable(self, account: dict, *, allow_live_cf_probe: bool = True) -> bool:
         if not self._is_image_account_available(account):
             return False
         if not self._has_confirmed_image_quota(account):
@@ -1041,7 +1041,9 @@ class AccountService:
                 from services.proxy_cf_eligibility import is_proxy_cf_ok_for_image, require_cf_ok_for_image
 
                 if require_cf_ok_for_image() and not is_proxy_cf_ok_for_image(
-                    proxy, account=account, allow_live_probe=True,
+                    proxy,
+                    account=account,
+                    allow_live_probe=allow_live_cf_probe,
                 ):
                     return False
             except Exception:
@@ -2312,7 +2314,7 @@ class AccountService:
             "image_global_limit_reached": global_limit_reached,
         }
 
-    def get_schedulable_breakdown(self) -> dict[str, Any]:
+    def get_schedulable_breakdown(self, *, allow_live_cf_probe: bool = False) -> dict[str, Any]:
         """Explain why accounts are excluded from image scheduling (SCHED-001).
 
         Counts are mutually prioritized for `primary_reason` per account:
@@ -2394,7 +2396,10 @@ class AccountService:
                 primary = primary or "dup_egress"
                 _sample("excluded_by_dup_egress", account)
 
-            schedulable = self._is_image_account_schedulable(account)
+            schedulable = self._is_image_account_schedulable(
+                account,
+                allow_live_cf_probe=allow_live_cf_probe,
+            )
             if schedulable:
                 buckets["schedulable"] += 1
                 _sample("schedulable", account)
@@ -3023,11 +3028,13 @@ class AccountService:
             ready["identity_ready_purpose"] = str(purpose or "request")
             return ready
 
-    def list_accounts(self) -> list[dict]:
+    def list_accounts(self, *, allow_live_cf_probe: bool = False) -> list[dict]:
         """返回所有账号的副本，并为每个账号附加当前图片在途数 image_inflight。
 
         image_inflight 为内存态并发计数(账号正在生成、尚未结束的图片数)。号池空闲时
         若某账号该值持续 > 0，说明其并发槽位泄漏、已被静默排除出调度，可借此在 UI 上诊断。
+
+        ``allow_live_cf_probe=False``（默认）避免列表/健康页对每个账号发起 CF 实时探活。
         """
         now = time.time()
         now_dt = datetime.now(timezone.utc)
@@ -3076,7 +3083,10 @@ class AccountService:
                 account["text_next_ok_at"] = _iso_utc(text_next if text_next > 0 else None)
                 account["text_next_ok_in_sec"] = _secs_until(text_next if text_next > 0 else None)
 
-                account["image_schedulable"] = self._is_image_account_schedulable(account)
+                account["image_schedulable"] = self._is_image_account_schedulable(
+                    account,
+                    allow_live_cf_probe=allow_live_cf_probe,
+                )
                 account["image_quota_state"] = self.image_quota_state(account)
                 account["available_image_quota"] = self.available_image_quota_for_account(account)
 
@@ -4217,10 +4227,16 @@ class AccountService:
             items.append(item)
         return items
 
-    def get_stats(self) -> dict:
+    def get_stats(self, *, allow_live_cf_probe: bool = False) -> dict:
         with self._lock:
             items = list(self._accounts.values())
             runtime_candidate_stats = self.get_image_candidate_runtime_stats()
+
+        def _schedulable(account: dict) -> bool:
+            return self._is_image_account_schedulable(
+                account,
+                allow_live_cf_probe=allow_live_cf_probe,
+            )
         total = len(items)
         active = sum(1 for a in items if a.get("status") == "正常")
         limited = sum(1 for a in items if a.get("status") == "限流")
@@ -4239,7 +4255,7 @@ class AccountService:
             if str(a.get("panda_sync_state") or "").lower() == "ready"
             and not self._is_panda_upload_eligible(a)
         )
-        schedulable = sum(1 for a in items if self._is_image_account_schedulable(a))
+        schedulable = sum(1 for a in items if _schedulable(a))
         scheduling_enabled = sum(
             1 for a in items if self.is_manual_scheduling_enabled(a) and a.get("status") == "正常"
         )
@@ -4250,7 +4266,7 @@ class AccountService:
         verified_quota_count = sum(
             1
             for a in items
-            if self._is_image_account_schedulable(a) and self._image_quota_refresh_time(a) is not None
+            if _schedulable(a) and self._image_quota_refresh_time(a) is not None
         )
         stale_quota_count = sum(
             1
@@ -4265,7 +4281,7 @@ class AccountService:
         available_image_quota = verified_total_quota
         latest_quota_refresh_at: str | None = None
         for a in items:
-            if not self._is_image_account_schedulable(a):
+            if not _schedulable(a):
                 continue
             ts = self._image_quota_refresh_time(a)
             if ts is None:

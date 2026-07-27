@@ -372,6 +372,19 @@ def _run_panda_account_sync() -> dict[str, object]:
         _panda_sync_lock.release()
 
 
+def _accounts_list_payload(offset: int, limit: int) -> dict:
+    items = account_service.list_accounts()
+    total = len(items)
+    page_items = items[offset: offset + limit] if limit > 0 else []
+    return {
+        "items": page_items,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "stats": account_service.get_stats(),
+    }
+
+
 def create_router() -> APIRouter:
     router = APIRouter()
 
@@ -429,16 +442,7 @@ def create_router() -> APIRouter:
             limit: int = Query(default=200, ge=0, le=10000),
     ):
         require_admin(authorization)
-        items = account_service.list_accounts()
-        total = len(items)
-        page_items = items[offset: offset + limit] if limit > 0 else []
-        return {
-            "items": page_items,
-            "total": total,
-            "offset": offset,
-            "limit": limit,
-            "stats": account_service.get_stats(),
-        }
+        return await run_in_threadpool(_accounts_list_payload, offset, limit)
 
     @router.post("/api/accounts/reload-from-storage")
     async def reload_accounts_from_storage(authorization: str | None = Header(default=None)):
