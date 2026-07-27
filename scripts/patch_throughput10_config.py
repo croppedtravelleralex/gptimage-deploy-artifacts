@@ -42,6 +42,8 @@ PATCH: dict[str, object] = {
         "block_unscanned_for_schedule": True,
         "require_cf_ok_for_image": True,
     },
+    "newapi_image_sync_admission_max": 10,
+    "newapi_image_sync_admission_max_eta_secs": 540,
 }
 
 

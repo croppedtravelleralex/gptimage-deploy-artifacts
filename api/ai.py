@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import threading
 import time
@@ -133,6 +134,25 @@ def _try_enter_image_sync_admission(identity: dict[str, object] | None = None) -
             return False, max(5, eta)
         _IMAGE_SYNC_WAIT_INFLIGHT = current_waiters + 1
         return True, max(0, eta)
+
+
+async def _await_image_sync_admission(identity: dict[str, object] | None = None) -> tuple[bool, int]:
+    """Block until a sync wait seat opens or the admission wait budget is exhausted."""
+    max_wait = _image_sync_admission_max_eta_secs()
+    deadline = time.monotonic() + max_wait
+    last_eta = int(max_wait)
+    while True:
+        admitted, eta = _try_enter_image_sync_admission(identity)
+        last_eta = max(5, int(eta))
+        if admitted:
+            return True, max(0, eta)
+        # Hard ETA reject from the admission gate — no point waiting.
+        if last_eta > max_wait:
+            return False, last_eta
+        if time.monotonic() >= deadline:
+            return False, last_eta
+        sleep_secs = min(2.0, max(0.25, last_eta / 20.0))
+        await asyncio.sleep(sleep_secs)
 
 
 def _leave_image_sync_admission() -> None:
@@ -299,7 +319,7 @@ async def _run_image_sync_or_auto_async_call(
     # async_submitter is only used by explicit panda_async paths; standard sync
     # clients must never receive an empty image.task 200 on overload.
     del async_submitter
-    admitted, estimated_wait_secs = _try_enter_image_sync_admission(call.identity)
+    admitted, estimated_wait_secs = await _await_image_sync_admission(call.identity)
     if not admitted:
         call.log(
             "调用拒绝",

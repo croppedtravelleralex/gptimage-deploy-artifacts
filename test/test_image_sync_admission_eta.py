@@ -237,9 +237,11 @@ class SyncAdmissionApiTests(unittest.TestCase):
         self.assertEqual(response.headers.get("Retry-After"), "240")
 
     def test_seats_full_returns_429(self):
-        ai_module.config.data["newapi_image_sync_admission_max"] = 1
-        ai_module._IMAGE_SYNC_WAIT_INFLIGHT = 1
-        with mock.patch.object(ai_module.image_task_service, "estimate_sync_eta_secs", return_value=90):
+        with mock.patch.object(
+            ai_module,
+            "_await_image_sync_admission",
+            new=mock.AsyncMock(return_value=(False, 90)),
+        ):
             response = self.client.post(
                 "/v1/images/generations",
                 headers=AUTH_HEADERS,
