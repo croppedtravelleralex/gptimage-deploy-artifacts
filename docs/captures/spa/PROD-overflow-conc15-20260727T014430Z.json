@@ -1,0 +1,85 @@
+{
+  "stamp": "20260727T014430Z",
+  "count": 15,
+  "exit_code": 0,
+  "health_before": {
+    "slot_topology": {
+      "ps_capacity": 10,
+      "ss_capacity": 10,
+      "ps_inflight": 0,
+      "ss_inflight": 0,
+      "ps_queued": 0,
+      "ss_queued": 0,
+      "overflow_pending": 0,
+      "pipeline_in_flight": 0
+    },
+    "workload": {
+      "mode": "shadow",
+      "text_queue_mode": "off",
+      "canary_token_hashes": [
+        "40de2f332c0d3fd4"
+      ],
+      "global_text_inflight": 1,
+      "auto_live_min_ready": 0,
+      "text_queue_depth": 0,
+      "image_queue_depth": 0
+    },
+    "bandwidth": {
+      "last_24h_bytes": 0,
+      "last_1h_bytes": 0,
+      "last_5m_bytes": 0,
+      "current_mbps": 0
+    },
+    "accounts": {
+      "image_schedulable": 13,
+      "dispatchable_candidate_count": 13,
+      "image_inflight_count": 0
+    },
+    "pipeline_watchdog": {
+      "ss_active": 0,
+      "ss_queued": 0,
+      "ss_limit": 10,
+      "pipeline_in_flight": 0
+    }
+  },
+  "health_after": {
+    "slot_topology": {
+      "ps_capacity": 10,
+      "ss_capacity": 10,
+      "ps_inflight": 0,
+      "ss_inflight": 0,
+      "ps_queued": 0,
+      "ss_queued": 0,
+      "overflow_pending": 0,
+      "pipeline_in_flight": 0
+    },
+    "workload": {
+      "mode": "shadow",
+      "text_queue_mode": "off",
+      "canary_token_hashes": [
+        "40de2f332c0d3fd4"
+      ],
+      "global_text_inflight": 1,
+      "auto_live_min_ready": 0,
+      "text_queue_depth": 0,
+      "image_queue_depth": 0
+    },
+    "bandwidth": {
+      "last_24h_bytes": 28194519,
+      "last_1h_bytes": 28194519,
+      "last_5m_bytes": 28194519,
+      "current_mbps": 4
+    },
+    "accounts": {
+      "image_schedulable": 12,
+      "dispatchable_candidate_count": 11,
+      "image_inflight_count": 0
+    },
+    "pipeline_watchdog": {
+      "ss_active": 0,
+      "ss_queued": 0,
+      "ss_limit": 10,
+      "pipeline_in_flight": 0
+    }
+  }
+}
