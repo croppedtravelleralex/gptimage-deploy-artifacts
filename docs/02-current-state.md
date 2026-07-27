@@ -372,7 +372,7 @@ ssh panda 'docker exec chatgpt2api-local /app/.venv/bin/python3 -c \
 | 5 | `yumail_otp.py` 西语 OTP 已补正则 + pool 默认 subject 放宽 | HIGH | 已修复，随本次部署 |
 | 6 | 住宅/机房双池 + `probe_on_assign` 分配时活体探测 | HIGH | `proxy_pool_service` + `account_service` 已接线 |
 | 7 | A1-6：`resolve_binding_matrix` hash fallback 限定周末安全预设 | HIGH | 已修复 + 单测 |
-| 8 | 57/152 `web_dist` 文件 gitignored+untracked → git-only deploy 前端破碎 | HIGH | `arch-deploy` §5 |
+| 8 | ~~57/152 `web_dist` 文件 gitignored~~ → **已入 git**（152 文件 + `web_dist-manifest.json`） | RESOLVED | 2026-07-27 |
 | 9 | `docker-compose.panda.yml` 含 `build:` 键 → 一次 `compose up` 在 Panda 编译 | HIGH | `arch-deploy` §3 |
 | 10 | `get_schedulable_breakdown()` 无 warmup_block 桶 | MEDIUM | `arch-quota` §4 |
 | 11 | `update_account` 伪造 `last_quota_refresh_at`（Q6b） | MEDIUM | `arch-quota` §2 |
