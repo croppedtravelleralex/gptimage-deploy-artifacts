@@ -28,6 +28,19 @@ from services.proxy_quarantine import clear_gpt_unavailable
 DEFAULT_POOL = Path("/app/data/runlogs/webshare_20_proxies.secret.txt")
 
 
+def _ensure_http_proxy(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return raw
+    if raw.startswith("://"):
+        return "http" + raw
+    if raw.startswith("//"):
+        return "http:" + raw
+    if "://" not in raw:
+        return f"http://{raw}"
+    return raw
+
+
 def _egress_ip(account: dict) -> str:
     return str(account.get("proxy_egress_ip") or "").strip()
 
@@ -152,7 +165,7 @@ def plan_assignments(
 def apply_assignment(item: dict, *, timeout: float, validate: bool) -> dict:
     token = str(item.get("access_token") or "")
     email = str(item.get("email") or "")
-    proxy = str(item.get("new_proxy") or "")
+    proxy = _ensure_http_proxy(str(item.get("new_proxy") or ""))
     row: dict = {"email": email, "ok": False}
     if not token or not proxy:
         row["error"] = "missing_token_or_proxy"
