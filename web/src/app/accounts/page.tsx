@@ -706,7 +706,7 @@ function AccountsPageContent() {
   const [editProxy, setEditProxy] = useState("");
   const [isTestingProxy, setIsTestingProxy] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingModels, setIsLoadingModels] = useState(true);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshingTokens, setRefreshingTokens] = useState<Set<string>>(new Set());
   const [isDeleting, setIsDeleting] = useState(false);
@@ -721,6 +721,7 @@ function AccountsPageContent() {
   const [nurtureBindings, setNurtureBindings] = useState<Record<string, IpNurtureBinding>>({});
   const [bindingSaveBusy, setBindingSaveBusy] = useState<Set<string>>(new Set());
   const [bindingUsageSlots, setBindingUsageSlots] = useState<BindingUsageSlotsResponse["by_binding"]>({});
+  const [bindingUsageLoading, setBindingUsageLoading] = useState(false);
   const [weightEditKey, setWeightEditKey] = useState<string | null>(null);
   const [weightEditPreset, setWeightEditPreset] = useState("");
   const [weightEditMatrix, setWeightEditMatrix] = useState<number[][]>([]);
@@ -844,9 +845,11 @@ function AccountsPageContent() {
         }
       }
       setNurtureBindings(map);
-      void fetchBindingUsageSlots(28)
+      setBindingUsageLoading(true);
+      void fetchBindingUsageSlots(14)
         .then((res) => setBindingUsageSlots(res.by_binding || {}))
-        .catch(() => setBindingUsageSlots({}));
+        .catch(() => setBindingUsageSlots({}))
+        .finally(() => setBindingUsageLoading(false));
     } catch {
       // 后端未部署时静默降级
     }
@@ -1844,6 +1847,9 @@ function AccountsPageContent() {
     setEditingAccount(account);
     setEditStatus(account.status);
     setEditProxy(account.proxy ?? "");
+    if (availableModels.length === 0 && !isLoadingModels) {
+      void loadModels();
+    }
   };
 
   const handleTestAccountProxy = async () => {
@@ -2600,7 +2606,11 @@ function AccountsPageContent() {
                                     </SelectContent>
                                   </Select>
                                 </div>
-                                <BindingActivityHeatmaps matrices={bindingUsageSlots[block.key] || {}} />
+                                {bindingUsageLoading ? (
+                                  <span className="text-[10px] text-stone-400">热力图加载中…</span>
+                                ) : (
+                                  <BindingActivityHeatmaps matrices={bindingUsageSlots[block.key] || {}} days={14} />
+                                )}
                                 <Button
                                   type="button"
                                   size="sm"

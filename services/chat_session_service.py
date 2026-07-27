@@ -26,6 +26,7 @@ class ChatSessionService:
                 and account_service._is_text_interval_ready(item)
                 and not account_service._cohort_paused(item)
             ]
+        snapshot = account_workload_policy_service.build_snapshot(force_text_demand=True)
         candidates: list[dict[str, Any]] = []
         for account in raw:
             token = str(account.get("access_token") or "")
@@ -34,6 +35,7 @@ class ChatSessionService:
                 "text",
                 access_token=token,
                 force_text_demand=True,
+                snapshot=snapshot,
             )
             if gate.mode == "live" and not gate.admitted:
                 continue

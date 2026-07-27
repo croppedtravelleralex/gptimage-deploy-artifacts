@@ -77,6 +77,8 @@ _usage_recent_cache: dict[int, tuple[float, dict[str, Any]]] = {}
 _USAGE_RECENT_TTL_SEC = 45.0
 _runtime_stats_cache: tuple[float, dict[str, int | float | bool]] | None = None
 _RUNTIME_STATS_TTL_SEC = 5.0
+_text_ready_count_cache: tuple[float, int] | None = None
+_TEXT_READY_COUNT_TTL_SEC = 30.0
 
 
 class AccountService:
@@ -2949,7 +2951,14 @@ class AccountService:
     def count_text_ready_candidates(self) -> int:
         from services.chat_session_service import chat_session_service
 
-        return chat_session_service.count_text_ready(self)
+        global _text_ready_count_cache
+        now = time.time()
+        cached = _text_ready_count_cache
+        if cached is not None and cached[0] > now:
+            return int(cached[1])
+        count = chat_session_service.count_text_ready(self)
+        _text_ready_count_cache = (now + _TEXT_READY_COUNT_TTL_SEC, count)
+        return count
 
     def record_account_traffic(
             self,

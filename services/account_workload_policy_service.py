@@ -161,13 +161,16 @@ class AccountWorkloadPolicyService:
         *,
         access_token: str = "",
         force_text_demand: bool = False,
+        snapshot: WorkloadSnapshot | None = None,
     ) -> WorkloadGateResult:
         account = account or {}
         canary = self.is_canary(account, access_token=access_token)
-        snapshot = self.build_snapshot(force_text_demand=force_text_demand or purpose == "text")
+        workload_snapshot = snapshot or self.build_snapshot(
+            force_text_demand=force_text_demand or purpose == "text",
+        )
         caps = self.capabilities_for(account)
         decision = decide_account_workload(
-            snapshot,
+            workload_snapshot,
             caps,
             allowlist_rimg_exempt=canary and purpose == "text",
         )
