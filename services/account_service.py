@@ -3791,7 +3791,7 @@ class AccountService:
                 account["proxy_cf_classification"] = ""
                 if incoming_cf:
                     account.update(incoming_cf)
-                account = self._normalize_account(account)
+                account = self._normalize_account(account, stamp_cf=True)
                 if account is None:
                     return None
             self._accounts[access_token] = account
