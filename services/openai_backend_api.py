@@ -51,6 +51,14 @@ class ImageContentPolicyError(RuntimeError):
     pass
 
 
+class ImageUpstreamTerminalError(RuntimeError):
+    """Raised when upstream has reached a non-recoverable terminal state during poll."""
+
+    def __init__(self, message: str, *, code: str = "upstream_terminal_error") -> None:
+        super().__init__(message)
+        self.code = code
+
+
 class ImageStreamCancelledError(RuntimeError):
     pass
 
@@ -458,6 +466,62 @@ def _is_content_policy_error(error_msg: str) -> bool:
         return False
     msg_lower = error_msg.lower()
     return any(keyword in msg_lower for keyword in _CONTENT_POLICY_KEYWORDS)
+
+
+_MISSING_REFERENCE_PATTERNS = (
+    re.compile(r"请上传.*参考图", re.IGNORECASE),
+    re.compile(r"请先上传.*(?:图|图片|参考)", re.IGNORECASE),
+    re.compile(r"还没有.*(?:可用|任何).*(?:人物|参考).*(?:图|图片)", re.IGNORECASE),
+    re.compile(r"please\s+upload.*reference", re.IGNORECASE),
+    re.compile(r"upload.*reference\s+image", re.IGNORECASE),
+    re.compile(r"no\s+(?:usable\s+)?reference\s+image", re.IGNORECASE),
+    re.compile(r"don'?t\s+have.*(?:reference|image).*upload", re.IGNORECASE),
+)
+
+_INSTANT_LIMIT_PATTERNS = (
+    re.compile(r"instant\s+limit", re.IGNORECASE),
+    re.compile(r"image\s+creation\s+limit", re.IGNORECASE),
+    re.compile(r"limit\s+resets", re.IGNORECASE),
+)
+
+
+def _extract_message_text(message: dict[str, Any]) -> str:
+    content = message.get("content") or {}
+    text_parts: list[str] = []
+    if isinstance(content, dict):
+        msg_parts = content.get("parts") or []
+        if isinstance(msg_parts, list):
+            for part in msg_parts:
+                if isinstance(part, str) and part.strip():
+                    text_parts.append(part.strip())
+        text_field = str(content.get("text") or "")
+        if text_field.strip():
+            text_parts.append(text_field.strip())
+    elif isinstance(content, str) and content.strip():
+        text_parts.append(content.strip())
+    return "\n".join(text_parts)
+
+
+def _classify_terminal_upstream_text(text: str) -> tuple[str, str] | None:
+    """Classify assistant/task text into a terminal upstream error code."""
+    if not text or not str(text).strip():
+        return None
+    clipped = str(text).strip()[:500]
+    if _is_content_policy_error(clipped):
+        return "content_policy_violation", clipped
+    msg_lower = clipped.lower()
+    if "image creation limit" in msg_lower or any(pattern.search(clipped) for pattern in _INSTANT_LIMIT_PATTERNS):
+        return "image_instant_limit", clipped
+    if any(pattern.search(clipped) for pattern in _MISSING_REFERENCE_PATTERNS):
+        return "missing_reference_image", clipped
+    return None
+
+
+def _raise_terminal_upstream_block(code: str, message: str) -> None:
+    clipped = str(message or "").strip()[:500]
+    if code == "content_policy_violation":
+        raise ImageContentPolicyError(clipped)
+    raise ImageUpstreamTerminalError(clipped, code=code)
 
 
 @dataclass
@@ -3275,13 +3339,23 @@ class OpenAIBackendAPI:
         return sorted(records, key=lambda item: item["create_time"])
 
     @staticmethod
-    def _find_content_policy_error_in_conversation(data: Dict[str, Any]) -> str:
-        """从对话文档中查找内容政策违规错误消息。
+    def _conversation_has_image_gen_activity(data: Dict[str, Any]) -> bool:
+        """True when conversation already has an image_gen async task in flight."""
+        mapping = data.get("mapping") or {}
+        for node in mapping.values():
+            message = (node or {}).get("message") or {}
+            metadata = message.get("metadata") or {}
+            if str(metadata.get("async_task_type") or "").strip().lower() == "image_gen":
+                return True
+        return False
 
-        上游拒绝生成图片时，错误消息会出现在 assistant 消息的文本中。
-        本方法遍历所有 assistant/tool 消息，检查是否包含内容政策违规关键词，
-        如果匹配则返回该消息文本（截断至 500 字符），否则返回空字符串。
-        """
+    @staticmethod
+    def _find_terminal_upstream_block_in_conversation(data: Dict[str, Any]) -> tuple[str, str] | None:
+        """Detect non-recoverable upstream terminal states in a conversation document."""
+        title = str(data.get("title") or "").strip()
+        if title and "image creation limit" in title.lower():
+            return "image_instant_limit", title[:500]
+
         mapping = data.get("mapping") or {}
         for node in mapping.values():
             message = (node or {}).get("message") or {}
@@ -3289,23 +3363,25 @@ class OpenAIBackendAPI:
             role = str(author.get("role") or "").strip().lower()
             if role not in {"assistant", "tool"}:
                 continue
-            content = message.get("content") or {}
-            # 提取消息文本
-            text_parts: list[str] = []
-            if isinstance(content, dict):
-                msg_parts = content.get("parts") or []
-                if isinstance(msg_parts, list):
-                    for part in msg_parts:
-                        if isinstance(part, str) and part.strip():
-                            text_parts.append(part.strip())
-                text_field = str(content.get("text") or "")
-                if text_field.strip():
-                    text_parts.append(text_field.strip())
-            elif isinstance(content, str) and content.strip():
-                text_parts.append(content.strip())
-            msg_text = "\n".join(text_parts)
-            if msg_text and _is_content_policy_error(msg_text):
-                return msg_text[:500]
+            msg_text = _extract_message_text(message)
+            if not msg_text:
+                continue
+            hit = _classify_terminal_upstream_text(msg_text)
+            if hit:
+                return hit
+        return None
+
+    @staticmethod
+    def _find_content_policy_error_in_conversation(data: Dict[str, Any]) -> str:
+        """从对话文档中查找内容政策违规错误消息。
+
+        上游拒绝生成图片时，错误消息会出现在 assistant 消息的文本中。
+        本方法遍历所有 assistant/tool 消息，检查是否包含内容政策违规关键词，
+        如果匹配则返回该消息文本（截断至 500 字符），否则返回空字符串。
+        """
+        hit = OpenAIBackendAPI._find_terminal_upstream_block_in_conversation(data)
+        if hit and hit[0] == "content_policy_violation":
+            return hit[1]
         return ""
 
     def _resolve_poll_initial_wait_secs(self, sse_image_gen_ms: float | None = None) -> float:
@@ -3689,21 +3765,35 @@ class OpenAIBackendAPI:
                     if sediment_id not in sediment_ids:
                         sediment_ids.append(sediment_id)
 
-            # 检查对话文本中是否包含内容政策违规错误
-            # 当上游拒绝生成图片时，错误消息会出现在对话文档的 assistant 消息中，
+            # 检查对话文本中的不可恢复终态（内容政策 / Instant 限额 / 缺参考图等）。
+            # 当上游拒绝生成图片或等待用户补参时，错误消息会出现在 assistant 文本中，
             # 而非 /backend-api/tasks/ 的 task error 结构中。
-            # 如果在没有找到图片文件 ID 的同时检测到内容政策违规，立即中断轮询。
-            if not file_ids and not sediment_ids:
-                policy_msg = self._find_content_policy_error_in_conversation(conversation)
-                if policy_msg:
+            if not file_ids and not sediment_ids and not self._conversation_has_image_gen_activity(conversation):
+                terminal_block = self._find_terminal_upstream_block_in_conversation(conversation)
+                if terminal_block:
+                    code, terminal_msg = terminal_block
                     logger.warning({
-                        "event": "image_poll_conversation_text_policy_violation",
+                        "event": "image_poll_conversation_terminal_block",
                         "conversation_id": conversation_id,
                         "attempt": budget.attempt,
-                        "error_msg": policy_msg[:200],
+                        "terminal_code": code,
+                        "error_msg": terminal_msg[:200],
                         "poll_budget": budget.snapshot(),
                     })
-                    raise ImageContentPolicyError(policy_msg)
+                    _raise_terminal_upstream_block(code, terminal_msg)
+                if last_task_error:
+                    task_block = _classify_terminal_upstream_text(last_task_error)
+                    if task_block:
+                        code, terminal_msg = task_block
+                        logger.warning({
+                            "event": "image_poll_task_terminal_block",
+                            "conversation_id": conversation_id,
+                            "attempt": budget.attempt,
+                            "terminal_code": code,
+                            "error_msg": terminal_msg[:200],
+                            "poll_budget": budget.snapshot(),
+                        })
+                        _raise_terminal_upstream_block(code, terminal_msg)
 
             logger.debug({
                 "event": "image_poll_check",
@@ -4018,11 +4108,15 @@ class OpenAIBackendAPI:
                     sse_image_gen_ms=sse_image_gen_ms,
                 )
             except ImagePollTimeoutError as exc:
-                # 如果轮询超时且有 task error（如 moderation 拦截），抛出 ImageContentPolicyError
+                # 如果轮询超时且有 task error（如 moderation 拦截），抛出明确终态错误
                 # 而非 ImagePollTimeoutError，让调用方能区分真正的超时和上游拒绝
                 task_error = getattr(exc, "task_error", "")
                 if not file_ids and not sediment_ids:
                     if task_error:
+                        task_block = _classify_terminal_upstream_text(task_error)
+                        if task_block:
+                            code, terminal_msg = task_block
+                            _raise_terminal_upstream_block(code, terminal_msg)
                         raise ImageContentPolicyError(task_error) from exc
                     raise
                 logger.warning({

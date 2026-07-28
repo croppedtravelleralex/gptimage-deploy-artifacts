@@ -18,6 +18,7 @@ from services.openai_backend_api import (
     ImagePollRateLimitedError,
     ImagePollTimeoutError,
     ImageStreamCancelledError,
+    ImageUpstreamTerminalError,
     InvalidAccessTokenError,
     OpenAIBackendAPI,
 )
@@ -1493,7 +1494,7 @@ def stream_image_outputs(
             conversation_id=getattr(exc, "conversation_id", conversation_id or ""),
             access_token=access_token,
         ) from exc
-    except (ImageContentPolicyError, ImagePollTimeoutError) as exc:
+    except (ImageContentPolicyError, ImageUpstreamTerminalError, ImagePollTimeoutError) as exc:
         # 当检测到文本回复时，task error 不应直接判定为内容策略违规，
         # 因为图片可能仍在后台异步生成中
         if is_text_reply and isinstance(exc, ImageContentPolicyError):
@@ -1686,7 +1687,9 @@ def stream_image_outputs(
                     "is_transient": is_transient,
                 })
                 # 如果还有重试次数且不是超时/内容违规错误，继续重试
-                if poll_attempt < MAX_FALLBACK_POLL_RETRIES and not isinstance(exc, (ImagePollTimeoutError, ImageContentPolicyError)):
+                if poll_attempt < MAX_FALLBACK_POLL_RETRIES and not isinstance(
+                    exc, (ImagePollTimeoutError, ImageContentPolicyError, ImageUpstreamTerminalError)
+                ):
                     # 递增退避：30s, 60s
                     backoff = 30.0 * poll_attempt
                     logger.info({
@@ -2064,6 +2067,24 @@ def _generate_single_image(
                     })
                     raise
                 raise
+            except ImageUpstreamTerminalError as exc:
+                account_service.mark_image_result(token, False, error=exc)
+                logger.warning({
+                    "event": "image_stream_upstream_terminal_error",
+                    "request_token": token,
+                    "account_email": account_email,
+                    "error": str(exc),
+                    "terminal_code": getattr(exc, "code", ""),
+                    "index": index,
+                })
+                raise ImageGenerationError(
+                    str(exc) or "Image generation was rejected by upstream.",
+                    status_code=400,
+                    error_type="invalid_request_error",
+                    code=str(getattr(exc, "code", "") or "upstream_terminal_error"),
+                    account_email=account_email,
+                    conversation_id=_conversation_id_from_exception(exc) or last_conversation_id,
+                ) from exc
             except ImageContentPolicyError as exc:
                 account_service.mark_image_result(token, False, error=exc)
                 logger.warning({
