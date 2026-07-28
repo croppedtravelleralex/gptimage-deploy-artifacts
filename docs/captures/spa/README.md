@@ -69,6 +69,8 @@ Camoufox 登录/发 prompt（抓 HAR）
 | [`BASELINE-pre-slotledger-20260725T072257Z.md`](./BASELINE-pre-slotledger-20260725T072257Z.md) | **SlotLedger 前横评基线**（RSS / inflight / dispatchable / conc10 参考）；`source=static_docs_26` |
 | [`S-cf-ok-spare-webshare-20260725.json`](./S-cf-ok-spare-webshare-20260725.json) | 100 池 CF 探活：空闲 CF-ok 节点盘点（换绑前） |
 | [`T-cf-fail-rebind-shared-ip-20260725.json`](./T-cf-fail-rebind-shared-ip-20260725.json) | 9 个 cf_fail 号换绑 + 单 IP 2 号分配表 |
+| [`PROD-conc20-20260728T080723Z-gantt.md`](./PROD-conc20-20260728T080723Z-gantt.md) | conc20 **19/20** @ 10 SS 槽；批完成 ~126s；754s 尾等待甘特 |
+| [`PROD-conc20-idx18-poll-diag-20260728.md`](./PROD-conc20-idx18-poll-diag-20260728.md) | idx18 上游 Instant limit 诊断；单号复测 success @75s |
 
 ## SlotLedger 横评基线
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ [修复/续轮询] 2026-07-28：`timeout_pending` 任务延迟 `schedule_trace` 终态；`pipeline_phase` 不再误标 `delivered`；hard-timeout 宽限后采纳迟到 success。部署 `deploy/codex/resume-trace-fix-20260728`。
++ [验收/诊断] 2026-07-28：conc20 `pipe-conc10-20260728T080723Z` **19/20**（754s 尾任务）；idx18 Instant limit 上游诊断 + 甘特 `PROD-conc20-20260728T080723Z-gantt.md`。
 + [探测/运维] 2026-07-27：Webshare SG 住宅 **20/20** Panda 串行探活全通过（本机无白名单不可外推）；专页 `docs/captures/infra/webshare20-panda-probe-bandwidth-20260727.md`；脚本 `_tmp_panda_webshare20_serial_probe.py`；证据 `data/runlogs/webshare20_panda_batch_1_19.json`。
 + [运维] 2026-07-27：Panda 公网带宽实测（无代理）——出 **~33Mbps** / 入 **~194Mbps**，与腾讯云公网监控一致；套餐 30Mbps 仅指出网封顶。见同上专页。
 + [chore/web_dist] 2026-07-27：`web_dist` 纳入 git（152 文件 + manifest），git-only 部署前端不再破碎。

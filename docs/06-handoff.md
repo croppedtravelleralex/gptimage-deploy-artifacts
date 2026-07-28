@@ -1,6 +1,6 @@
 # 交接摘要
 
-日期：2026-07-27
+日期：2026-07-28
 
 **执行计划**：根目录 [`plan.md`](../plan.md)（**THROUGHPUT-10**）  
 **文档导航**：[`docs/README.md`](README.md)  
@@ -34,6 +34,7 @@
 | **P0** | **住宅 20 + 机房 100 双池** + 分配时 CF live probe | secret 已装；**20/20 Panda 探活通过**（`captures/infra/webshare20-panda-probe-bandwidth-20260727.md`） |
 | **P0** | **溯源修复** P29-1/P29-2 + conc10/15/20 验收 | **conc10/15/20 已通过** |
 | **P0** | call log phase 竞态 + `prompt_enhance` 同步透传 | **已部署** `deploy/codex/phase-log-fix-20260727` |
+| **P0** | 续轮询 trace 终态 / `delivered` 语义修复 | **已部署** `deploy/codex/resume-trace-fix-20260728` |
 | **P0** | 额度 60s 循环 + `mark_image_result` 事件刷新 | 已接线 |
 | P1 | Ops health：`slot_topology` / `proxy_pool` / `bandwidth` | 已暴露 |
 | **P2** | 账号/基础设施 Rust（**N>50 后**） |

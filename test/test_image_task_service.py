@@ -941,6 +941,46 @@ class ImageTaskServiceTests(unittest.TestCase):
             # thread warning during teardown.
             wait_for_task(service, OWNER, "slow-task", TASK_STATUS_SUCCESS)
 
+    def test_timeout_pending_defers_schedule_trace_until_terminal(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            class TimeoutWithConversation(RuntimeError):
+                conversation_id = "conv-trace-defer"
+                code = "image_timeout_pending"
+
+            def handler(_payload):
+                raise TimeoutWithConversation("poll timeout")
+
+            from services.image_pipeline import schedule_trace
+
+            service = self.make_service(
+                Path(tmp_dir) / "image_tasks.json",
+                handler,
+                submit_workers_getter=lambda: 1,
+                poll_workers_getter=lambda: 0,
+            )
+            key = f"{OWNER['id']}:trace-defer-task"
+            with mock.patch.object(schedule_trace, "enabled", return_value=True):
+                service.submit_generation(
+                    OWNER,
+                    client_task_id="trace-defer-task",
+                    prompt="cat",
+                    model="gpt-image-2",
+                    size=None,
+                    base_url="http://local.test",
+                )
+                wait_for_task(service, OWNER, "trace-defer-task", TASK_STATUS_TIMEOUT_PENDING)
+                self.assertIsNotNone(schedule_trace.get(key))
+                with service._condition:
+                    stored = service._tasks[key]
+                    self.assertNotIn("schedule_trace", stored)
+
+                service._update_task(key, status=TASK_STATUS_ERROR, progress="failed", error="resume exhausted")
+                self.assertIsNone(schedule_trace.get(key))
+                with service._condition:
+                    stored = service._tasks[key]
+                    self.assertIn("schedule_trace", stored)
+                    self.assertIn("task_terminal", (stored.get("schedule_trace") or {}).get("checkpoints", {}))
+
 
 if __name__ == "__main__":
     unittest.main()

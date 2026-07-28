@@ -2045,8 +2045,8 @@ class ImageTaskService:
             )
         finally:
             phase_timings = self._finalize_pipeline_run(key, pipeline_run)
-            trace_payload = self._finalize_schedule_trace(key)
             schedule_trace.unbind(trace_token)
+            trace_payload = self._maybe_finalize_schedule_trace(key)
             pending = outcome.get("pending_call_log")
             if isinstance(pending, dict):
                 if isinstance(phase_timings, dict) and phase_timings:
@@ -2054,6 +2054,21 @@ class ImageTaskService:
                 if isinstance(trace_payload, dict) and trace_payload:
                     pending["schedule_trace"] = trace_payload
         self._emit_pending_call_log(key, outcome, identity, mode, model, started)
+
+    def _maybe_finalize_schedule_trace(self, key: str) -> dict[str, Any] | None:
+        """Finalize schedule trace only when the task has reached a true terminal state.
+
+        timeout_pending / resume_polling tasks must keep tracing until success or
+        error, otherwise ``task_terminal`` fires at the first attempt (~190s) while the
+        client still polls for ~560s more (conc20 idx18).
+        """
+        with self._condition:
+            task = self._tasks.get(key)
+            if not isinstance(task, dict):
+                return None
+            if _clean(task.get("status")) not in TERMINAL_STATUSES:
+                return None
+        return self._finalize_schedule_trace(key)
 
     def _finalize_schedule_trace(self, key: str) -> dict[str, Any] | None:
         trace = schedule_trace.pop(key)
@@ -2104,6 +2119,21 @@ class ImageTaskService:
             else None,
         )
 
+    def _pipeline_phase_after_run(self, key: str) -> str:
+        with self._condition:
+            task = self._tasks.get(key)
+            if not isinstance(task, dict):
+                return "released"
+            status = _clean(task.get("status"))
+            progress = _clean(task.get("progress"))
+        if status == TASK_STATUS_SUCCESS:
+            return "delivered"
+        if status == TASK_STATUS_TIMEOUT_PENDING or progress in {"timeout_pending", "resume_polling"}:
+            return "timeout_pending"
+        if status == TASK_STATUS_ERROR:
+            return "failed"
+        return "released"
+
     def _finalize_pipeline_run(self, key: str, pipeline_run: object | None) -> dict[str, int] | None:
         if pipeline_run is None:
             # Nothing was ever published for this key (pipeline disabled, or begin_run
@@ -2115,7 +2145,11 @@ class ImageTaskService:
             # finish() is idempotent, so a run the reaper already reclaimed is a no-op
             # here rather than a double-decrement of the global admission counter.
             timings = pipeline_run.finish().to_dict()
-            self._update_task(key, phase_timings_ms=timings, pipeline_phase="delivered")
+            self._update_task(
+                key,
+                phase_timings_ms=timings,
+                pipeline_phase=self._pipeline_phase_after_run(key),
+            )
             return timings if isinstance(timings, dict) else None
         except Exception:
             return None
@@ -2327,45 +2361,117 @@ class ImageTaskService:
             if finished.is_set():
                 thread.join(timeout=0.1)
             runner_alive_after_cancel = thread.is_alive()
-            duration_ms = int((time.time() - started) * 1000)
             with state_lock:
-                payload_for_run = outcome.get("payload_for_run") if isinstance(outcome.get("payload_for_run"), dict) else payload
-                conversation_id = _clean(outcome.get("conversation_id"))
-                resume_access_token = _clean(outcome.get("access_token"))
+                late_result = outcome.get("result")
+                if isinstance(late_result, dict):
+                    late_data = late_result.get("data")
+                    if isinstance(late_data, list) and late_data:
+                        completed = True
+            if completed:
+                with state_lock:
+                    outcome["exception"] = None
+            else:
+                duration_ms = int((time.time() - started) * 1000)
+                with state_lock:
+                    payload_for_run = outcome.get("payload_for_run") if isinstance(outcome.get("payload_for_run"), dict) else payload
+                    conversation_id = _clean(outcome.get("conversation_id"))
+                    resume_access_token = _clean(outcome.get("access_token"))
+                    leased_tokens = self._leased_tokens_for_release(
+                        leased_access_tokens=leased_access_tokens,
+                        outcome=outcome,
+                        pipeline_run=pipeline_run,
+                    )
+
+                resume_worth_it = True
+                resume_remaining = self._sync_ladder_remaining_secs(key)
+                if resume_remaining is not None and resume_remaining < _SYNC_LADDER_MIN_ATTEMPT_SECS:
+                    # The sync caller's budget is gone: a resume poll could only hit upstream
+                    # with the same access token for a response nobody can receive, so this
+                    # is where the ladder stops instead of queueing 1–4 more attempts.
+                    resume_worth_it = False
+                if conversation_id and resume_worth_it:
+                    error_message = (
+                        f"image task hard timeout after upstream conversation capture ({hard_timeout_secs:.1f}s); "
+                        "background resume polling scheduled"
+                    )
+                    for leased_token in leased_tokens:
+                        try:
+                            account_service.record_image_transient_backoff(leased_token, error_message)
+                        except Exception:
+                            pass
+                    force_released = sum(1 for token in leased_tokens if release_slot_once(token))
+                    resume_timeout_secs = max(
+                        float(payload.get("resume_timeout_secs") or 0.0),
+                        float(payload.get("poll_timeout_secs") or 0.0),
+                        float(self.timeout_pending_poll_secs_getter()),
+                    )
+                    with state_lock:
+                        self._update_task(
+                            key,
+                            status=TASK_STATUS_TIMEOUT_PENDING,
+                            progress="timeout_pending",
+                            error=error_message,
+                            data=[],
+                            duration_ms=duration_ms,
+                            hard_timeout_secs=hard_timeout_secs,
+                            cancel_grace_secs=cancel_grace_secs,
+                            runner_alive_after_cancel=runner_alive_after_cancel,
+                            force_released_inflight_count=force_released,
+                            conversation_id=conversation_id,
+                            resume_timeout_secs=resume_timeout_secs,
+                            **({"resume_access_token": resume_access_token} if resume_access_token else {}),
+                            next_resume_ts=time.time() + self._resume_delay_secs(1),
+                        )
+                    self._log_call(
+                        identity,
+                        mode,
+                        model,
+                        started,
+                        "调用硬超时待续轮询",
+                        request_preview=request_text(payload_for_run.get("prompt")),
+                        status="timeout_pending",
+                        error=error_message,
+                    )
+                    return
+
+                if conversation_id and not resume_worth_it:
+                    error_message = (
+                        f"image task hard timeout after upstream conversation capture ({hard_timeout_secs:.1f}s); "
+                        "sync client budget exhausted, resume polling skipped"
+                    )
+                else:
+                    error_message = f"image task hard timeout before upstream completion ({hard_timeout_secs:.1f}s); no conversation_id captured"
+                released_count = 0
                 leased_tokens = self._leased_tokens_for_release(
                     leased_access_tokens=leased_access_tokens,
                     outcome=outcome,
                     pipeline_run=pipeline_run,
                 )
-
-            resume_worth_it = True
-            resume_remaining = self._sync_ladder_remaining_secs(key)
-            if resume_remaining is not None and resume_remaining < _SYNC_LADDER_MIN_ATTEMPT_SECS:
-                # The sync caller's budget is gone: a resume poll could only hit upstream
-                # with the same access token for a response nobody can receive, so this
-                # is where the ladder stops instead of queueing 1–4 more attempts.
-                resume_worth_it = False
-            if conversation_id and resume_worth_it:
-                error_message = (
-                    f"image task hard timeout after upstream conversation capture ({hard_timeout_secs:.1f}s); "
-                    "background resume polling scheduled"
-                )
                 for leased_token in leased_tokens:
+                    if not claim_release(leased_token):
+                        continue
                     try:
                         account_service.record_image_transient_backoff(leased_token, error_message)
                     except Exception:
                         pass
-                force_released = sum(1 for token in leased_tokens if release_slot_once(token))
-                resume_timeout_secs = max(
-                    float(payload.get("resume_timeout_secs") or 0.0),
-                    float(payload.get("poll_timeout_secs") or 0.0),
-                    float(self.timeout_pending_poll_secs_getter()),
-                )
+                    try:
+                        # mark_image_result() 已负责释放账号在途槽位。只有它抛错时，
+                        # 才交给后面的兜底强释，避免同一 token 被释放两次。
+                        account_service.mark_image_result(leased_token, False)
+                        released_count += 1
+                    except Exception:
+                        try:
+                            account_service.release_image_slot(leased_token)
+                            released_count += 1
+                        except Exception:
+                            with state_lock:
+                                released_access_tokens.discard(leased_token)
+                force_released = released_count
                 with state_lock:
                     self._update_task(
                         key,
-                        status=TASK_STATUS_TIMEOUT_PENDING,
-                        progress="timeout_pending",
+                        status=TASK_STATUS_ERROR,
+                        progress="failed",
                         error=error_message,
                         data=[],
                         duration_ms=duration_ms,
@@ -2373,83 +2479,21 @@ class ImageTaskService:
                         cancel_grace_secs=cancel_grace_secs,
                         runner_alive_after_cancel=runner_alive_after_cancel,
                         force_released_inflight_count=force_released,
-                        conversation_id=conversation_id,
-                        resume_timeout_secs=resume_timeout_secs,
-                        **({"resume_access_token": resume_access_token} if resume_access_token else {}),
-                        next_resume_ts=time.time() + self._resume_delay_secs(1),
+                        # Kept so the operator-triggered resume_poll() escape hatch still has
+                        # something to resume, even though the automatic ladder stopped here.
+                        **({"conversation_id": conversation_id} if conversation_id else {}),
                     )
                 self._log_call(
                     identity,
                     mode,
                     model,
                     started,
-                    "调用硬超时待续轮询",
+                    "调用硬超时",
                     request_preview=request_text(payload_for_run.get("prompt")),
-                    status="timeout_pending",
+                    status="failed",
                     error=error_message,
                 )
                 return
-
-            if conversation_id and not resume_worth_it:
-                error_message = (
-                    f"image task hard timeout after upstream conversation capture ({hard_timeout_secs:.1f}s); "
-                    "sync client budget exhausted, resume polling skipped"
-                )
-            else:
-                error_message = f"image task hard timeout before upstream completion ({hard_timeout_secs:.1f}s); no conversation_id captured"
-            released_count = 0
-            leased_tokens = self._leased_tokens_for_release(
-                leased_access_tokens=leased_access_tokens,
-                outcome=outcome,
-                pipeline_run=pipeline_run,
-            )
-            for leased_token in leased_tokens:
-                if not claim_release(leased_token):
-                    continue
-                try:
-                    account_service.record_image_transient_backoff(leased_token, error_message)
-                except Exception:
-                    pass
-                try:
-                    # mark_image_result() 已负责释放账号在途槽位。只有它抛错时，
-                    # 才交给后面的兜底强释，避免同一 token 被释放两次。
-                    account_service.mark_image_result(leased_token, False)
-                    released_count += 1
-                except Exception:
-                    try:
-                        account_service.release_image_slot(leased_token)
-                        released_count += 1
-                    except Exception:
-                        with state_lock:
-                            released_access_tokens.discard(leased_token)
-            force_released = released_count
-            with state_lock:
-                self._update_task(
-                    key,
-                    status=TASK_STATUS_ERROR,
-                    progress="failed",
-                    error=error_message,
-                    data=[],
-                    duration_ms=duration_ms,
-                    hard_timeout_secs=hard_timeout_secs,
-                    cancel_grace_secs=cancel_grace_secs,
-                    runner_alive_after_cancel=runner_alive_after_cancel,
-                    force_released_inflight_count=force_released,
-                    # Kept so the operator-triggered resume_poll() escape hatch still has
-                    # something to resume, even though the automatic ladder stopped here.
-                    **({"conversation_id": conversation_id} if conversation_id else {}),
-                )
-            self._log_call(
-                identity,
-                mode,
-                model,
-                started,
-                "调用硬超时",
-                request_preview=request_text(payload_for_run.get("prompt")),
-                status="failed",
-                error=error_message,
-            )
-            return
 
         with state_lock:
             payload_for_run = outcome.get("payload_for_run") if isinstance(outcome.get("payload_for_run"), dict) else payload
@@ -2634,10 +2678,14 @@ class ImageTaskService:
             # keeps the task non-terminal until some later pass notices.
             next_resume_ts = float(task.get("next_resume_ts") or 0.0)
             if now > deadline or (next_resume_ts > 0 and next_resume_ts > deadline):
+                attempts = int(task.get("resume_attempts") or 0)
                 task.update(
                     status=TASK_STATUS_ERROR,
                     progress="failed",
-                    error=f"续轮询总墙钟已超时取消（>{int(self._resume_wall_secs())}s）",
+                    error=(
+                        f"续轮询总墙钟已超时取消（>{int(self._resume_wall_secs())}s，"
+                        f"已尝试 {attempts} 次）"
+                    ),
                     updated_at=_now_iso(),
                     updated_ts=now,
                 )
@@ -3080,6 +3128,7 @@ class ImageTaskService:
             task["worker_duration_ms"] = int(worker_duration)
 
     def _update_task(self, key: str, **updates: Any) -> None:
+        should_finalize_trace = False
         with self._condition:
             task = self._tasks.get(key)
             if task is None:
@@ -3104,8 +3153,11 @@ class ImageTaskService:
             if _clean(task.get("status")) in TERMINAL_STATUSES:
                 self._cancel_events.pop(key, None)
                 self._apply_terminal_timing_fields(task)
+                should_finalize_trace = schedule_trace.get(key) is not None
             self._save_task_locked(key)
             self._condition.notify_all()
+        if should_finalize_trace:
+            self._finalize_schedule_trace(key)
 
     def _init_db_locked(self) -> None:
         with self._connect() as conn:
