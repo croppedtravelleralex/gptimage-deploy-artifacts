@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from api.image_inputs import parse_image_edit_request, read_image_sources, read_image_sources_with_asset_ids
 from api.support import require_identity, resolve_image_base_url
 from services.config import config
+from services.image_request_validation import ImageRequestValidationError, validate_generation_request, validation_error_detail
 from services.content_filter import check_request, request_shape, request_text
 from services.editable_file_task_service import editable_file_task_service
 from services.image_sync_adapter import build_openai_image_response, new_client_task_id, run_edit_sync, run_generation_sync
@@ -431,7 +432,8 @@ async def _run_generation_async_submit_call(call: LoggedCall, identity: dict[str
         return result
     except ValueError as exc:
         call.log("异步任务入队失败", status="failed", error=str(exc))
-        raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        detail = validation_error_detail(exc) if getattr(exc, "code", None) else {"error": str(exc)}
+        raise HTTPException(status_code=400, detail=detail) from exc
     except ImageTaskQueueFullError as exc:
         call.log("异步任务入队失败", status="failed", error=str(exc))
         raise HTTPException(
@@ -458,7 +460,8 @@ async def _run_edit_async_submit_call(call: LoggedCall, identity: dict[str, obje
         return result
     except ValueError as exc:
         call.log("异步任务入队失败", status="failed", error=str(exc))
-        raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        detail = validation_error_detail(exc) if getattr(exc, "code", None) else {"error": str(exc)}
+        raise HTTPException(status_code=400, detail=detail) from exc
     except ImageTaskQueueFullError as exc:
         call.log("异步任务入队失败", status="failed", error=str(exc))
         raise HTTPException(
@@ -509,6 +512,11 @@ def create_router() -> APIRouter:
         if _image_generation_paused():
             call.log("调用拒绝", status="paused", error="image_generation_paused")
             _raise_image_generation_paused()
+        try:
+            validate_generation_request(prompt)
+        except ImageRequestValidationError as exc:
+            call.log("调用拒绝", status="failed", error=str(exc))
+            raise HTTPException(status_code=400, detail=validation_error_detail(exc)) from exc
         await filter_or_log(call, prompt)
         if body.stream:
             return await call.run(openai_v1_image_generations.handle, payload)

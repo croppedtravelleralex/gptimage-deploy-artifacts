@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from api.image_inputs import parse_image_edit_request, read_image_sources, read_image_sources_with_asset_ids
 from api.support import require_identity, resolve_image_base_url
 from services.config import config
+from services.image_request_validation import ImageRequestValidationError, validate_generation_request, validation_error_detail
 from services.content_filter import check_request
 from services.image_task_service import ImageTaskQueueFullError, ImageTaskDuplicatePromptError, image_task_service
 from services.log_service import LoggedCall
@@ -91,6 +92,10 @@ def create_router() -> APIRouter:
         identity = require_identity(authorization)
         if _image_generation_paused():
             _raise_image_generation_paused()
+        try:
+            validate_generation_request(body.prompt)
+        except ImageRequestValidationError as exc:
+            raise HTTPException(status_code=400, detail=validation_error_detail(exc)) from exc
         await filter_or_log(LoggedCall(identity, "/api/image-tasks/generations", body.model, "文生图任务", request_text=body.prompt), body.prompt)
         preferred_email = str(x_preferred_account_email or body.preferred_account_email or "").strip()
         try:
@@ -110,7 +115,8 @@ def create_router() -> APIRouter:
                 preferred_account_email=preferred_email,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+            detail = validation_error_detail(exc) if getattr(exc, "code", None) else {"error": str(exc)}
+            raise HTTPException(status_code=400, detail=detail) from exc
         except ImageTaskQueueFullError as exc:
             raise HTTPException(
                 status_code=429,

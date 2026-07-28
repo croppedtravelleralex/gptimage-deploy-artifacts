@@ -16,6 +16,7 @@ from typing import Any
 from services.account_service import account_service
 from services.config import DATA_DIR, config
 from services.content_filter import request_text
+from services.image_request_validation import validate_generation_request
 from services.humanlike_scheduler import compute_resume_delay_seconds, compute_submit_interval_ms
 from services.log_service import LOG_TYPE_CALL, log_service
 from services.protocol import openai_v1_image_edit, openai_v1_image_generations
@@ -933,6 +934,7 @@ class ImageTaskService:
         multi_image_mode: str = "fast",
         preferred_account_email: str = "",
     ) -> dict[str, Any]:
+        validate_generation_request(prompt)
         payload = {
             "prompt": prompt,
             "model": model,

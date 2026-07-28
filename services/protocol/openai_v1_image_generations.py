@@ -11,12 +11,18 @@ from services.protocol.conversation import (
     stream_image_outputs_with_pool,
 )
 from services.config import config
+from services.image_request_validation import validate_generation_request
 from utils.image_tokens import count_image_output_items_tokens, image_usage
 
 
 def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     body = prefer_stream_for_multi_image(body)
     prompt = str(body.get("prompt") or "")
+    validate_generation_request(
+        prompt,
+        images=body.get("images") if isinstance(body.get("images"), list) else None,
+        image_asset_ids=body.get("image_asset_ids") if isinstance(body.get("image_asset_ids"), list) else None,
+    )
     model = str(body.get("model") or "gpt-image-2")
     n = int(body.get("n") or 1)
     size = body.get("size")
