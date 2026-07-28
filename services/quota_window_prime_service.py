@@ -77,13 +77,13 @@ class QuotaWindowPrimeService:
         self,
         account: dict[str, Any],
         *,
-        force: bool = False,
+        mode: str = "manual",
         settings: dict[str, object] | None = None,
     ) -> dict[str, Any]:
         settings = settings or config.get_quota_window_prime_settings()
-        mode = "force" if force else "auto"
+        eval_mode = str(mode or "manual").strip().lower()
         payload = {
-            "mode": mode,
+            "mode": eval_mode,
             "now_unix": self._now_unix(),
             "settings": prime_settings_input(settings),
             "account": prime_account_input(account),
@@ -109,7 +109,7 @@ class QuotaWindowPrimeService:
         updates.update(extra)
         account_service.update_account(token, updates, quiet=True)
 
-    def enqueue(self, token: str, *, force: bool = False) -> dict[str, Any]:
+    def enqueue(self, token: str, *, mode: str = "manual") -> dict[str, Any]:
         token = str(token or "").strip()
         if not token:
             raise ValueError("access_token is required")
@@ -120,7 +120,8 @@ class QuotaWindowPrimeService:
         if not bool(settings.get("enabled")):
             raise RuntimeError("quota_window_prime is disabled")
 
-        check = self.check_eligibility(account, force=force, settings=settings)
+        eval_mode = str(mode or "manual").strip().lower()
+        check = self.check_eligibility(account, mode=eval_mode, settings=settings)
         if not check.get("eligible"):
             raise ValueError(f"not eligible: {check.get('reason')}")
 
@@ -144,17 +145,17 @@ class QuotaWindowPrimeService:
             "reason": check.get("reason"),
         }
 
-    def enqueue_many(self, tokens: list[str], *, force: bool = False) -> dict[str, Any]:
+    def enqueue_many(self, tokens: list[str], *, mode: str = "manual") -> dict[str, Any]:
         results = []
         errors = []
         for token in tokens:
             try:
-                results.append(self.enqueue(token, force=force))
+                results.append(self.enqueue(token, mode=mode))
             except Exception as exc:
                 errors.append({"token_prefix": str(token)[:16], "error": str(exc)})
         return {"ok": not errors, "enqueued": len(results), "errors": errors, "items": results}
 
-    def enqueue_by_email(self, email: str, *, force: bool = False) -> dict[str, Any]:
+    def enqueue_by_email(self, email: str, *, mode: str = "manual") -> dict[str, Any]:
         target = str(email or "").strip().lower()
         if not target:
             raise ValueError("email is required")
@@ -165,7 +166,7 @@ class QuotaWindowPrimeService:
                 continue
             token = str(account.get("access_token") or "").strip()
             if token:
-                return self.enqueue(token, force=force)
+                return self.enqueue(token, mode=mode)
         raise ValueError("account not found")
 
     def on_task_terminal(self, *, payload: dict[str, Any], success: bool, access_token: str) -> None:

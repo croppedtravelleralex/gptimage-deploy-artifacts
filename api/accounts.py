@@ -94,7 +94,8 @@ class AccountRefreshRequest(BaseModel):
 class QuotaWindowPrimeRequest(BaseModel):
     access_tokens: list[str] = Field(default_factory=list)
     preferred_account_email: str = ""
-    force: bool = False
+    mode: Literal["manual", "auto", "force"] = "manual"
+    force: bool = False  # 兼容旧客户端：true 等价 mode=force
 
 
 class AccountOutlookRecoveryRequest(BaseModel):
@@ -822,15 +823,15 @@ def create_router() -> APIRouter:
         require_admin(authorization)
         email = str(body.preferred_account_email or "").strip()
         tokens = [str(token).strip() for token in (body.access_tokens or []) if str(token).strip()]
-        force = bool(body.force)
+        mode = "force" if bool(body.force) else str(body.mode or "manual")
         try:
             if email and not tokens:
-                return await run_in_threadpool(quota_window_prime_service.enqueue_by_email, email, force=force)
+                return await run_in_threadpool(quota_window_prime_service.enqueue_by_email, email, mode=mode)
             if not tokens:
                 raise ValueError("access_tokens or preferred_account_email is required")
             if len(tokens) == 1:
-                return await run_in_threadpool(quota_window_prime_service.enqueue, tokens[0], force=force)
-            return await run_in_threadpool(quota_window_prime_service.enqueue_many, tokens, force=force)
+                return await run_in_threadpool(quota_window_prime_service.enqueue, tokens[0], mode=mode)
+            return await run_in_threadpool(quota_window_prime_service.enqueue_many, tokens, mode=mode)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
         except RuntimeError as exc:

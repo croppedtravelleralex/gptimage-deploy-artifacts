@@ -897,6 +897,7 @@ export type QuotaWindowPrimeResponse = {
 export async function primeQuotaWindow(options: {
   accessTokens?: string[];
   preferredAccountEmail?: string;
+  mode?: "manual" | "auto" | "force";
   force?: boolean;
 }) {
   return httpRequest<QuotaWindowPrimeResponse>("/api/accounts/quota-window/prime", {
@@ -904,6 +905,7 @@ export async function primeQuotaWindow(options: {
     body: {
       access_tokens: options.accessTokens ?? [],
       preferred_account_email: options.preferredAccountEmail ?? "",
+      mode: options.mode ?? (options.force ? "force" : "manual"),
       force: Boolean(options.force),
     },
   });

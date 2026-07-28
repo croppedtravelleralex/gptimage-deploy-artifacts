@@ -553,9 +553,38 @@ function formatPrimeStateLabel(account: Account) {
   return "窗口预热";
 }
 
+function primeIneligibleConfirmMessage(message: string) {
+  const text = message.toLowerCase();
+  if (text.includes("already_imaged")) {
+    return "该账号已有成功生图记录，仍要窗口预热以钉住 restore_at？";
+  }
+  if (text.includes("quota_not_full")) {
+    return "该账号额度未满，确认仍要强制窗口预热？";
+  }
+  if (text.includes("not_schedulable")) {
+    return "该账号当前不可调度，确认仍要强制窗口预热？";
+  }
+  if (text.includes("state:done")) {
+    return "该账号已预热完成，确认再次强制窗口预热？";
+  }
+  if (text.includes("new_account") || text.includes("panda_sync") || text.includes("incoming")) {
+    return "该账号处于自动预热跳过条件（新号/同步观察），确认强制窗口预热？";
+  }
+  return "当前不满足预热条件，确认强制窗口预热？";
+}
+
 function canForcePrimeFromError(message: string) {
   const text = message.toLowerCase();
-  return text.includes("new_account") || text.includes("panda_sync") || text.includes("观察期");
+  return (
+    text.includes("new_account")
+    || text.includes("panda_sync")
+    || text.includes("incoming")
+    || text.includes("already_imaged")
+    || text.includes("quota_not_full")
+    || text.includes("not_schedulable")
+    || text.includes("state:done")
+    || text.includes("already_primed")
+  );
 }
 
 function formatQuotaSummary(accounts: Account[]) {
@@ -1587,7 +1616,7 @@ function AccountsPageContent() {
     try {
       const result = await primeQuotaWindow({
         accessTokens: [account.access_token],
-        force,
+        mode: force ? "force" : "manual",
       });
       toast.success(
         result.duplicate
@@ -1600,7 +1629,7 @@ function AccountsPageContent() {
       const message = error instanceof Error ? error.message : "窗口预热失败";
       if (!force && canForcePrimeFromError(message)) {
         toast.dismiss(toastId);
-        if (window.confirm("该账号处于观察期或新号冷却，确认强制窗口预热？")) {
+        if (window.confirm(primeIneligibleConfirmMessage(message))) {
           await handleQuotaWindowPrime(account, true);
         }
         return;
@@ -1620,7 +1649,7 @@ function AccountsPageContent() {
     }
     const toastId = toast.loading(`批量窗口预热 ${accessTokens.length} 个账号…`);
     try {
-      const result = await primeQuotaWindow({ accessTokens, force });
+      const result = await primeQuotaWindow({ accessTokens, mode: force ? "force" : "manual" });
       const failed = result.errors?.length ?? 0;
       toast.success(`已入队 ${result.enqueued ?? accessTokens.length} 个${failed > 0 ? `，失败 ${failed} 个` : ""}`, {
         id: toastId,

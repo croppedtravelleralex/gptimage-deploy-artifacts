@@ -78,6 +78,28 @@ class QuotaPrimeRustTests(unittest.TestCase):
         if engine_info().get("engine") == "rust":
             self.assertEqual(result.get("reason"), "force")
 
+    def test_verified_ready_not_panda_sync_blocked(self) -> None:
+        account = self._account(panda_sync_state="ready", panda_receive_state="verified_ready")
+        payload = {
+            "mode": "auto",
+            "now_unix": int(datetime(2026, 7, 28, tzinfo=timezone.utc).timestamp()),
+            "settings": prime_settings_input({"enabled": True}),
+            "account": prime_account_input(account),
+        }
+        result = evaluate_prime_eligibility(payload)
+        self.assertTrue(result.get("eligible"), result)
+
+    def test_manual_allows_already_imaged(self) -> None:
+        account = self._account(success=2)
+        payload = {
+            "mode": "manual",
+            "now_unix": int(datetime(2026, 7, 28, tzinfo=timezone.utc).timestamp()),
+            "settings": prime_settings_input({"enabled": True}),
+            "account": prime_account_input(account),
+        }
+        result = evaluate_prime_eligibility(payload)
+        self.assertTrue(result.get("eligible"), result)
+
 
 if __name__ == "__main__":
     unittest.main()

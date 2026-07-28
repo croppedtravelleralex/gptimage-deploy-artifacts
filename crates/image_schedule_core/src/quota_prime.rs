@@ -10,6 +10,7 @@ const NEW_MATURITY_STAGES: &[&str] = &[
 #[serde(rename_all = "snake_case")]
 pub enum PrimeEvalMode {
     Auto,
+    /// Admin 号池按钮：放宽观察期/新号/已生图，仍要求满额可调度。
     Manual,
     Force,
 }
@@ -149,14 +150,34 @@ pub fn is_new_image_account(account: &PrimeAccountInput, now_unix: i64, max_age_
     false
 }
 
-fn skip_sync_state(state: &str, skip_states: &[String]) -> bool {
-    let sync = state.trim().to_ascii_lowercase();
+const VERIFIED_RECEIVE_STATES: &[&str] = &[
+    "verified_ready",
+    "verified",
+    "local_verified",
+    "ready",
+];
+
+fn is_verified_on_panda(receive_state: &str) -> bool {
+    let receive = receive_state.trim().to_ascii_lowercase();
+    VERIFIED_RECEIVE_STATES.contains(&receive.as_str())
+}
+
+fn panda_sync_blocks_auto(account: &PrimeAccountInput, skip_states: &[String]) -> bool {
+    let sync = account.panda_sync_state.trim().to_ascii_lowercase();
     if sync.is_empty() || sync == "synced" {
         return false;
     }
-    skip_states
+    if !skip_states
         .iter()
         .any(|item| item.trim().eq_ignore_ascii_case(&sync))
+    {
+        return false;
+    }
+    // Panda 已验收号：sync=ready 仅表示本地上传语义，不是注册观察期。
+    if is_verified_on_panda(&account.panda_receive_state) {
+        return false;
+    }
+    true
 }
 
 fn prime_state_of(account: &PrimeAccountInput) -> String {
@@ -177,8 +198,8 @@ pub fn evaluate_prime_eligibility(req: &PrimeEvaluateRequest) -> PrimeEvaluateRe
             reason: "disabled".into(),
         };
     }
+    let state = prime_state_of(account);
     if req.mode == PrimeEvalMode::Force {
-        let state = prime_state_of(account);
         if state == "pending" || state == "running" {
             return PrimeEvaluateResult {
                 eligible: false,
@@ -190,8 +211,8 @@ pub fn evaluate_prime_eligibility(req: &PrimeEvaluateRequest) -> PrimeEvaluateRe
             reason: "force".into(),
         };
     }
-    let state = prime_state_of(account);
-    if state == "pending" || state == "running" || state == "done" {
+    let manual = req.mode == PrimeEvalMode::Manual;
+    if state == "pending" || state == "running" || (!manual && state == "done") {
         return PrimeEvaluateResult {
             eligible: false,
             reason: format!("state:{state}"),
@@ -221,39 +242,46 @@ pub fn evaluate_prime_eligibility(req: &PrimeEvaluateRequest) -> PrimeEvaluateRe
             reason: "quota_not_full".into(),
         };
     }
-    if account.success > 0 {
+    if !manual {
+        if account.success > 0 {
+            return PrimeEvaluateResult {
+                eligible: false,
+                reason: "already_imaged".into(),
+            };
+        }
+        if !account.primed_at.trim().is_empty() {
+            return PrimeEvaluateResult {
+                eligible: false,
+                reason: "already_primed".into(),
+            };
+        }
+        if panda_sync_blocks_auto(account, &settings.skip_panda_sync_states) {
+            return PrimeEvaluateResult {
+                eligible: false,
+                reason: "panda_sync".into(),
+            };
+        }
+        if account.panda_receive_state.trim().eq_ignore_ascii_case("incoming") {
+            return PrimeEvaluateResult {
+                eligible: false,
+                reason: "incoming".into(),
+            };
+        }
+        if is_new_image_account(account, req.now_unix, settings.min_account_age_days) {
+            return PrimeEvaluateResult {
+                eligible: false,
+                reason: "new_account".into(),
+            };
+        }
+    } else if state == "done" {
         return PrimeEvaluateResult {
             eligible: false,
-            reason: "already_imaged".into(),
-        };
-    }
-    if !account.primed_at.trim().is_empty() {
-        return PrimeEvaluateResult {
-            eligible: false,
-            reason: "already_primed".into(),
-        };
-    }
-    if skip_sync_state(&account.panda_sync_state, &settings.skip_panda_sync_states) {
-        return PrimeEvaluateResult {
-            eligible: false,
-            reason: "panda_sync".into(),
-        };
-    }
-    if account.panda_receive_state.trim().eq_ignore_ascii_case("incoming") {
-        return PrimeEvaluateResult {
-            eligible: false,
-            reason: "incoming".into(),
-        };
-    }
-    if is_new_image_account(account, req.now_unix, settings.min_account_age_days) {
-        return PrimeEvaluateResult {
-            eligible: false,
-            reason: "new_account".into(),
+            reason: "state:done".into(),
         };
     }
     PrimeEvaluateResult {
         eligible: true,
-        reason: "eligible".into(),
+        reason: if manual { "manual".into() } else { "eligible".into() },
     }
 }
 
@@ -361,5 +389,33 @@ mod tests {
             account,
         });
         assert!(out.eligible);
+    }
+
+    #[test]
+    fn verified_ready_bypasses_panda_sync_ready() {
+        let mut account = base_account();
+        account.panda_sync_state = "ready".into();
+        account.panda_receive_state = "verified_ready".into();
+        let out = evaluate_prime_eligibility(&PrimeEvaluateRequest {
+            mode: PrimeEvalMode::Auto,
+            now_unix: 1_900_000_000,
+            settings: base_settings(),
+            account,
+        });
+        assert!(out.eligible);
+    }
+
+    #[test]
+    fn manual_allows_already_imaged() {
+        let mut account = base_account();
+        account.success = 3;
+        let out = evaluate_prime_eligibility(&PrimeEvaluateRequest {
+            mode: PrimeEvalMode::Manual,
+            now_unix: 1_900_000_000,
+            settings: base_settings(),
+            account,
+        });
+        assert!(out.eligible);
+        assert_eq!(out.reason, "manual");
     }
 }

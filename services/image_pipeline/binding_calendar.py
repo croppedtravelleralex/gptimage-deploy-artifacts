@@ -547,7 +547,8 @@ def _py_evaluate_prime(payload: dict[str, Any]) -> dict[str, Any]:
             return {"eligible": False, "reason": f"state:{state}"}
         return {"eligible": True, "reason": "force"}
 
-    if state in {"pending", "running", "done"}:
+    manual = mode == "manual"
+    if state in {"pending", "running"} or (not manual and state == "done"):
         return {"eligible": False, "reason": f"state:{state}"}
 
     account_type = str(account_row.get("account_type") or "")
@@ -562,27 +563,34 @@ def _py_evaluate_prime(payload: dict[str, Any]) -> dict[str, Any]:
     full_quota = int(settings.get("full_quota") or 25)
     if int(account_row.get("quota") or 0) != full_quota:
         return {"eligible": False, "reason": "quota_not_full"}
-    if int(account_row.get("success") or 0) > 0:
-        return {"eligible": False, "reason": "already_imaged"}
-    if str(account_row.get("primed_at") or "").strip():
-        return {"eligible": False, "reason": "already_primed"}
-    skip_states = {str(x).strip().lower() for x in (settings.get("skip_panda_sync_states") or [])}
-    sync_state = str(account_row.get("panda_sync_state") or "").strip().lower()
-    if sync_state in skip_states and sync_state != "synced":
-        return {"eligible": False, "reason": "panda_sync"}
-    if str(account_row.get("panda_receive_state") or "").strip().lower() == "incoming":
-        return {"eligible": False, "reason": "incoming"}
-    account_dict = {
-        "maturity_stage": account_row.get("maturity_stage"),
-        "created_at": account_row.get("created_at_unix"),
-        "imported_at": account_row.get("imported_at_unix"),
-        "first_seen_at": account_row.get("first_seen_at_unix"),
-        "registered_at": account_row.get("registered_at_unix"),
-    }
-    min_age = float(settings.get("min_account_age_days") or 7)
-    if is_new_image_account(account_dict, max_age_days=min_age):
-        return {"eligible": False, "reason": "new_account"}
-    return {"eligible": True, "reason": "eligible"}
+
+    if not manual:
+        if int(account_row.get("success") or 0) > 0:
+            return {"eligible": False, "reason": "already_imaged"}
+        if str(account_row.get("primed_at") or "").strip():
+            return {"eligible": False, "reason": "already_primed"}
+        skip_states = {str(x).strip().lower() for x in (settings.get("skip_panda_sync_states") or [])}
+        sync_state = str(account_row.get("panda_sync_state") or "").strip().lower()
+        receive_state = str(account_row.get("panda_receive_state") or "").strip().lower()
+        verified_receive = receive_state in {"verified_ready", "verified", "local_verified", "ready"}
+        if sync_state in skip_states and sync_state != "synced" and not verified_receive:
+            return {"eligible": False, "reason": "panda_sync"}
+        if receive_state == "incoming":
+            return {"eligible": False, "reason": "incoming"}
+        account_dict = {
+            "maturity_stage": account_row.get("maturity_stage"),
+            "created_at": account_row.get("created_at_unix"),
+            "imported_at": account_row.get("imported_at_unix"),
+            "first_seen_at": account_row.get("first_seen_at_unix"),
+            "registered_at": account_row.get("registered_at_unix"),
+        }
+        min_age = float(settings.get("min_account_age_days") or 7)
+        if is_new_image_account(account_dict, max_age_days=min_age):
+            return {"eligible": False, "reason": "new_account"}
+    elif state == "done":
+        return {"eligible": False, "reason": "state:done"}
+
+    return {"eligible": True, "reason": "manual" if manual else "eligible"}
 
 
 def _py_list_prime_eligible(payload: dict[str, Any]) -> dict[str, Any]:
