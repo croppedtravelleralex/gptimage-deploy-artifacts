@@ -4,6 +4,8 @@
 状态：**方案 v2.2 定稿；Phase A–C 代码已实现；Panda 配置 Phase A+B 已开；Phase D 默认 shadow；Hard Mode 未启用**  
 关联：[`docs/09-outlook-longevity-99-plan.md`](09-outlook-longevity-99-plan.md)（账号存活总案；节点地区 SG/SIN）
 
+> **2026-07-28**：`proactive_refresh` 的 limits 探活职责将由 [`32-quota-refresh-window-prime-plan.md`](32-quota-refresh-window-prime-plan.md) 的 **binding 四段日历** 替代；上线 32 后设 `proactive_refresh.enabled: false`。账号间隔 gap / 养号权重仍保留。
+
 本文覆盖：行为拟人、带波动容量、SG 探活、性能参数、**现网/v2.1/Hard 吞吐对照**、**降封估计与天花板**、Phase A–D。
 
 ### 落地快照（Panda · 2026-07-18）

@@ -201,8 +201,16 @@ class DatabaseStorageBackend(StorageBackend):
                 for row in session.query(AccountModel).filter(AccountModel.access_token.in_(chunk)).all():
                     existing[row.access_token] = row
             for token, item in deduped.items():
-                payload = self._json_dumps(item)
                 row = existing.get(token)
+                merged = dict(item)
+                if row is not None:
+                    try:
+                        prev = json.loads(row.data)
+                        if isinstance(prev, dict):
+                            merged = {**prev, **item}
+                    except Exception:
+                        pass
+                payload = self._json_dumps(merged)
                 if row is None:
                     session.add(AccountModel(access_token=token, data=payload))
                 else:

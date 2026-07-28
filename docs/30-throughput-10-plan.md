@@ -14,7 +14,7 @@
 | pS/sS 比例 | 3:7 碎片化 | 严格 1:1（pS=5, sS=5） |
 | 单次吞吐 | 2~6/10（空槽率 40~60%） | 8~10/10（空槽率 <20%） |
 | 代理分层 | 单层 datacenter | 住宅 20 + 机房 100 |
-| 配额刷新 | 被动/跑完才查 | 60s 循环 + 事件驱动 |
+| 配额刷新 | 被动/跑完才查 | **四段日历 + 事件驱动**（见 [`32-quota-refresh-window-prime-plan.md`](32-quota-refresh-window-prime-plan.md)） |
 | probe 并行 | `max_hot=10` | `max_hot=17` |
 
 ---
@@ -70,12 +70,14 @@ class ProxyPoolService:
 
 ## 3. Real-Time Quota — 双触发
 
+> **2026-07-28 更新**：60s 全池轮询将废弃，改为 [`32-quota-refresh-window-prime-plan.md`](32-quota-refresh-window-prime-plan.md) 中的 **binding 四段日历**（每天 4 次）+ 事件驱动 + 可选窗口预热。
+
 现状：仅跑完图片后查 newapi，空载时 quota 过时 5~30 分钟。
 
 | 触发 | 方式 | 周期 | 优先级 |
 |------|------|------|--------|
-| 定时循环 | asyncio loop | **60s** | 低 |
-| 事件驱动 | `on_image_result` callback | **即时** | 高 |
+| 四段日历 | binding 排期 tick | **每天 4 次/号** | 低 |
+| 事件驱动 | `on_image_result` / 懒刷新 / 手动 | **即时** | 高 |
 
 health 新增 `quota.lag_sec`（`now - last_quota_fetch_time` 分布）+ `stale_accounts`（`>120s` 的账号）。watchdog 在 `max_lag > 120s` 时触发 WARN。
 

@@ -51,28 +51,29 @@ class ImageQuotaSchedulingTests(unittest.TestCase):
     def test_available_image_quota_excludes_unknown_and_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
-            service.add_account_items(
-                [
-                    {
-                        "access_token": "ready",
-                        "status": "正常",
-                        "quota": 8,
-                        "last_quota_refresh_at": "2999-01-01T00:00:00+00:00",
-                    },
-                    {
-                        "access_token": "unknown",
-                        "status": "正常",
-                        "quota": 8,
-                        "image_quota_unknown": True,
-                    },
-                    {
-                        "access_token": "stale",
-                        "status": "正常",
-                        "quota": 5,
-                        "last_quota_refresh_at": "2000-01-01T00:00:00+00:00",
-                    },
-                ]
-            )
+            with patch("services.proxy_pool_service.proxy_pool_service.assign_proxy", return_value=None):
+                service.add_account_items(
+                    [
+                        {
+                            "access_token": "ready",
+                            "status": "正常",
+                            "quota": 8,
+                            "last_quota_refresh_at": "2999-01-01T00:00:00+00:00",
+                        },
+                        {
+                            "access_token": "unknown",
+                            "status": "正常",
+                            "quota": 8,
+                            "image_quota_unknown": True,
+                        },
+                        {
+                            "access_token": "stale",
+                            "status": "正常",
+                            "quota": 5,
+                            "last_quota_refresh_at": "2000-01-01T00:00:00+00:00",
+                        },
+                    ]
+                )
             with patch.object(
                 config,
                 "get_image_pipeline_settings",

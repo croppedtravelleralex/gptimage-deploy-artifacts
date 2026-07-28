@@ -1,8 +1,10 @@
 # 额度语义规范
 
-最后更新：2026-07-03
+最后更新：**2026-07-28**
 
-本文是账号池「额度三态」的维护真相源。改统计、展示、调度或健康页时，先对照本文，再改代码。
+本文是账号池「额度三态」与 **`restore_at` / 核对时间** 的维护真相源。改统计、展示、调度或健康页时，先对照本文，再改代码。
+
+> **排期与预热总方案**：[`32-quota-refresh-window-prime-plan.md`](32-quota-refresh-window-prime-plan.md)
 
 ## 背景与根因
 
@@ -138,3 +140,41 @@ curl -sS 'https://gptimage.relai.asia/health?format=json' | python3 -m json.tool
 | Pro 账号无 `image_gen` | 被算进 `unknown_quota` | `∞`，计入 `unlimited_quota_count` |
 | 刷新后有 `remaining=25` | 仍显示 `未知` | 显示 `25` |
 | 慢刷把 Pro 计入 `unknown_quota` | 面板 unknown 偏高 | 计入 `unlimited_quota` |
+
+---
+
+## `restore_at` 与核对时间（2026-07-28）
+
+### 两个不同字段
+
+| 字段 | 来源 | 含义 |
+| --- | --- | --- |
+| `last_quota_refresh_at` | 本地：上次 `fetch_remote_info` 成功写库时刻 | **核对时间**（UI：「X 分钟前核对」） |
+| `restore_at` | 上游 `limits_progress.image_gen.reset_after` | 额度窗口的 **结束/恢复时刻**（上游原值） |
+
+**打开网页 / F5 不会打上游**；`GET /api/accounts` 只读库。若「核对时间」总像刚刚，是后台定时刷新（历史上 60s 全池）在更新 `last_quota_refresh_at`，不是浏览器触发的。
+
+### 窗口结束 vs 预计恢复
+
+| 账号状态 | `restore_at` 语义 | UI 建议文案 |
+| --- | --- | --- |
+| `quota > 0` | 当前额度**窗口结束**时刻（常 ≈ 进入周期后 +24h） | **窗口结束** + 绝对时间 |
+| `quota == 0` | 上游说的**额度恢复**时刻 | **预计恢复** + 绝对时间 |
+| 满额 25、从未生图、无锚点 | 可能为空或随探测漂移 | **待预热**（见 32 方案） |
+
+有额度时不要把 `restore_at` 标成「恢复时间」——账号并未耗尽。
+
+### 本地扣减 vs 上游
+
+成功生图后 `mark_image_result` **本地** `quota -= 1`（并镜像 `limits_progress.remaining`），**不**自动改 `restore_at`。  
+`restore_at` 仅在拉上游 limits 或预热生图后再 `fetch_remote_info` 时更新。
+
+### 新鲜度门禁（将取消）
+
+历史上 `image_quota_freshness_hours` 要求近期核对才允许调度。  
+新方案（32）：以本地扣减为准，**关闭新鲜度**；四段日历 + 生图后即时刷新保证最终一致。
+
+### 预热（quota window prime）
+
+对 `quota==25 && success==0` 且非新号的账号，**一次性**最小生图（256×256）以钉住上游 `reset_after`。  
+`quota < 25` 不自动预热。详见 [`32-quota-refresh-window-prime-plan.md`](32-quota-refresh-window-prime-plan.md)。

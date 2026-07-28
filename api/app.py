@@ -18,6 +18,8 @@ from services.image_service import start_image_cleanup_scheduler
 from services.image_task_service import image_task_service
 from services.image_pipeline.pipeline_watchdog import pipeline_watchdog_service
 from services.image_quota_refresh_service import image_quota_refresh_service
+from services.quota_refresh_schedule_service import quota_refresh_schedule_service
+from services.quota_window_prime_service import quota_window_prime_service
 from services.outlook_auto_recovery_loop_service import outlook_auto_recovery_loop_service
 from services.panda_staging_service import panda_staging_service
 from services.proactive_refresh_loop_service import proactive_refresh_loop_service
@@ -52,6 +54,8 @@ def create_app() -> FastAPI:
         pipeline_watchdog_service.start_background()
         backup_service.start()
         image_quota_refresh_service.start()
+        quota_refresh_schedule_service.start()
+        quota_window_prime_service.start()
         config.cleanup_old_images()
         try:
             yield
@@ -72,6 +76,8 @@ def create_app() -> FastAPI:
             pipeline_watchdog_service.stop_background()
             backup_service.stop()
             image_quota_refresh_service.stop()
+            quota_refresh_schedule_service.stop()
+            quota_window_prime_service.stop()
 
     app = FastAPI(title="chatgpt2api", version=app_version, lifespan=lifespan)
     install_exception_handlers(app)

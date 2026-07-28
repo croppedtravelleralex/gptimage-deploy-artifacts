@@ -94,7 +94,7 @@ DEFAULT_IMAGE_PIPELINE = {
     "ready_buffer_max_items": 32,
     "ready_buffer_resume_bytes": 256 * 1024 * 1024,
     "ready_buffer_hysteresis_secs": 5,
-    "require_quota_freshness": True,
+    "require_quota_freshness": False,
     "schedule_trace_enabled": True,
     "account_lease_prewarm_enabled": True,
     "release_account_after_sse": True,
@@ -985,6 +985,34 @@ DEFAULT_PROACTIVE_REFRESH_SETTINGS: dict[str, object] = {
     "startup_delay_sec": 30,
 }
 
+DEFAULT_QUOTA_REFRESH_SCHEDULE: dict[str, object] = {
+    "enabled": True,
+    "phases_per_day": 4,
+    "default_timezone": "Asia/Singapore",
+    "timezone_from_egress": True,
+    "account_jitter_min_minutes": 30,
+    "account_jitter_max_minutes": 60,
+    "binding_min_gap_hours": 2,
+    "tick_sec": 60,
+    "pre_restore_refresh_minutes": 45,
+}
+
+DEFAULT_QUOTA_WINDOW_PRIME: dict[str, object] = {
+    "enabled": True,
+    "full_quota": 25,
+    "min_account_age_days": 7,
+    "image_size": "256x256",
+    "image_quality": "low",
+    "auto_phase_index": 0,
+    "max_concurrent_global": 2,
+    "max_concurrent_per_binding": 1,
+    "max_auto_attempts": 3,
+    "retry_interval_hours": 24,
+    "skip_panda_sync_states": ["staging", "ready"],
+    "defer_if_refresh_due_within_minutes": 15,
+    "tick_sec": 30,
+}
+
 DEFAULT_WEBSHARE_CF_SCAN_SETTINGS: dict[str, object] = {
     "enabled": False,
     "pool_path": "",
@@ -1277,6 +1305,118 @@ def _normalize_proactive_refresh_settings(value: object) -> dict[str, object]:
             0.0,
             float(source.get("startup_delay_sec", DEFAULT_PROACTIVE_REFRESH_SETTINGS["startup_delay_sec"]) or 0.0),
         ),
+    }
+
+
+def _normalize_quota_refresh_schedule_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    return {
+        "enabled": _normalize_bool(source.get("enabled"), bool(DEFAULT_QUOTA_REFRESH_SCHEDULE["enabled"])),
+        "phases_per_day": max(
+            1,
+            _normalize_positive_int(
+                source.get("phases_per_day"),
+                int(DEFAULT_QUOTA_REFRESH_SCHEDULE["phases_per_day"]),
+                1,
+            ),
+        ),
+        "default_timezone": str(source.get("default_timezone") or DEFAULT_QUOTA_REFRESH_SCHEDULE["default_timezone"]).strip()
+        or "Asia/Singapore",
+        "timezone_from_egress": _normalize_bool(
+            source.get("timezone_from_egress"),
+            bool(DEFAULT_QUOTA_REFRESH_SCHEDULE["timezone_from_egress"]),
+        ),
+        "account_jitter_min_minutes": max(
+            0,
+            _normalize_positive_int(
+                source.get("account_jitter_min_minutes"),
+                int(DEFAULT_QUOTA_REFRESH_SCHEDULE["account_jitter_min_minutes"]),
+                0,
+            ),
+        ),
+        "account_jitter_max_minutes": max(
+            0,
+            _normalize_positive_int(
+                source.get("account_jitter_max_minutes"),
+                int(DEFAULT_QUOTA_REFRESH_SCHEDULE["account_jitter_max_minutes"]),
+                0,
+            ),
+        ),
+        "binding_min_gap_hours": max(
+            0.0,
+            float(source.get("binding_min_gap_hours", DEFAULT_QUOTA_REFRESH_SCHEDULE["binding_min_gap_hours"]) or 0.0),
+        ),
+        "tick_sec": max(5.0, float(source.get("tick_sec", DEFAULT_QUOTA_REFRESH_SCHEDULE["tick_sec"]) or 60.0)),
+        "pre_restore_refresh_minutes": max(
+            0.0,
+            float(
+                source.get("pre_restore_refresh_minutes", DEFAULT_QUOTA_REFRESH_SCHEDULE["pre_restore_refresh_minutes"])
+                or 0.0
+            ),
+        ),
+    }
+
+
+def _normalize_quota_window_prime_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    skip_raw = source.get("skip_panda_sync_states", DEFAULT_QUOTA_WINDOW_PRIME["skip_panda_sync_states"])
+    skip_states = [str(item).strip() for item in skip_raw] if isinstance(skip_raw, list) else ["staging", "ready"]
+    return {
+        "enabled": _normalize_bool(source.get("enabled"), bool(DEFAULT_QUOTA_WINDOW_PRIME["enabled"])),
+        "full_quota": max(
+            1,
+            _normalize_positive_int(source.get("full_quota"), int(DEFAULT_QUOTA_WINDOW_PRIME["full_quota"]), 1),
+        ),
+        "min_account_age_days": max(
+            0.0,
+            float(source.get("min_account_age_days", DEFAULT_QUOTA_WINDOW_PRIME["min_account_age_days"]) or 0.0),
+        ),
+        "image_size": str(source.get("image_size") or DEFAULT_QUOTA_WINDOW_PRIME["image_size"]).strip() or "256x256",
+        "image_quality": str(source.get("image_quality") or DEFAULT_QUOTA_WINDOW_PRIME["image_quality"]).strip() or "low",
+        "auto_phase_index": max(
+            0,
+            min(3, _normalize_positive_int(source.get("auto_phase_index"), int(DEFAULT_QUOTA_WINDOW_PRIME["auto_phase_index"]), 0)),
+        ),
+        "max_concurrent_global": max(
+            1,
+            _normalize_positive_int(
+                source.get("max_concurrent_global"),
+                int(DEFAULT_QUOTA_WINDOW_PRIME["max_concurrent_global"]),
+                1,
+            ),
+        ),
+        "max_concurrent_per_binding": max(
+            1,
+            _normalize_positive_int(
+                source.get("max_concurrent_per_binding"),
+                int(DEFAULT_QUOTA_WINDOW_PRIME["max_concurrent_per_binding"]),
+                1,
+            ),
+        ),
+        "max_auto_attempts": max(
+            1,
+            _normalize_positive_int(
+                source.get("max_auto_attempts"),
+                int(DEFAULT_QUOTA_WINDOW_PRIME["max_auto_attempts"]),
+                1,
+            ),
+        ),
+        "retry_interval_hours": max(
+            1.0,
+            float(source.get("retry_interval_hours", DEFAULT_QUOTA_WINDOW_PRIME["retry_interval_hours"]) or 24.0),
+        ),
+        "skip_panda_sync_states": skip_states,
+        "defer_if_refresh_due_within_minutes": max(
+            0.0,
+            float(
+                source.get(
+                    "defer_if_refresh_due_within_minutes",
+                    DEFAULT_QUOTA_WINDOW_PRIME["defer_if_refresh_due_within_minutes"],
+                )
+                or 0.0
+            ),
+        ),
+        "tick_sec": max(5.0, float(source.get("tick_sec", DEFAULT_QUOTA_WINDOW_PRIME["tick_sec"]) or 30.0)),
     }
 
 
@@ -2260,6 +2400,8 @@ class ConfigStore:
         data["outlook_auto_recovery"] = self.get_outlook_auto_recovery_settings()
         data["scheduler"] = self.get_scheduler_settings()
         data["proactive_refresh"] = self.get_proactive_refresh_settings()
+        data["quota_refresh_schedule"] = self.get_quota_refresh_schedule_settings()
+        data["quota_window_prime"] = self.get_quota_window_prime_settings()
         data["webshare_cf_scan"] = self.get_webshare_cf_scan_settings()
         data["account_warmup"] = self.get_account_warmup_settings()
         data["panda_sync"] = self.get_public_panda_sync_settings()
@@ -2301,6 +2443,12 @@ class ConfigStore:
 
     def get_proactive_refresh_settings(self) -> dict[str, object]:
         return _normalize_proactive_refresh_settings(self.data.get("proactive_refresh"))
+
+    def get_quota_refresh_schedule_settings(self) -> dict[str, object]:
+        return _normalize_quota_refresh_schedule_settings(self.data.get("quota_refresh_schedule"))
+
+    def get_quota_window_prime_settings(self) -> dict[str, object]:
+        return _normalize_quota_window_prime_settings(self.data.get("quota_window_prime"))
 
     def get_webshare_cf_scan_settings(self) -> dict[str, object]:
         return _normalize_webshare_cf_scan_settings(self.data.get("webshare_cf_scan"))

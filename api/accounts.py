@@ -39,6 +39,7 @@ from services.oauth_login_service import OAuthLoginError, oauth_login_service
 from services.outlook_account_recovery_service import outlook_account_recovery_service
 from services.outlook_auto_recovery_loop_service import outlook_auto_recovery_loop_service
 from services.proactive_refresh_loop_service import proactive_refresh_loop_service
+from services.quota_window_prime_service import quota_window_prime_service
 from services.sub2api_service import (
     list_remote_accounts as sub2api_list_remote_accounts,
     list_remote_groups as sub2api_list_remote_groups,
@@ -88,6 +89,12 @@ class AccountDeleteRequest(BaseModel):
 
 class AccountRefreshRequest(BaseModel):
     access_tokens: list[str] = Field(default_factory=list)
+
+
+class QuotaWindowPrimeRequest(BaseModel):
+    access_tokens: list[str] = Field(default_factory=list)
+    preferred_account_email: str = ""
+    force: bool = False
 
 
 class AccountOutlookRecoveryRequest(BaseModel):
@@ -510,13 +517,22 @@ def create_router() -> APIRouter:
     @router.get("/api/accounts/usage/binding-slots")
     async def get_binding_usage_slots(
             authorization: str | None = Header(default=None),
-            days: int = Query(default=28, ge=7, le=90),
+            week_offset: int = Query(default=0),
+            timezone: str = Query(default="Asia/Shanghai"),
+            days: int | None = Query(default=None, ge=7, le=90),
     ):
-        """IP 绑定组 7×12 活动热力图（api/对话生图/拟人/真实）。"""
+        """IP 绑定组 7×12 活动热力图（按自然周 Mon–Sun 聚合）。"""
         require_admin(authorization)
         from services.usage_event_metrics import get_binding_usage_slots
 
-        return await run_in_threadpool(lambda: get_binding_usage_slots(days=days, account_service=account_service))
+        return await run_in_threadpool(
+            lambda: get_binding_usage_slots(
+                week_offset=week_offset,
+                timezone=timezone,
+                days=days,
+                account_service=account_service,
+            )
+        )
 
     @router.post("/api/accounts/soft-band")
     async def set_account_soft_band(
@@ -797,6 +813,33 @@ def create_router() -> APIRouter:
     async def get_proactive_refresh_status(authorization: str | None = Header(default=None)):
         require_admin(authorization)
         return proactive_refresh_loop_service.get_status()
+
+    @router.post("/api/accounts/quota-window/prime")
+    async def quota_window_prime(
+        body: QuotaWindowPrimeRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        require_admin(authorization)
+        email = str(body.preferred_account_email or "").strip()
+        tokens = [str(token).strip() for token in (body.access_tokens or []) if str(token).strip()]
+        force = bool(body.force)
+        try:
+            if email and not tokens:
+                return await run_in_threadpool(quota_window_prime_service.enqueue_by_email, email, force=force)
+            if not tokens:
+                raise ValueError("access_tokens or preferred_account_email is required")
+            if len(tokens) == 1:
+                return await run_in_threadpool(quota_window_prime_service.enqueue, tokens[0], force=force)
+            return await run_in_threadpool(quota_window_prime_service.enqueue_many, tokens, force=force)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail={"error": str(exc)}) from exc
+
+    @router.get("/api/accounts/quota-window/prime/status")
+    async def quota_window_prime_status(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return quota_window_prime_service.get_status()
 
     @router.post("/api/accounts/outlook-auto-recovery")
     async def update_outlook_auto_recovery(

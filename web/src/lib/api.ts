@@ -99,6 +99,12 @@ export type Account = {
   outlook_recovery_last_attempt_at?: string | null;
   text_conversation_created_at?: string | null;
   outlook_recovery_last_error?: string | null;
+  quota_window_prime_state?: string | null;
+  quota_window_primed_at?: string | null;
+  quota_window_primed_restore_at?: string | null;
+  quota_window_prime_last_error?: string | null;
+  quota_window_prime_attempts?: number | null;
+  next_quota_refresh_at?: string | null;
 };
 
 export type AccountImportPayload = {
@@ -877,6 +883,36 @@ export async function refreshAccounts(accessTokens: string[]) {
   });
 }
 
+export type QuotaWindowPrimeResponse = {
+  ok: boolean;
+  state?: string;
+  email?: string | null;
+  reason?: string;
+  duplicate?: boolean;
+  enqueued?: number;
+  errors?: Array<{ token_prefix?: string; error?: string }>;
+  items?: QuotaWindowPrimeResponse[];
+};
+
+export async function primeQuotaWindow(options: {
+  accessTokens?: string[];
+  preferredAccountEmail?: string;
+  force?: boolean;
+}) {
+  return httpRequest<QuotaWindowPrimeResponse>("/api/accounts/quota-window/prime", {
+    method: "POST",
+    body: {
+      access_tokens: options.accessTokens ?? [],
+      preferred_account_email: options.preferredAccountEmail ?? "",
+      force: Boolean(options.force),
+    },
+  });
+}
+
+export async function fetchQuotaWindowPrimeStatus() {
+  return httpRequest<Record<string, unknown>>("/api/accounts/quota-window/prime/status");
+}
+
 export async function fetchRefreshProgress(progressId: string) {
   return httpRequest<RefreshProgressResponse>(`/api/accounts/refresh/progress/${progressId}`);
 }
@@ -1400,8 +1436,16 @@ export async function releaseChatSession(sessionId: string, email = "") {
 }
 
 export type BindingUsageSlotsResponse = {
-  days: number;
+  week_offset: number;
+  week_start: string;
+  week_end: string;
+  week_label: string;
+  weekday_labels: string[];
+  day_labels: string[];
   timezone: string;
+  timezone_label: string;
+  /** @deprecated rolling window only */
+  days?: number;
   by_binding: Record<
     string,
     {
@@ -1413,8 +1457,19 @@ export type BindingUsageSlotsResponse = {
   >;
 };
 
-export async function fetchBindingUsageSlots(days = 28) {
-  return httpRequest<BindingUsageSlotsResponse>(`/api/accounts/usage/binding-slots?days=${days}`);
+export type HeatmapTimezone = "Asia/Shanghai" | "Asia/Singapore";
+
+export async function fetchBindingUsageSlots(options?: {
+  weekOffset?: number;
+  timezone?: HeatmapTimezone;
+}) {
+  const weekOffset = Number(options?.weekOffset ?? 0);
+  const timezone = options?.timezone ?? "Asia/Shanghai";
+  const params = new URLSearchParams({
+    week_offset: String(weekOffset),
+    timezone,
+  });
+  return httpRequest<BindingUsageSlotsResponse>(`/api/accounts/usage/binding-slots?${params.toString()}`);
 }
 
 export async function processNurtureOne(

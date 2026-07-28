@@ -22,6 +22,7 @@ import {
   Pause,
   RefreshCw,
   Search,
+  Sun,
   Trash2,
   UserRound,
 } from "lucide-react";
@@ -29,6 +30,9 @@ import { toast } from "sonner";
 
 import { BindingSgHeatmap, normalizeBindingWeights } from "@/components/accounts/BindingSgHeatmap";
 import { BindingActivityHeatmaps } from "@/components/accounts/BindingActivityHeatmaps";
+import {
+  BindingActivityHeatmapToolbar,
+} from "@/components/accounts/BindingActivityHeatmapToolbar";
 import { AccountUsageHeatstrip } from "@/components/accounts/AccountUsageHeatstrip";
 import { CfStatusLight, summarizeCfDay, type CfDayPoint } from "@/components/accounts/CfStatusLight";
 import { EgressDriftLights } from "@/components/accounts/EgressDriftLights";
@@ -84,9 +88,11 @@ import {
   syncAccountsToPanda,
   fetchAccountsUsageRecent,
   fetchBindingUsageSlots,
+  type HeatmapTimezone,
   fetchIpNurtureBindings,
   fetchIpNurturePresets,
   processNurtureOne,
+  primeQuotaWindow,
   fetchNurtureStatus,
   saveIpNurtureBinding,
   testProxy,
@@ -506,14 +512,14 @@ function formatMaintenanceResource(status: AccountMaintenanceLoopStatus | null) 
   return parts.join(" · ");
 }
 
-function formatRestoreAt(value?: string | null) {
+function formatRestoreAt(value?: string | null, account?: Account) {
   if (!value) {
-    return { absolute: "—", relative: "" };
+    return { absolute: "—", relative: "", label: "" };
   }
 
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return { absolute: value, relative: "" };
+    return { absolute: value, relative: "", label: "" };
   }
 
   const diffMs = Math.max(0, date.getTime() - Date.now());
@@ -527,7 +533,29 @@ function formatRestoreAt(value?: string | null) {
     date.getHours(),
   )}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 
-  return { absolute, relative };
+  const quota = Number(account?.quota ?? 0);
+  const label = account && quota > 0 ? "窗口结束" : account ? "预计恢复" : "";
+
+  return { absolute, relative, label };
+}
+
+function formatPrimeStateLabel(account: Account) {
+  const state = String(account.quota_window_prime_state || "none").toLowerCase();
+  if (state === "done" && account.quota_window_primed_at) {
+    const d = new Date(account.quota_window_primed_at);
+    if (!Number.isNaN(d.getTime())) {
+      return `已预热 ${d.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" })}`;
+    }
+    return "已预热";
+  }
+  if (state === "pending" || state === "running") return "预热中";
+  if (state === "failed") return "预热失败";
+  return "窗口预热";
+}
+
+function canForcePrimeFromError(message: string) {
+  const text = message.toLowerCase();
+  return text.includes("new_account") || text.includes("panda_sync") || text.includes("观察期");
 }
 
 function formatQuotaSummary(accounts: Account[]) {
@@ -722,6 +750,13 @@ function AccountsPageContent() {
   const [bindingSaveBusy, setBindingSaveBusy] = useState<Set<string>>(new Set());
   const [bindingUsageSlots, setBindingUsageSlots] = useState<BindingUsageSlotsResponse["by_binding"]>({});
   const [bindingUsageLoading, setBindingUsageLoading] = useState(false);
+  const [heatmapWeekOffset, setHeatmapWeekOffset] = useState(0);
+  const [heatmapTimezone, setHeatmapTimezone] = useState<HeatmapTimezone>("Asia/Shanghai");
+  const [heatmapWeekLabel, setHeatmapWeekLabel] = useState("");
+  const [heatmapWeekdayLabels, setHeatmapWeekdayLabels] = useState<string[]>(["一", "二", "三", "四", "五", "六", "日"]);
+  const [heatmapDayLabels, setHeatmapDayLabels] = useState<string[]>([]);
+  const [heatmapTimezoneLabel, setHeatmapTimezoneLabel] = useState("北京时间");
+  const bindingUsageCacheRef = useRef<Map<string, BindingUsageSlotsResponse>>(new Map());
   const [weightEditKey, setWeightEditKey] = useState<string | null>(null);
   const [weightEditPreset, setWeightEditPreset] = useState("");
   const [weightEditMatrix, setWeightEditMatrix] = useState<number[][]>([]);
@@ -802,6 +837,12 @@ function AccountsPageContent() {
       await Promise.all([
         loadRefreshAllStatus(),
         loadIpNurtureData(),
+        (async () => {
+          bindingUsageCacheRef.current.clear();
+          if (accountViewMode === "grouped") {
+            await loadBindingUsageSlots(heatmapWeekOffset, heatmapTimezone, { force: true });
+          }
+        })(),
       ]);
       setActivityRefreshToken((n) => n + 1);
       toast.success("号池数据已刷新");
@@ -831,6 +872,45 @@ function AccountsPageContent() {
     }
   };
 
+  const applyBindingUsageResponse = (res: BindingUsageSlotsResponse) => {
+    setBindingUsageSlots(res.by_binding || {});
+    setHeatmapWeekLabel(String(res.week_label || ""));
+    setHeatmapWeekdayLabels(
+      Array.isArray(res.weekday_labels) && res.weekday_labels.length === 7
+        ? res.weekday_labels
+        : ["一", "二", "三", "四", "五", "六", "日"],
+    );
+    setHeatmapDayLabels(Array.isArray(res.day_labels) ? res.day_labels : []);
+    setHeatmapTimezoneLabel(String(res.timezone_label || ""));
+    if (res.timezone === "Asia/Shanghai" || res.timezone === "Asia/Singapore") {
+      setHeatmapTimezone(res.timezone);
+    }
+    setHeatmapWeekOffset(Number(res.week_offset ?? 0));
+  };
+
+  const loadBindingUsageSlots = async (
+    weekOffset = heatmapWeekOffset,
+    timezone: HeatmapTimezone = heatmapTimezone,
+    options?: { force?: boolean },
+  ) => {
+    const cacheKey = `${weekOffset}:${timezone}`;
+    const cached = bindingUsageCacheRef.current.get(cacheKey);
+    if (cached && !options?.force) {
+      applyBindingUsageResponse(cached);
+      return;
+    }
+    setBindingUsageLoading(true);
+    try {
+      const res = await fetchBindingUsageSlots({ weekOffset, timezone });
+      bindingUsageCacheRef.current.set(cacheKey, res);
+      applyBindingUsageResponse(res);
+    } catch {
+      setBindingUsageSlots({});
+    } finally {
+      setBindingUsageLoading(false);
+    }
+  };
+
   const loadIpNurtureData = async () => {
     try {
       const [presetsRes, bindingsRes] = await Promise.all([
@@ -845,13 +925,8 @@ function AccountsPageContent() {
         }
       }
       setNurtureBindings(map);
-      setBindingUsageLoading(true);
-      void fetchBindingUsageSlots(14)
-        .then((res) => setBindingUsageSlots(res.by_binding || {}))
-        .catch(() => setBindingUsageSlots({}))
-        .finally(() => setBindingUsageLoading(false));
     } catch {
-      // 后端未部署时静默降级
+      // 养号预设/绑定可选
     }
   };
 
@@ -905,6 +980,13 @@ function AccountsPageContent() {
     }
     void loadIpNurtureData();
   }, [accountViewMode]);
+
+  useEffect(() => {
+    if (accountViewMode !== "grouped") {
+      return;
+    }
+    void loadBindingUsageSlots(heatmapWeekOffset, heatmapTimezone);
+  }, [accountViewMode, heatmapWeekOffset, heatmapTimezone]);
 
   const isUploadSyncNode = Boolean(pandaSyncSettings?.base_url?.trim());
   const refreshAllActive = Boolean(refreshAllStatus?.state === "running" || refreshAllStatus?.state === "paused" || refreshAllStatus?.state === "stopping");
@@ -1497,6 +1579,57 @@ function AccountsPageContent() {
       return;
     }
     await handleRefreshAccounts([account.access_token]);
+  };
+
+  const handleQuotaWindowPrime = async (account: Account, force = false) => {
+    const email = String(account.email || "").trim();
+    const toastId = toast.loading(force ? `强制窗口预热：${email || "账号"}…` : `窗口预热：${email || "账号"}…`);
+    try {
+      const result = await primeQuotaWindow({
+        accessTokens: [account.access_token],
+        force,
+      });
+      toast.success(
+        result.duplicate
+          ? `${email || "账号"} 已在预热队列`
+          : `${email || "账号"} 已加入窗口预热队列`,
+        { id: toastId },
+      );
+      await refreshAccountPage();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "窗口预热失败";
+      if (!force && canForcePrimeFromError(message)) {
+        toast.dismiss(toastId);
+        if (window.confirm("该账号处于观察期或新号冷却，确认强制窗口预热？")) {
+          await handleQuotaWindowPrime(account, true);
+        }
+        return;
+      }
+      toast.error(message, { id: toastId });
+    }
+  };
+
+  const handleBulkQuotaWindowPrime = async (accessTokens: string[], force = false) => {
+    if (accessTokens.length === 0) {
+      toast.error("请先选择要预热的账号");
+      return;
+    }
+    if (accessTokens.length > 50) {
+      toast.error("单次最多预热 50 个账号");
+      return;
+    }
+    const toastId = toast.loading(`批量窗口预热 ${accessTokens.length} 个账号…`);
+    try {
+      const result = await primeQuotaWindow({ accessTokens, force });
+      const failed = result.errors?.length ?? 0;
+      toast.success(`已入队 ${result.enqueued ?? accessTokens.length} 个${failed > 0 ? `，失败 ${failed} 个` : ""}`, {
+        id: toastId,
+      });
+      await refreshAccountPage();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "批量窗口预热失败";
+      toast.error(message, { id: toastId });
+    }
   };
 
   const handleRefreshAccounts = async (accessTokens: string[]) => {
@@ -2485,6 +2618,16 @@ function AccountsPageContent() {
                 </Button>
                 <Button
                   variant="ghost"
+                  className="h-8 rounded-lg px-3 text-orange-600 hover:bg-orange-50 hover:text-orange-700"
+                  onClick={() => void handleBulkQuotaWindowPrime(selectedTokens)}
+                  disabled={selectedTokens.length === 0}
+                  title="对选中账号发起额度窗口预热（256 最小图）"
+                >
+                  <Sun className="size-4" />
+                  批量窗口预热
+                </Button>
+                <Button
+                  variant="ghost"
                   className="h-8 rounded-lg px-3 text-rose-500 hover:bg-rose-50 hover:text-rose-600"
                   onClick={() => void handleDeleteTokens(abnormalTokens)}
                   disabled={abnormalTokens.length === 0 || isDeleting}
@@ -2508,6 +2651,19 @@ function AccountsPageContent() {
                 ) : null}
               </div>
             </div>
+
+            {accountViewMode === "grouped" ? (
+              <BindingActivityHeatmapToolbar
+                className="mb-3"
+                weekOffset={heatmapWeekOffset}
+                weekLabel={heatmapWeekLabel}
+                timezone={heatmapTimezone}
+                timezoneLabel={heatmapTimezoneLabel}
+                loading={bindingUsageLoading}
+                onWeekOffsetChange={setHeatmapWeekOffset}
+                onTimezoneChange={setHeatmapTimezone}
+              />
+            ) : null}
 
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1400px] text-left">
@@ -2556,7 +2712,7 @@ function AccountsPageContent() {
                         额度 {sortIndicator("quota")}
                       </button>
                     </th>
-                    <th className="w-36 px-2 py-2">恢复时间</th>
+                    <th className="w-36 px-2 py-2">窗口/恢复</th>
                     <th className="w-14 px-2 py-2">在途</th>
                     <th className="w-20 px-2 py-2">操作</th>
                   </tr>
@@ -2606,11 +2762,14 @@ function AccountsPageContent() {
                                     </SelectContent>
                                   </Select>
                                 </div>
-                                {bindingUsageLoading ? (
-                                  <span className="text-[10px] text-stone-400">热力图加载中…</span>
-                                ) : (
-                                  <BindingActivityHeatmaps matrices={bindingUsageSlots[block.key] || {}} days={14} />
-                                )}
+                                <BindingActivityHeatmaps
+                                  matrices={bindingUsageSlots[block.key] || {}}
+                                  weekLabel={heatmapWeekLabel}
+                                  weekdayLabels={heatmapWeekdayLabels}
+                                  dayLabels={heatmapDayLabels}
+                                  timezoneLabel={heatmapTimezoneLabel}
+                                  compact
+                                />
                                 <Button
                                   type="button"
                                   size="sm"
@@ -2803,12 +2962,25 @@ function AccountsPageContent() {
                         </td>
                         <td className="px-4 py-3 text-xs leading-5 text-stone-500">
                           {(() => {
-                            const restore = formatRestoreAt(account.restore_at);
+                            const restore = formatRestoreAt(account.restore_at, account);
                             return (
                               <div
                                 className="space-y-0.5"
-                                title="上游额度恢复时刻；懒刷新会在恢复后按账号错峰再拉 limits，避免齐刷"
+                                title={[
+                                  restore.label ? `${restore.label}` : "",
+                                  account.last_quota_refresh_at
+                                    ? `核对：${account.last_quota_refresh_at}`
+                                    : "",
+                                  account.restore_at ? `restore_at：${account.restore_at}` : "",
+                                ]
+                                  .filter(Boolean)
+                                  .join(" · ")}
                               >
+                                {restore.label ? (
+                                  <div className="text-[10px] uppercase tracking-wide text-stone-400">
+                                    {restore.label}
+                                  </div>
+                                ) : null}
                                 <div className="flex items-center gap-1">
                                   {restore.relative ? (
                                     <div className="font-medium text-stone-700">{restore.relative}</div>
@@ -2844,6 +3016,30 @@ function AccountsPageContent() {
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1 text-stone-400">
                             <ScheduleCountdownIcons account={account} showLazy={false} />
+                            <button
+                              type="button"
+                              className={cn(
+                                "rounded-lg p-2 transition",
+                                String(account.quota_window_prime_state || "").toLowerCase() === "done"
+                                  ? "text-emerald-600"
+                                  : ["pending", "running"].includes(
+                                        String(account.quota_window_prime_state || "").toLowerCase(),
+                                      )
+                                    ? "text-orange-400"
+                                    : "hover:bg-orange-50 hover:text-orange-700",
+                              )}
+                              title={
+                                account.quota_window_prime_last_error
+                                  ? `预热失败：${account.quota_window_prime_last_error}`
+                                  : "打 1 张 256 最小图，钉住上游额度窗口"
+                              }
+                              disabled={["pending", "running", "done"].includes(
+                                String(account.quota_window_prime_state || "").toLowerCase(),
+                              )}
+                              onClick={() => void handleQuotaWindowPrime(account)}
+                            >
+                              <Sun className="size-4" />
+                            </button>
                             <button
                               type="button"
                               className="rounded-lg p-2 transition hover:bg-sky-50 hover:text-sky-700"

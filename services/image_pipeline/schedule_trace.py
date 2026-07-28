@@ -47,6 +47,10 @@ KIND_IDS: dict[str, int] = {
     "task_terminal": 19,
     "global_concurrency_wait_start": 20,
     "global_concurrency_wait_end": 21,
+    "quota_refresh_start": 22,
+    "quota_refresh_end": 23,
+    "quota_prime_start": 24,
+    "quota_prime_end": 25,
 }
 
 

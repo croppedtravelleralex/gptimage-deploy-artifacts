@@ -25,6 +25,10 @@ pub enum EventKind {
     TaskTerminal = 19,
     GlobalConcurrencyWaitStart = 20,
     GlobalConcurrencyWaitEnd = 21,
+    QuotaRefreshStart = 22,
+    QuotaRefreshEnd = 23,
+    QuotaPrimeStart = 24,
+    QuotaPrimeEnd = 25,
 }
 
 impl EventKind {
@@ -51,6 +55,10 @@ impl EventKind {
             19 => Some(Self::TaskTerminal),
             20 => Some(Self::GlobalConcurrencyWaitStart),
             21 => Some(Self::GlobalConcurrencyWaitEnd),
+            22 => Some(Self::QuotaRefreshStart),
+            23 => Some(Self::QuotaRefreshEnd),
+            24 => Some(Self::QuotaPrimeStart),
+            25 => Some(Self::QuotaPrimeEnd),
             _ => None,
         }
     }
@@ -78,6 +86,10 @@ impl EventKind {
             Self::TaskTerminal => "task_terminal",
             Self::GlobalConcurrencyWaitStart => "global_concurrency_wait_start",
             Self::GlobalConcurrencyWaitEnd => "global_concurrency_wait_end",
+            Self::QuotaRefreshStart => "quota_refresh_start",
+            Self::QuotaRefreshEnd => "quota_refresh_end",
+            Self::QuotaPrimeStart => "quota_prime_start",
+            Self::QuotaPrimeEnd => "quota_prime_end",
         }
     }
 }

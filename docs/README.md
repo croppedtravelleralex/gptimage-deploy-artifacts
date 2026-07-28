@@ -1,6 +1,6 @@
 # 文档导航
 
-最后更新：**2026-07-27 01:00**
+最后更新：**2026-07-28 14:20**
 
 **冲突优先级**：代码/命令结果 > `28`（调度/队列/槽位专项审计） > `29`（生产溯源审计） > `02-current-state.md` > `04-improvement-backlog.md` > `06-handoff.md` > `logs/`
 
@@ -20,7 +20,7 @@
 |------|------|
 | [`plans/`](plans/README.md) | 编号方案文档（08–24）：生图、协议、调度、运维 |
 | [`reference/`](reference/README.md) | 部署、额度、CF 工具、SSE 语义等参考 |
-| [`captures/`](captures/spa/README.md) | SPA 逆向 HAR 专页、验收与 benchmark 证据 |
+| [`captures/`](captures/spa/README.md) | SPA 逆向 HAR 专页、验收与 benchmark 证据；[`captures/infra/`](captures/infra/webshare20-panda-probe-bandwidth-20260727.md) 运维探测 |
 | [`archive/`](archive/README.md) | 历史交接、已收尾 sprint、详细计划归档 |
 | [`logs/`](logs/README.md) | 按月流水（只追加，非当前事实） |
 
@@ -38,6 +38,7 @@
 | **调度/队列/槽位审计** | `28-scheduling-queue-slot-audit-20260726.md` ← **读这份再动调度代码** |
 | **生产溯源审计** | `29-prod-provenance-audit-20260726.md` ← **每部署前必读** |
 | **THROUGHPUT-10 架构** | `30-throughput-10-plan.md` ← 双池/双槽/实时额度/带宽设计 |
+| **额度四段刷新 + 窗口预热** | `32-quota-refresh-window-prime-plan.md` ← 替 60s 全扫、预热、UI 语义 |
 | **前端首访/图片加速** | `25-frontend-performance-plan.md` |
 | 协议逆向 HAR 链 | `19-protocol-full-reverse-catalog.md` → `captures/spa/` |
 | **架构报告**（2026-07-27） | 详细结论已汇入 `02-current-state.md` 一～九号池；原始分析见各 `arch-*` agent 报告 |

@@ -951,6 +951,58 @@ class ImageTaskService:
         }
         return self._submit(identity, client_task_id=client_task_id, mode="generate", payload=payload)
 
+    def submit_quota_prime(
+        self,
+        *,
+        access_token: str,
+        email: str,
+        client_task_id: str,
+    ) -> dict[str, Any]:
+        settings = config.get_quota_window_prime_settings()
+        identity = {"owner_id": "__quota_prime__", "role": "system", "source": "quota_prime"}
+        payload = {
+            "prompt": "A simple white ceramic mug on a plain white background, minimal product photo",
+            "model": "gpt-image-2",
+            "n": 1,
+            "size": str(settings.get("image_size") or "256x256"),
+            "quality": str(settings.get("image_quality") or "low"),
+            "response_format": "url",
+            "poll_timeout_secs": float(config.image_generation_poll_timeout_secs),
+            "resume_timeout_secs": float(self.timeout_pending_poll_secs_getter()),
+            "queue_coordinated": True,
+            "task_kind": "quota_prime",
+            "preferred_account_email": str(email or "").strip(),
+            "prime_access_token": str(access_token or "").strip(),
+            "prompt_enhance": False,
+            "multi_image_mode": "fast",
+        }
+        return self._submit(identity, client_task_id=client_task_id, mode="generate", payload=payload)
+
+    @staticmethod
+    def _notify_quota_prime_terminal(
+        task_key: str,
+        payload: dict[str, Any],
+        *,
+        success: bool,
+        access_token: str,
+        error: str = "",
+    ) -> None:
+        if str(payload.get("task_kind") or "") != "quota_prime":
+            return
+        try:
+            from services.quota_window_prime_service import quota_window_prime_service
+
+            body = dict(payload)
+            if error:
+                body["prime_error"] = error[:240]
+            quota_window_prime_service.on_task_terminal(
+                payload=body,
+                success=success,
+                access_token=access_token,
+            )
+        except Exception:
+            pass
+
     def submit_edit(
         self,
         identity: dict[str, object],
@@ -1444,6 +1496,20 @@ class ImageTaskService:
         )
 
     @classmethod
+    def _is_quota_prime_task(cls, task: dict[str, Any]) -> bool:
+        payload = task.get("payload")
+        return isinstance(payload, dict) and str(payload.get("task_kind") or "") == "quota_prime"
+
+    def _prime_running_locked(self) -> int:
+        return sum(
+            1
+            for item in self._tasks.values()
+            if item.get("status") == TASK_STATUS_RUNNING
+            and not self._is_resume_polling_task(item)
+            and self._is_quota_prime_task(item)
+        )
+
+    @classmethod
     def _uses_submit_capacity(cls, task: dict[str, Any]) -> bool:
         status = task.get("status")
         if status == TASK_STATUS_QUEUED:
@@ -1620,13 +1686,22 @@ class ImageTaskService:
         candidates = sorted(
             queued,
             key=lambda item: (
+                1 if self._is_quota_prime_task(item[1]) else 0,
                 running_by_owner.get(_clean(item[1].get("owner_id")), 0),
                 float(item[1].get("created_ts") or 0.0),
             ),
         )
+        try:
+            prime_settings = config.get_quota_window_prime_settings()
+            prime_cap = max(1, int(prime_settings.get("max_concurrent_global") or 2))
+        except Exception:
+            prime_cap = 2
+        prime_running = self._prime_running_locked()
         owner_caps: dict[str, int] = {}
         for key, task in candidates:
             owner = _clean(task.get("owner_id"))
+            if self._is_quota_prime_task(task) and prime_running >= prime_cap:
+                continue
             if owner not in owner_caps:
                 owner_caps[owner] = self._owner_running_cap_locked(owner)
             if running_by_owner.get(owner, 0) >= owner_caps[owner]:
@@ -2398,6 +2473,7 @@ class ImageTaskService:
             duration_ms = int((time.time() - started) * 1000)
             self._update_task(key, status=TASK_STATUS_SUCCESS, progress="success", data=data, usage=usage, error="", duration_ms=duration_ms)
             self.note_success_duration_ms(duration_ms)
+            self._notify_quota_prime_terminal(key, payload_for_run, success=True, access_token=_clean(payload_for_run.get("prime_access_token")))
             outcome["pending_call_log"] = {
                 "suffix": "调用完成",
                 "request_preview": request_text(payload_for_run.get("prompt")),
@@ -2458,6 +2534,13 @@ class ImageTaskService:
                 data=[],
                 duration_ms=duration_ms,
                 **({"conversation_id": conversation_id} if conversation_id else {}),
+            )
+            self._notify_quota_prime_terminal(
+                key,
+                payload_for_run,
+                success=False,
+                access_token=_clean(payload_for_run.get("prime_access_token")),
+                error=error_message,
             )
             self._log_call(identity, mode, model, started, "调用失败", request_preview=request_text(payload_for_run.get("prompt")), status="failed", error=error_message, account_email=account_email, task_key=key)
 

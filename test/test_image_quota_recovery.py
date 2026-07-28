@@ -263,7 +263,11 @@ def test_remote_refresh_still_zero_keeps_account_out_of_pool():
 
 def test_image_quota_state_no_longer_blocked_for_recoverable_account():
     """quota>0 却被 限流 卡住 → 旧代码 image_quota_state()=='blocked'。"""
-    with tempfile.TemporaryDirectory() as tmp_dir, _no_jitter():
+    with (
+        tempfile.TemporaryDirectory() as tmp_dir,
+        _no_jitter(),
+        patch("services.proxy_pool_service.proxy_pool_service.assign_proxy", return_value=None),
+    ):
         service = _service(tmp_dir)
         service.add_account_items(
             [

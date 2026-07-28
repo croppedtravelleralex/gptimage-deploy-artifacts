@@ -5,7 +5,8 @@
 | 文件 | 用途 |
 |------|------|
 | `deployment.md` | Panda 部署（artifacts；禁 scp 业务码） |
-| `quota-semantics.md` | 额度三态 |
+| `quota-semantics.md` | 额度三态 + `restore_at`/核对时间 |
+| `32-quota-refresh-window-prime-plan.md` | 四段 limits 刷新、窗口预热、Rust/架构（**实现待做**） |
 | `flaresolverr-cloudflare.md` | FlareSolverr — **仅注册 clearance** |
 | `upstream-sse-conversation.md` | SSE 事件语义 |
 | `sync-strategy.md` | 号池同步策略（偏历史） |

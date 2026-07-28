@@ -21,6 +21,9 @@ from services.account_warmup_service import account_warmup_service
 from services.account_service import account_service
 from services.webshare_cf_scan_service import webshare_cf_scan_service
 from services.image_pipeline import image_pipeline_scheduler
+from services.quota_refresh_schedule_service import quota_refresh_schedule_service
+from services.quota_window_prime_service import quota_window_prime_service
+from services.quota_binding_calendar import engine_info as quota_calendar_engine_info
 
 
 class NurtureEnableRequest(BaseModel):
@@ -112,6 +115,26 @@ def create_router() -> APIRouter:
     async def warmup_status(authorization: str | None = Header(default=None)):
         require_admin(authorization)
         return await run_in_threadpool(account_warmup_service.status)
+
+    @router.get("/api/ops/quota-schedule/status")
+    async def quota_schedule_status(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return {
+            "refresh": quota_refresh_schedule_service.get_status(),
+            "prime": quota_window_prime_service.get_status(),
+            "calendar_engine": quota_calendar_engine_info(),
+        }
+
+    @router.get("/api/ops/quota-schedule/preview")
+    async def quota_schedule_preview(
+        authorization: str | None = Header(default=None),
+        local_date: str | None = None,
+    ):
+        require_admin(authorization)
+        return await run_in_threadpool(
+            quota_refresh_schedule_service.preview_slots,
+            local_date=local_date,
+        )
 
     @router.post("/api/ops/warmup/unblock")
     async def warmup_unblock(

@@ -21,11 +21,30 @@ from utils.log import logger
 
 
 def _interval_sec() -> float:
-    """从 config 读取刷新间隔，默认 60 秒。"""
+    """从 config 读取刷新间隔；四段日历开启时仅处理事件队列。"""
     try:
-        return max(10.0, float(config.data.get("image_quota_refresh_interval_sec", 60.0)))
+        schedule = config.get_quota_refresh_schedule_settings()
+        if bool(schedule.get("enabled")):
+            return max(5.0, float(schedule.get("tick_sec") or 60.0))
+        raw = config.data.get("image_quota_refresh_interval_sec")
+        if raw is None:
+            return 60.0
+        return max(10.0, float(raw))
     except (TypeError, ValueError):
         return 60.0
+
+
+def _full_pool_tick_enabled() -> bool:
+    try:
+        schedule = config.get_quota_refresh_schedule_settings()
+        if bool(schedule.get("enabled")):
+            return False
+        raw = config.data.get("image_quota_refresh_interval_sec")
+        if raw is None:
+            return True
+        return float(raw) > 0
+    except (TypeError, ValueError):
+        return True
 
 
 class ImageQuotaRefreshService:
@@ -152,7 +171,9 @@ class ImageQuotaRefreshService:
                     }
                 )
 
-        # 3. 遍历所有可调度账号兜底刷新（按最新列表）
+        # 3. 遍历所有可调度账号兜底刷新（四段日历开启时跳过）
+        if not _full_pool_tick_enabled():
+            return
         accounts = account_service.list_accounts()
         for account in accounts:
             if self._stop.is_set():

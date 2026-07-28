@@ -1,12 +1,25 @@
 //! Schedule core: dispatch gate, lease pool hints, sediment parser, slot ledger.
 
+mod binding_calendar;
 mod dispatch_gate;
 mod lease_pool;
+mod quota_prime;
+mod quota_schedule;
 mod sediment;
 mod slot_ledger;
 
+pub use binding_calendar::{
+    account_phase_slot, binding_phase_slot_unix, current_phase_index, list_due_phase_indices,
+    next_account_slot_unix, stable_u, PhaseSlot, PRIME_SALT, REFRESH_SALT,
+};
 pub use dispatch_gate::DispatchGate;
 pub use lease_pool::LeasePool;
+pub use quota_prime::{
+    evaluate_prime_eligibility, evaluate_prime_json, is_new_image_account, is_true_unlimited,
+    list_auto_eligible, list_eligible_json, normalize_plan_type, PrimeEvaluateRequest,
+    PrimeEvaluateResult, PrimeEvalMode,
+};
+pub use quota_schedule::{evaluate_pick_json, ScheduleEvaluateInput, ScheduleEvaluateOutput};
 pub use sediment::SedimentParser;
 pub use slot_ledger::{ReconcileReport, SlotLedger};
 
@@ -269,6 +282,132 @@ pub extern "C" fn isc_slot_ledger_stats_json(handle: u64) -> *mut c_char {
         return ptr::null_mut();
     };
     match std::ffi::CString::new(ledger.stats_json()) {
+        Ok(c) => c.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn isc_binding_calendar_account_slot(
+    account_key: *const c_char,
+    binding_key: *const c_char,
+    local_date: *const c_char,
+    phase_index: u32,
+    tz_name: *const c_char,
+    jitter_min: u32,
+    jitter_max: u32,
+    salt: *const c_char,
+    out_binding_unix: *mut i64,
+    out_account_unix: *mut i64,
+) -> u8 {
+    let Some(account_key) = cstr_to_str(account_key) else {
+        return 0;
+    };
+    let Some(binding_key) = cstr_to_str(binding_key) else {
+        return 0;
+    };
+    let Some(local_date) = cstr_to_str(local_date) else {
+        return 0;
+    };
+    let Some(tz_name) = cstr_to_str(tz_name) else {
+        return 0;
+    };
+    let salt = cstr_to_str(salt).unwrap_or(binding_calendar::REFRESH_SALT);
+    let Ok(day) = chrono::NaiveDate::parse_from_str(local_date, "%Y-%m-%d") else {
+        return 0;
+    };
+    let slot = binding_calendar::account_phase_slot(
+        account_key,
+        binding_key,
+        day,
+        phase_index as usize,
+        tz_name,
+        jitter_min,
+        jitter_max,
+        salt,
+    );
+    unsafe {
+        if !out_binding_unix.is_null() {
+            *out_binding_unix = slot.binding_slot_unix;
+        }
+        if !out_account_unix.is_null() {
+            *out_account_unix = slot.account_slot_unix;
+        }
+    }
+    1
+}
+
+#[no_mangle]
+pub extern "C" fn isc_binding_calendar_next_slot_unix(
+    account_key: *const c_char,
+    binding_key: *const c_char,
+    now_unix: i64,
+    tz_name: *const c_char,
+    jitter_min: u32,
+    jitter_max: u32,
+    salt: *const c_char,
+) -> i64 {
+    let Some(account_key) = cstr_to_str(account_key) else {
+        return -1;
+    };
+    let Some(binding_key) = cstr_to_str(binding_key) else {
+        return -1;
+    };
+    let Some(tz_name) = cstr_to_str(tz_name) else {
+        return -1;
+    };
+    let salt = cstr_to_str(salt).unwrap_or(binding_calendar::REFRESH_SALT);
+    binding_calendar::next_account_slot_unix(
+        account_key,
+        binding_key,
+        now_unix,
+        tz_name,
+        jitter_min,
+        jitter_max,
+        salt,
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn isc_quota_prime_evaluate(input_json: *const c_char) -> *mut c_char {
+    let Some(text) = cstr_to_str(input_json) else {
+        return ptr::null_mut();
+    };
+    let output = match quota_prime::evaluate_prime_json(text) {
+        Ok(json) => json,
+        Err(err) => format!(r#"{{"eligible":false,"reason":"{}"}}"#, err.replace('"', "'")),
+    };
+    match CString::new(output) {
+        Ok(c) => c.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn isc_quota_prime_list_eligible(input_json: *const c_char) -> *mut c_char {
+    let Some(text) = cstr_to_str(input_json) else {
+        return ptr::null_mut();
+    };
+    let output = match quota_prime::list_eligible_json(text) {
+        Ok(json) => json,
+        Err(err) => format!(r#"{{"indices":[],"error":"{}"}}"#, err.replace('"', "'")),
+    };
+    match CString::new(output) {
+        Ok(c) => c.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn isc_quota_schedule_evaluate(input_json: *const c_char) -> *mut c_char {
+    let Some(text) = cstr_to_str(input_json) else {
+        return ptr::null_mut();
+    };
+    let output = match quota_schedule::evaluate_pick_json(text) {
+        Ok(json) => json,
+        Err(err) => format!(r#"{{"error":"{}"}}"#, err.replace('"', "'")),
+    };
+    match CString::new(output) {
         Ok(c) => c.into_raw(),
         Err(_) => ptr::null_mut(),
     }

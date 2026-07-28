@@ -2816,7 +2816,9 @@ class AccountService:
                     prefer_token = token
                     break
             if prefer_token:
-                return self.refresh_access_token(prefer_token, event="get_text_access_token") or prefer_token
+                acc = self.get_account(prefer_token) or {}
+                if not self._is_warmup_dispatch_blocked(acc):
+                    return self.refresh_access_token(prefer_token, event="get_text_access_token") or prefer_token
 
         # Snapshot hot emails outside account lock to avoid AB-BA with warmup._lock.
         try:

@@ -480,6 +480,7 @@
 ## 已完成，保留索引
 
 - 额度三态修复：见 `docs/quota-semantics.md`。
+- **额度四段刷新 + 窗口预热（待实现）**：见 `docs/32-quota-refresh-window-prime-plan.md` — 替 `image_quota_refresh` 60s 全扫；关 `proactive_refresh`/新鲜度；满额 25 一次性最小预热；手动预热按钮；Rust trace 可选 FFI。
 - SQLite 主存储与行级 upsert/delete：见 `services/storage/database_storage.py`。
 - Panda 同步失败不入 pending：`panda_sync.queue_on_failure=false`。
 - 图片任务 SQLite 中央队列、`timeout_pending`、resume poll、hard timeout：见 `services/image_task_service.py`。
