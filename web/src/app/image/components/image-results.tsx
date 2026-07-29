@@ -14,6 +14,29 @@ export type ImageLightboxItem = {
   dimensions?: string;
 };
 
+function hasPriorActiveTurn(conversation: ImageConversation, turnId: string): boolean {
+  const turnIndex = conversation.turns.findIndex((turn) => turn.id === turnId);
+  if (turnIndex <= 0) {
+    return false;
+  }
+  return conversation.turns.slice(0, turnIndex).some(
+    (turn) =>
+      !turn.resultsDeleted &&
+      (turn.status === "queued" || turn.status === "generating") &&
+      turn.images.some((image) => image.status === "loading"),
+  );
+}
+
+function getQueueStatusHint(conversation: ImageConversation, turn: { id: string; status: ImageTurnStatus }) {
+  if (turn.status !== "queued") {
+    return null;
+  }
+  if (hasPriorActiveTurn(conversation, turn.id)) {
+    return "等待当前对话中的前序任务完成";
+  }
+  return "正在提交到服务器…";
+}
+
 type ImageResultsProps = {
   selectedConversation: ImageConversation | null;
   onOpenLightbox: (images: ImageLightboxItem[], index: number) => void;
@@ -240,9 +263,12 @@ export function ImageResults({
                   <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[11px] text-stone-500 sm:mb-4 sm:gap-2 sm:text-xs">
                     <span className="rounded-full bg-stone-100 px-3 py-1">{turn.count} 张</span>
                     <span className="rounded-full bg-stone-100 px-3 py-1">{getTurnStatusLabel(turn.status)}</span>
-                    {turn.status === "queued" ? (
-                      <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">等待当前对话中的前序任务完成</span>
-                    ) : null}
+                    {(() => {
+                      const queueHint = getQueueStatusHint(selectedConversation, turn);
+                      return queueHint ? (
+                        <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">{queueHint}</span>
+                      ) : null;
+                    })()}
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 sm:block sm:columns-2 sm:gap-4 sm:space-y-4 xl:columns-3">

@@ -526,14 +526,22 @@ def create_router() -> APIRouter:
         require_admin(authorization)
         from services.usage_event_metrics import get_binding_usage_slots
 
-        return await run_in_threadpool(
-            lambda: get_binding_usage_slots(
-                week_offset=week_offset,
-                timezone=timezone,
-                days=days,
-                account_service=account_service,
-            )
-        )
+        def _load_binding_usage_slots() -> dict[str, object]:
+            try:
+                return get_binding_usage_slots(
+                    week_offset=week_offset,
+                    timezone=timezone,
+                    days=days,
+                    account_service=account_service,
+                )
+            except TypeError:
+                # 兼容尚未部署新版 usage_event_metrics 的实例
+                return get_binding_usage_slots(
+                    days=max(7, int(days or 28)),
+                    account_service=account_service,
+                )
+
+        return await run_in_threadpool(_load_binding_usage_slots)
 
     @router.post("/api/accounts/soft-band")
     async def set_account_soft_band(

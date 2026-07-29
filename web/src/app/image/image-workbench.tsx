@@ -93,7 +93,57 @@ function parseImageSize(size: string) {
 }
 
 const activeConversationQueueIds = new Set<string>();
+type ConversationQueueRun = {
+  aborted: boolean;
+};
+const conversationQueueRuns = new Map<string, ConversationQueueRun>();
 let pollAbortController: AbortController | null = null;
+
+function releaseConversationQueue(conversationId: string) {
+  activeConversationQueueIds.delete(conversationId);
+  conversationQueueRuns.delete(conversationId);
+}
+
+function abortConversationQueue(conversationId: string) {
+  const run = conversationQueueRuns.get(conversationId);
+  if (run) {
+    run.aborted = true;
+  }
+  activeConversationQueueIds.delete(conversationId);
+}
+
+function isTaskNotFoundError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /not found|404|不存在|image task not found/i.test(message);
+}
+
+async function cancelImageTaskWithTimeout(taskId: string, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await cancelImageTask(taskId, { signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("取消请求超时，请稍后重试");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function hasPriorActiveTurn(conversation: ImageConversation, turnId: string): boolean {
+  const turnIndex = conversation.turns.findIndex((turn) => turn.id === turnId);
+  if (turnIndex <= 0) {
+    return false;
+  }
+  return conversation.turns.slice(0, turnIndex).some(
+    (turn) =>
+      !turn.resultsDeleted &&
+      (turn.status === "queued" || turn.status === "generating") &&
+      turn.images.some((image) => image.status === "loading"),
+  );
+}
 
 function getResultsDistanceFromBottom(element: HTMLElement) {
   return element.scrollHeight - element.scrollTop - element.clientHeight;
@@ -684,6 +734,7 @@ export default function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         saveScrollPositions(scrollPositionsRef.current);
       }
       activeConversationQueueIds.clear();
+      conversationQueueRuns.clear();
       if (pollAbortController) {
         pollAbortController.abort();
         pollAbortController = null;
@@ -1210,6 +1261,39 @@ export default function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       }
 
       activeConversationQueueIds.add(conversationId);
+      const runState: ConversationQueueRun = { aborted: false };
+      conversationQueueRuns.set(conversationId, runState);
+      const shouldAbort = () => runState.aborted;
+
+      await updateConversation(
+        conversationId,
+        (current) => {
+          const conversation = current ?? snapshot;
+          return {
+            ...conversation,
+            updatedAt: new Date().toISOString(),
+            turns: conversation.turns.map((turn) => {
+              if (turn.id !== activeTurn.id) {
+                return turn;
+              }
+              return {
+                ...turn,
+                status: "generating" as const,
+                images: turn.images.map((image) =>
+                  image.status === "loading"
+                    ? {
+                        ...image,
+                        taskStatus: "running" as const,
+                        startTime: image.startTime || Date.now(),
+                      }
+                    : image,
+                ),
+              };
+            }),
+          };
+        },
+        { persist: false },
+      );
       const applyTasks = async (tasks: ImageTask[], options: { persist?: boolean } = {}) => {
         const taskMap = new Map(tasks.map((task) => [task.id, task]));
         const anyTerminal = tasks.some((task) => task.status === "success" || task.status === "error");
@@ -1244,6 +1328,9 @@ export default function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       };
 
       try {
+        if (shouldAbort()) {
+          return;
+        }
 
         const referenceFiles = activeTurn.referenceImages.map((image, index) =>
           dataUrlToFile(image.dataUrl, image.name || `${activeTurn.id}-${index + 1}.png`, image.type),
@@ -1313,8 +1400,12 @@ export default function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         }
 
         let consecutiveErrors = 0;
+        let missingResubmitRounds = 0;
         const retryingTaskIdsRef = new Set<string>();
         while (true) {
+          if (shouldAbort()) {
+            return;
+          }
           const latestConversation = conversationsRef.current.find((conversation) => conversation.id === conversationId);
           const latestTurn = latestConversation?.turns.find((turn) => turn.id === activeTurn.id);
           const loadingTaskIds =
@@ -1351,7 +1442,8 @@ export default function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                 await applyTasks(taskList.items);
               }
             }
-            if (taskList.missing_ids.length > 0 && latestTurn) {
+            if (taskList.missing_ids.length > 0 && latestTurn && missingResubmitRounds < 3) {
+              missingResubmitRounds += 1;
               const missingImages = latestTurn.images.filter(
                 (image) => image.status === "loading" && image.taskId && taskList.missing_ids.includes(image.taskId),
               );
@@ -1397,7 +1489,7 @@ export default function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         });
         toast.error(message);
       } finally {
-        activeConversationQueueIds.delete(conversationId);
+        releaseConversationQueue(conversationId);
         for (const conversation of conversationsRef.current) {
           if (
             !activeConversationQueueIds.has(conversation.id) &&
@@ -1609,6 +1701,64 @@ export default function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     }
   }, [conversations, runConversationQueue]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      for (const conversation of conversationsRef.current) {
+        if (activeConversationQueueIds.has(conversation.id)) {
+          continue;
+        }
+        const staleTurn = conversation.turns.find((turn) => {
+          if (turn.resultsDeleted || turn.status !== "queued") {
+            return false;
+          }
+          const loadingImages = turn.images.filter((image) => image.status === "loading");
+          if (loadingImages.length === 0) {
+            return false;
+          }
+          const oldestStart = Math.min(...loadingImages.map((image) => image.startTime || now));
+          return (
+            now - oldestStart > 45000 &&
+            loadingImages.every((image) => image.taskStatus === "queued" || image.taskStatus === "running")
+          );
+        });
+        if (staleTurn) {
+          void runConversationQueue(conversation.id);
+        }
+      }
+    }, 20000);
+    return () => window.clearInterval(timer);
+  }, [runConversationQueue]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      for (const conversation of conversationsRef.current) {
+        if (activeConversationQueueIds.has(conversation.id)) {
+          continue;
+        }
+        const staleTurn = conversation.turns.find((turn) => {
+          if (turn.resultsDeleted || turn.status !== "queued") {
+            return false;
+          }
+          const loadingImages = turn.images.filter((image) => image.status === "loading");
+          if (loadingImages.length === 0) {
+            return false;
+          }
+          const oldestStart = Math.min(...loadingImages.map((image) => image.startTime || now));
+          return (
+            now - oldestStart > 45000 &&
+            loadingImages.every((image) => image.taskStatus === "queued" || image.taskStatus === "running")
+          );
+        });
+        if (staleTurn) {
+          void runConversationQueue(conversation.id);
+        }
+      }
+    }, 20000);
+    return () => window.clearInterval(timer);
+  }, [runConversationQueue]);
+
   const handleSubmit = async () => {
     const prompt = imagePrompt.trim();
     if (!prompt) {
@@ -1694,8 +1844,42 @@ export default function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
   const handleCancelImageTask = async (taskId: string, opts?: { hideFromPanel?: boolean; imageId?: string; conversationId?: string; turnId?: string }) => {
     setCancellingTaskIds((prev) => new Set(prev).add(taskId));
+    const applyLocalCancel = async (message = "已取消") => {
+      const targetConversationId = opts?.conversationId;
+      if (targetConversationId) {
+        abortConversationQueue(targetConversationId);
+      }
+      for (const conversation of conversationsRef.current) {
+        let conversationTouched = false;
+        const nextTurns = conversation.turns.map((turn) => {
+          let turnTouched = false;
+          const images = turn.images.map((image) => {
+            if ((image.taskId || image.id) !== taskId) return image;
+            turnTouched = true;
+            conversationTouched = true;
+            return {
+              ...image,
+              status: "error" as const,
+              taskStatus: undefined,
+              progress: undefined,
+              error: message,
+            };
+          });
+          if (!turnTouched) return turn;
+          const derived = deriveTurnStatus({ ...turn, images });
+          return { ...turn, ...derived, images };
+        });
+        if (!conversationTouched) continue;
+        await updateConversation(conversation.id, () => ({
+          ...conversation,
+          updatedAt: new Date().toISOString(),
+          turns: nextTurns,
+        }));
+      }
+    };
+
     try {
-      const task = await cancelImageTask(taskId);
+      const task = await cancelImageTaskWithTimeout(taskId);
       for (const conversation of conversationsRef.current) {
         let conversationTouched = false;
         const nextTurns = conversation.turns.map((turn) => {
@@ -1720,7 +1904,12 @@ export default function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       }
       toast.success("已取消任务");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "取消失败");
+      if (isTaskNotFoundError(error)) {
+        await applyLocalCancel("已取消排队");
+        toast.success("已取消排队");
+      } else {
+        toast.error(error instanceof Error ? error.message : "取消失败");
+      }
     } finally {
       setCancellingTaskIds((prev) => {
         const next = new Set(prev);
@@ -1732,7 +1921,12 @@ export default function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
   const handleRemovePanelItem = async (item: ImageTaskPanelItem) => {
     if (item.status === "queued" || item.status === "running") {
-      await handleCancelImageTask(item.taskId, { hideFromPanel: true });
+      await handleCancelImageTask(item.taskId, {
+        hideFromPanel: true,
+        conversationId: item.conversationId,
+        turnId: item.turnId,
+        imageId: item.imageId,
+      });
       return;
     }
     setCancellingTaskIds((prev) => new Set(prev).add(item.taskId));

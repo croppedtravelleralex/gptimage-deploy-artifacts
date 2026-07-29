@@ -1125,9 +1125,10 @@ export async function resumeImagePoll(taskId: string, extraTimeoutSecs = 30) {
   });
 }
 
-export async function cancelImageTask(taskId: string) {
+export async function cancelImageTask(taskId: string, options?: { signal?: AbortSignal }) {
   return httpRequest<ImageTask>(`/api/image-tasks/${encodeURIComponent(taskId)}/cancel`, {
     method: "POST",
+    signal: options?.signal,
   });
 }
 

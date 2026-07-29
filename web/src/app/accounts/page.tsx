@@ -117,6 +117,7 @@ import {
   type PandaSyncPublicSettings,
   type RefreshProgressResponse,
 } from "@/lib/api";
+import { bindingKeyForAccount } from "@/lib/binding-key";
 import { humanizeUpstreamError } from "@/lib/chat-format";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import { cn } from "@/lib/utils";
@@ -284,25 +285,6 @@ const CF_STATUS_PRIORITY: Record<string, number> = {
   ok: 1,
   none: 0,
 };
-
-function bindingKeyForAccount(account: Account): string {
-  const hash = String(account.proxy_binding_hash ?? "").trim();
-  if (hash) return hash;
-  const egress = String(account.proxy_egress_ip ?? "").trim();
-  if (egress) return `egress:${egress}`;
-  const raw = String(account.proxy ?? "").trim();
-  if (raw) {
-    try {
-      const parsed = new URL(raw.includes("://") ? raw : `http://${raw}`);
-      const host = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
-      return `proxy:${host}`;
-    } catch {
-      const stripped = raw.replace(/^[a-z]+:\/\//i, "").replace(/^[^@]+@/, "").split("/")[0];
-      return `proxy:${stripped || "unknown"}`;
-    }
-  }
-  return "default";
-}
 
 function bindingLabelForAccount(account: Account) {
   return proxyDisplay(account).endpoint;
@@ -933,8 +915,9 @@ function AccountsPageContent() {
       const res = await fetchBindingUsageSlots({ weekOffset, timezone });
       bindingUsageCacheRef.current.set(cacheKey, res);
       applyBindingUsageResponse(res);
-    } catch {
+    } catch (error) {
       setBindingUsageSlots({});
+      toast.error(error instanceof Error ? error.message : "加载 IP 活动热力图失败");
     } finally {
       setBindingUsageLoading(false);
     }
