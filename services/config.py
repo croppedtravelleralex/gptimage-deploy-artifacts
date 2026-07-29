@@ -74,7 +74,7 @@ DEFAULT_IMAGE_TASK_QUEUE = {
     # 见 docs/28 §B7：阶梯总时长必须严格小于 newapi_image_sync_wait_timeout_secs。
     "sync_ladder_reserve_ratio": 0.10,
     "generation_poll_timeout_secs": 120,
-    "edit_poll_timeout_secs": 300,
+    "edit_poll_timeout_secs": 480,
     "multi_reference_poll_timeout_secs": 360,
     "pre_conversation_timeout_secs": 45,
     "pre_conversation_max_attempts": 4,

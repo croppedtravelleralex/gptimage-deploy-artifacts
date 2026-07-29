@@ -172,6 +172,13 @@ def _looks_like_timeout(message: str) -> bool:
     return "timeout" in lowered or "timed out" in lowered or "超时" in message
 
 
+def _looks_like_rate_limited(message: str, code: str = "") -> bool:
+    if code == "image_poll_rate_limited":
+        return True
+    lowered = str(message or "").lower()
+    return "429" in lowered or "rate limit" in lowered or "too many requests" in lowered
+
+
 def _looks_like_token_invalid(message: str) -> bool:
     lowered = str(message or "").lower()
     return (
@@ -2540,7 +2547,12 @@ class ImageTaskService:
             if (
                 conversation_id
                 and resume_affordable
-                and (code == "image_timeout_pending" or _looks_like_timeout(error_message))
+                and (
+                    code == "image_timeout_pending"
+                    or code == "image_poll_rate_limited"
+                    or _looks_like_timeout(error_message)
+                    or _looks_like_rate_limited(error_message, code)
+                )
             ):
                 resume_timeout_secs = max(
                     float(payload.get("resume_timeout_secs") or 0.0),
