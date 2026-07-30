@@ -46,6 +46,7 @@ class PhaseTimingsMs:
     ps_ms: int = 0
     ss_ms: int = 0
     sse_stream_ms: int = 0
+    poll_resolve_ms: int = 0
     download_ms: int = 0
     wall_clock_ms: int = 0
 
@@ -61,6 +62,7 @@ class PhaseTimingsMs:
             "ps_ms": int(self.ps_ms),
             "ss_ms": int(self.ss_ms),
             "sse_stream_ms": int(self.sse_stream_ms),
+            "poll_resolve_ms": int(self.poll_resolve_ms),
             "download_ms": int(self.download_ms),
             "wall_clock_ms": int(self.wall_clock_ms),
         }
@@ -80,6 +82,7 @@ class PhaseTimingsMs:
             ps_ms=int(value.get("ps_ms") or 0),
             ss_ms=int(value.get("ss_ms") or 0),
             sse_stream_ms=int(value.get("sse_stream_ms") or 0),
+            poll_resolve_ms=int(value.get("poll_resolve_ms") or 0),
             download_ms=int(value.get("download_ms") or 0),
             wall_clock_ms=int(value.get("wall_clock_ms") or 0),
         )

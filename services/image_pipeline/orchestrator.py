@@ -194,6 +194,7 @@ class PipelineRun:
         self._account_wait_started_mono: float | None = None
         self._account_acquired_mono: float | None = None
         self._sse_stream_recorded = False
+        self._poll_started_mono: float | None = None
         self._account_access_token = ""
         self._account_slot_released_after_sse = False
         self._account_ledger_registered = False
@@ -305,10 +306,15 @@ class PipelineRun:
         if acquired is not None:
             self.state.timings.sse_stream_ms += max(0, int((time.monotonic() - acquired) * 1000))
         self._sse_stream_recorded = True
+        self._poll_started_mono = time.monotonic()
         schedule_trace.emit("sse_stream_end")
         self._release_account_slot_after_sse()
 
     def mark_poll_resolve_end(self) -> None:
+        started = self._poll_started_mono
+        if started is not None:
+            self.state.timings.poll_resolve_ms += max(0, int((time.monotonic() - started) * 1000))
+            self._poll_started_mono = None
         schedule_trace.emit("poll_resolve_end")
 
     def on_sediment_captured(self, *, image_index: int, sediment_ids: list[str]) -> None:

@@ -3520,6 +3520,48 @@ class AccountService:
             result["items"] = items or []
         return result
 
+    @staticmethod
+    def _apply_quota_local_mark_guard(current: dict, incoming: dict) -> dict:
+        """Keep local post-image decrement when upstream quota refresh is still stale."""
+        out = dict(incoming)
+        try:
+            grace_until = float(current.get("quota_local_mark_grace_until") or 0)
+        except (TypeError, ValueError):
+            grace_until = 0.0
+        if grace_until <= time.time():
+            return out
+        if AccountService._is_true_unlimited_image_account(current) or bool(current.get("image_quota_unknown")):
+            return out
+        if "quota" not in out and "limits_progress" not in out:
+            return out
+        try:
+            local_q = int(current.get("quota") or 0)
+            remote_q = int(out.get("quota") if "quota" in out else local_q)
+        except (TypeError, ValueError):
+            return out
+        if remote_q > local_q:
+            out["quota"] = local_q
+            limits = out.get("limits_progress")
+            if not isinstance(limits, list):
+                limits = current.get("limits_progress")
+            if isinstance(limits, list):
+                adjusted: list[dict] = []
+                for entry in limits:
+                    if not isinstance(entry, dict):
+                        adjusted.append(entry)
+                        continue
+                    row = dict(entry)
+                    feature = str(row.get("feature_name") or "").strip().lower().replace("-", "_")
+                    if feature == "image_gen" and "remaining" in row:
+                        try:
+                            remaining = int(row.get("remaining"))
+                        except (TypeError, ValueError):
+                            remaining = remote_q
+                        row["remaining"] = min(remaining, local_q)
+                    adjusted.append(row)
+                out["limits_progress"] = adjusted
+        return out
+
     def update_account(self, access_token: str, updates: dict, quiet: bool = False) -> dict | None:
         if not access_token:
             return None
@@ -3530,6 +3572,7 @@ class AccountService:
                 return None
             incoming = dict(updates or {})
             incoming = self._preserve_identity_isolated(current, incoming)
+            incoming = self._apply_quota_local_mark_guard(current, incoming)
             protected, conflicts = merge_account_identity(current, incoming, allow_rebind=False)
             merged = {**current, **incoming, **protected, "access_token": access_token}
             quota_fields = ("quota", "limits_progress", "image_quota_unknown", "restore_at")
@@ -3942,6 +3985,11 @@ class AccountService:
                 next_item["image_fail_streak"] = 0
                 if not is_true_unlimited and not image_quota_unknown:
                     next_item = self._decrement_stored_image_quota(next_item)
+                    try:
+                        grace_secs = float(config.image_quota_local_mark_grace_secs)
+                    except Exception:
+                        grace_secs = 120.0
+                    next_item["quota_local_mark_grace_until"] = time.time() + max(30.0, grace_secs)
                 if not is_true_unlimited and not image_quota_unknown and next_item["quota"] == 0:
                     # A2-4：硬额度归零与软熔断同规（见 _apply_humanlike_quota_fields 内注释
                     # 「软熔断只用 flag，禁止改 status=限流」）。写 status 会落库，并关死

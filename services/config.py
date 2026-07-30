@@ -455,7 +455,11 @@ def _normalize_image_task_queue_settings(value: object) -> dict[str, object]:
             bool(DEFAULT_IMAGE_TASK_QUEUE["submit_interval_adaptive"]),
         ),
         "timeout_pending_poll_secs": _normalize_positive_int(source.get("timeout_pending_poll_secs"), int(DEFAULT_IMAGE_TASK_QUEUE["timeout_pending_poll_secs"]), 5),
-        "timeout_pending_max_attempts": _normalize_positive_int(source.get("timeout_pending_max_attempts"), int(DEFAULT_IMAGE_TASK_QUEUE["timeout_pending_max_attempts"]), 1),
+        "timeout_pending_max_attempts": _normalize_positive_int(
+            source.get("timeout_pending_max_attempts"),
+            int(DEFAULT_IMAGE_TASK_QUEUE["timeout_pending_max_attempts"]),
+            0,
+        ),
         "sync_ladder_reserve_ratio": _normalize_ratio(
             source.get("sync_ladder_reserve_ratio"),
             float(DEFAULT_IMAGE_TASK_QUEUE["sync_ladder_reserve_ratio"]),
@@ -2171,6 +2175,14 @@ class ConfigStore:
             return max(5.0, float(self.image_generation_poll_timeout_secs))
         except (TypeError, ValueError):
             return 60.0
+
+    @property
+    def image_quota_local_mark_grace_secs(self) -> float:
+        """After a successful local quota decrement, ignore remote quota increases briefly."""
+        try:
+            return max(30.0, min(600.0, float(self.data.get("image_quota_local_mark_grace_secs", 120.0))))
+        except (TypeError, ValueError):
+            return 120.0
 
     @property
     def image_poll_after_slow_sse_ms(self) -> float:

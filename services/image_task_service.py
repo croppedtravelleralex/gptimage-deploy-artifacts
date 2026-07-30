@@ -465,6 +465,25 @@ def _status_task(
         item["elapsed_secs"] = elapsed_secs
     if task.get("duration_ms") is not None:
         item["duration_ms"] = task.get("duration_ms")
+    phase_timings = task.get("phase_timings_ms")
+    if isinstance(phase_timings, dict) and phase_timings:
+        item["phase_timings_ms"] = {
+            key: int(phase_timings.get(key) or 0)
+            for key in (
+                "task_queue_ms",
+                "admit_queue_ms",
+                "account_queue_ms",
+                "ss_queue_ms",
+                "sse_stream_ms",
+                "poll_resolve_ms",
+                "download_ms",
+                "wall_clock_ms",
+            )
+            if int(phase_timings.get(key) or 0) > 0
+        }
+        wall_clock = phase_timings.get("wall_clock_ms")
+        if wall_clock is not None:
+            item["wall_clock_ms"] = int(wall_clock)
     if task.get("error"):
         item["error"] = task.get("error")
     if task.get("resume_attempts") is not None:
@@ -2143,6 +2162,15 @@ class ImageTaskService:
         pending = outcome.get("pending_call_log")
         if not isinstance(pending, dict):
             return
+        trace_payload = pending.get("schedule_trace") if isinstance(pending.get("schedule_trace"), dict) else None
+        if not trace_payload:
+            with self._condition:
+                task_snapshot = dict(self._tasks.get(key) or {})
+            if not isinstance(task_snapshot.get("schedule_trace"), dict):
+                task_snapshot = dict(self._load_task_from_db_locked(key) or {})
+            trace_val = task_snapshot.get("schedule_trace")
+            if isinstance(trace_val, dict):
+                trace_payload = trace_val
         suffix = _clean(pending.get("suffix"), "调用完成")
         pending_usage = pending.get("usage")
         usage = pending_usage if isinstance(pending_usage, dict) else None
@@ -2163,9 +2191,7 @@ class ImageTaskService:
             phase_timings_ms=pending.get("phase_timings_ms")
             if isinstance(pending.get("phase_timings_ms"), dict)
             else None,
-            schedule_trace_payload=pending.get("schedule_trace")
-            if isinstance(pending.get("schedule_trace"), dict)
-            else None,
+            schedule_trace_payload=trace_payload,
         )
 
     def _pipeline_phase_after_run(self, key: str) -> str:
@@ -3155,6 +3181,23 @@ class ImageTaskService:
             )
             if isinstance(resolved_schedule_trace, dict) and resolved_schedule_trace:
                 detail["schedule_trace"] = resolved_schedule_trace
+                trace_phases = resolved_schedule_trace.get("phases_ms")
+                if isinstance(trace_phases, dict):
+                    merged = dict(detail.get("phase_timings_ms") or {})
+                    for phase_key, phase_ms in trace_phases.items():
+                        if not str(phase_key).endswith("_ms"):
+                            continue
+                        try:
+                            value = int(phase_ms or 0)
+                        except (TypeError, ValueError):
+                            continue
+                        if value > 0 and int(merged.get(phase_key) or 0) <= 0:
+                            merged[phase_key] = value
+                    if merged:
+                        detail["phase_timings_ms"] = merged
+                        for phase_key, phase_ms in merged.items():
+                            if int(phase_ms or 0) > 0:
+                                detail[f"phase_{phase_key}"] = int(phase_ms)
         resolved_usage: dict[str, Any] | None = None
         if isinstance(usage, dict) and usage:
             resolved_usage = usage

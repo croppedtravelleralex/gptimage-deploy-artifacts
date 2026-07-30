@@ -9,6 +9,12 @@ def test_attempt_budget_defaults_in_code() -> None:
     assert int(DEFAULT_IMAGE_TASK_QUEUE["timeout_pending_max_attempts"]) == 0
 
 
+def test_timeout_pending_max_attempts_zero_is_preserved(monkeypatch) -> None:
+    monkeypatch.setitem(config.data, "image_task_queue", {"timeout_pending_max_attempts": 0})
+    normalized = config.get_image_task_queue_settings()
+    assert normalized.get("timeout_pending_max_attempts") == 0
+
+
 def test_attempt_budget_properties_respect_explicit_override(monkeypatch) -> None:
     monkeypatch.setitem(config.data, "image_attempt_sse_phase_secs", 100)
     monkeypatch.setitem(config.data, "image_attempt_poll_phase_secs", 80)
