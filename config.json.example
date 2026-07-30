@@ -1,0 +1,17 @@
+{
+  "auth-key": "CHANGE_ME",
+  "newapi_image_attempt_budget_secs": 180,
+  "newapi_image_sync_wait_timeout_secs": 180,
+  "image_attempt_sse_phase_secs": 120,
+  "image_attempt_poll_phase_secs": 60,
+  "image_poll_after_slow_sse_ms": 45000,
+  "image_poll_after_slow_sse_initial_wait_secs": 2.0,
+  "newapi_image_sync_handoff_on_timeout_pending": false,
+  "image_pipeline": {
+    "ss_stage_wall_timeout_secs": 120
+  },
+  "image_task_queue": {
+    "generation_poll_timeout_secs": 60,
+    "timeout_pending_max_attempts": 0
+  }
+}
