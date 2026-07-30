@@ -20,6 +20,7 @@ from services.text_nurture_service import text_nurture_service
 from services.account_warmup_service import account_warmup_service
 from services.account_service import account_service
 from services.webshare_cf_scan_service import webshare_cf_scan_service
+from services.account_cf_refresh_service import account_cf_refresh_service
 from services.image_pipeline import image_pipeline_scheduler
 from services.quota_refresh_schedule_service import quota_refresh_schedule_service
 from services.quota_window_prime_service import quota_window_prime_service
@@ -362,6 +363,19 @@ def create_router() -> APIRouter:
         require_admin(authorization)
         try:
             return await run_in_threadpool(lambda: webshare_cf_scan_service.run_once(force=True))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+
+    @router.get("/api/ops/account-cf-refresh/status")
+    async def account_cf_refresh_status(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        return await run_in_threadpool(account_cf_refresh_service.status)
+
+    @router.post("/api/ops/account-cf-refresh/run-once")
+    async def account_cf_refresh_run_once(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        try:
+            return await run_in_threadpool(lambda: account_cf_refresh_service.run_once(force=True))
         except Exception as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 

@@ -27,6 +27,7 @@ from services.register_service import register_service
 from services.risk_audit_service import risk_audit_service
 from services.text_nurture_service import text_nurture_service
 from services.text_conversation_expiry_service import text_conversation_expiry_service
+from services.account_cf_refresh_service import account_cf_refresh_service
 from services.account_warmup_service import account_warmup_service
 from services.webshare_cf_scan_service import webshare_cf_scan_service
 
@@ -48,6 +49,7 @@ def create_app() -> FastAPI:
         panda_staging_service.start_background()
         text_nurture_service.start_background()
         webshare_cf_scan_service.start_background()
+        account_cf_refresh_service.start_background()
         risk_audit_service.start_background()
         account_warmup_service.start_background()
         text_conversation_expiry_service.start_background()
@@ -70,6 +72,7 @@ def create_app() -> FastAPI:
             panda_staging_service.stop_background()
             text_nurture_service.stop_background()
             webshare_cf_scan_service.stop_background()
+            account_cf_refresh_service.stop_background()
             risk_audit_service.stop_background()
             account_warmup_service.stop_background()
             text_conversation_expiry_service.stop_background()

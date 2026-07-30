@@ -284,6 +284,17 @@ DEFAULT_ACCOUNT_MAINTENANCE_LOOP = {
     "expired_grace_hours": 1,
 }
 
+DEFAULT_ACCOUNT_CF_REFRESH = {
+    "enabled": True,
+    "interval_sec": 300.0,
+    "startup_delay_sec": 90.0,
+    "max_probes_per_tick": 4,
+    "probe_timeout_sec": 45.0,
+    "min_retry_sec": 3600.0,
+    "trigger_batch_scan_when_stale": True,
+    "batch_scan_cooldown_sec": 1800.0,
+}
+
 DEFAULT_OUTLOOK_AUTO_RECOVERY = {
     "enabled": False,
     "interval_sec": 1800,
@@ -879,6 +890,36 @@ def _normalize_account_maintenance_loop_settings(value: object) -> dict[str, obj
     }
 
 
+def _normalize_account_cf_refresh_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    return {
+        "enabled": _normalize_bool(source.get("enabled"), bool(DEFAULT_ACCOUNT_CF_REFRESH["enabled"])),
+        "interval_sec": max(60.0, float(source.get("interval_sec", DEFAULT_ACCOUNT_CF_REFRESH["interval_sec"]) or 300.0)),
+        "startup_delay_sec": max(0.0, float(source.get("startup_delay_sec", DEFAULT_ACCOUNT_CF_REFRESH["startup_delay_sec"]) or 0.0)),
+        "max_probes_per_tick": max(
+            1,
+            _normalize_positive_int(
+                source.get("max_probes_per_tick"),
+                int(DEFAULT_ACCOUNT_CF_REFRESH["max_probes_per_tick"]),
+                1,
+            ),
+        ),
+        "probe_timeout_sec": max(
+            10.0,
+            float(source.get("probe_timeout_sec", DEFAULT_ACCOUNT_CF_REFRESH["probe_timeout_sec"]) or 45.0),
+        ),
+        "min_retry_sec": max(60.0, float(source.get("min_retry_sec", DEFAULT_ACCOUNT_CF_REFRESH["min_retry_sec"]) or 3600.0)),
+        "trigger_batch_scan_when_stale": _normalize_bool(
+            source.get("trigger_batch_scan_when_stale"),
+            bool(DEFAULT_ACCOUNT_CF_REFRESH["trigger_batch_scan_when_stale"]),
+        ),
+        "batch_scan_cooldown_sec": max(
+            300.0,
+            float(source.get("batch_scan_cooldown_sec", DEFAULT_ACCOUNT_CF_REFRESH["batch_scan_cooldown_sec"]) or 1800.0),
+        ),
+    }
+
+
 def _normalize_outlook_auto_recovery_settings(value: object) -> dict[str, object]:
     source = value if isinstance(value, dict) else {}
     return {
@@ -1034,6 +1075,10 @@ DEFAULT_WEBSHARE_CF_SCAN_SETTINGS: dict[str, object] = {
     "probe_on_assign": True,
     "scan_stale_sec": 86400,
     "block_unscanned_for_schedule": True,
+    # Transient cf403 on stamp/probe: retry up to 3 more times within 5 minutes.
+    "cf403_retry_count": 3,
+    "cf403_retry_window_sec": 300.0,
+    "cf403_retry_min_gap_sec": 45.0,
 }
 
 DEFAULT_ACCOUNT_WARMUP_SETTINGS: dict[str, object] = {
@@ -1488,6 +1533,28 @@ def _normalize_webshare_cf_scan_settings(value: object) -> dict[str, object]:
         "block_unscanned_for_schedule": _normalize_bool(
             source.get("block_unscanned_for_schedule"),
             bool(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["block_unscanned_for_schedule"]),
+        ),
+        "cf403_retry_count": max(
+            0,
+            _normalize_positive_int(
+                source.get("cf403_retry_count"),
+                int(DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["cf403_retry_count"]),
+                0,
+            ),
+        ),
+        "cf403_retry_window_sec": max(
+            60.0,
+            float(
+                source.get("cf403_retry_window_sec", DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["cf403_retry_window_sec"])
+                or 300.0
+            ),
+        ),
+        "cf403_retry_min_gap_sec": max(
+            5.0,
+            float(
+                source.get("cf403_retry_min_gap_sec", DEFAULT_WEBSHARE_CF_SCAN_SETTINGS["cf403_retry_min_gap_sec"])
+                or 45.0
+            ),
         ),
     }
 
@@ -2462,6 +2529,7 @@ class ConfigStore:
         data["third_party_apps"] = self.get_third_party_apps_settings()
         data["account_refresh_all"] = self.get_account_refresh_all_settings()
         data["account_maintenance_loop"] = self.get_account_maintenance_loop_settings()
+        data["account_cf_refresh"] = self.get_account_cf_refresh_settings()
         data["outlook_auto_recovery"] = self.get_outlook_auto_recovery_settings()
         data["scheduler"] = self.get_scheduler_settings()
         data["proactive_refresh"] = self.get_proactive_refresh_settings()
@@ -2499,6 +2567,9 @@ class ConfigStore:
 
     def get_account_maintenance_loop_settings(self) -> dict[str, object]:
         return _normalize_account_maintenance_loop_settings(self.data.get("account_maintenance_loop"))
+
+    def get_account_cf_refresh_settings(self) -> dict[str, object]:
+        return _normalize_account_cf_refresh_settings(self.data.get("account_cf_refresh"))
 
     def get_outlook_auto_recovery_settings(self) -> dict[str, object]:
         return _normalize_outlook_auto_recovery_settings(self.data.get("outlook_auto_recovery"))
@@ -2583,6 +2654,8 @@ class ConfigStore:
             next_data["account_refresh_all"] = _normalize_account_refresh_all_settings(next_data.get("account_refresh_all"))
         if "account_maintenance_loop" in next_data:
             next_data["account_maintenance_loop"] = _normalize_account_maintenance_loop_settings(next_data.get("account_maintenance_loop"))
+        if "account_cf_refresh" in next_data:
+            next_data["account_cf_refresh"] = _normalize_account_cf_refresh_settings(next_data.get("account_cf_refresh"))
         if "outlook_auto_recovery" in next_data:
             next_data["outlook_auto_recovery"] = _normalize_outlook_auto_recovery_settings(next_data.get("outlook_auto_recovery"))
         if "scheduler" in next_data:

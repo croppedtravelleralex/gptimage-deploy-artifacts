@@ -122,3 +122,77 @@ def probe_proxy_cf(proxy_url: str, *, timeout: float = 45.0) -> dict[str, Any]:
         "error": error[:240] if error else "",
         "elapsed_ms": int((time.time() - started) * 1000),
     }
+
+
+CF403_TRANSIENT_CLASSIFICATIONS = frozenset({"cf403", "home_403_soft_fail"})
+
+
+def is_transient_cf403_probe(probe: dict[str, Any]) -> bool:
+    """True when a failed probe looks like a flaky Cloudflare edge block."""
+    if bool(probe.get("ok")):
+        return False
+    classification = str(probe.get("cf_classification") or "").strip().lower()
+    if classification in CF403_TRANSIENT_CLASSIFICATIONS:
+        return True
+    return bool(probe.get("cf403")) and not str(probe.get("error") or "").strip()
+
+
+def _cf_probe_retry_policy() -> tuple[int, float, float]:
+    try:
+        from services.proxy_cf_eligibility import _cf_policy
+
+        policy = _cf_policy()
+    except Exception:
+        policy = {}
+    retry_count = max(0, int(policy.get("cf403_retry_count") or 3))
+    window_sec = max(60.0, float(policy.get("cf403_retry_window_sec") or 300.0))
+    min_gap_sec = max(5.0, float(policy.get("cf403_retry_min_gap_sec") or 45.0))
+    return retry_count, window_sec, min_gap_sec
+
+
+def probe_proxy_cf_with_retries(
+    proxy_url: str,
+    *,
+    timeout: float = 45.0,
+    retry_count: int | None = None,
+    retry_window_sec: float | None = None,
+    min_retry_gap_sec: float | None = None,
+    sleep_fn=time.sleep,
+) -> dict[str, Any]:
+    """Probe CF; on transient cf403, retry up to N times within a wall-clock window."""
+    default_retries, default_window, default_gap = _cf_probe_retry_policy()
+    max_retries = default_retries if retry_count is None else max(0, int(retry_count))
+    window_sec = default_window if retry_window_sec is None else max(60.0, float(retry_window_sec))
+    min_gap_sec = default_gap if min_retry_gap_sec is None else max(5.0, float(min_retry_gap_sec))
+
+    started = time.monotonic()
+    attempts: list[dict[str, Any]] = []
+    probe = probe_proxy_cf(proxy_url, timeout=timeout)
+    attempts.append(probe)
+    retries_done = 0
+    classifications = [str(probe.get("cf_classification") or "")]
+
+    while retries_done < max_retries and not probe.get("ok") and is_transient_cf403_probe(probe):
+        elapsed = time.monotonic() - started
+        remaining = window_sec - elapsed
+        if remaining <= min_gap_sec:
+            break
+        sleep_fn(min(min_gap_sec, max(0.0, remaining - 1.0)))
+        if time.monotonic() - started >= window_sec:
+            break
+        probe = probe_proxy_cf(proxy_url, timeout=timeout)
+        attempts.append(probe)
+        classifications.append(str(probe.get("cf_classification") or ""))
+        retries_done += 1
+        if probe.get("ok"):
+            break
+
+    total_elapsed_ms = sum(int(item.get("elapsed_ms") or 0) for item in attempts)
+    out = dict(probe)
+    out["elapsed_ms"] = total_elapsed_ms
+    out["probe_attempts"] = len(attempts)
+    out["probe_retries"] = retries_done
+    out["probe_retry_window_sec"] = window_sec
+    out["probe_retry_classifications"] = classifications
+    out["probe_retried"] = retries_done > 0
+    return out

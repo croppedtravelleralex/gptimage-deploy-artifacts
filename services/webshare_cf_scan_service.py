@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from services.config import config
 from services.proxy_cf_failover import load_proxy_pool
-from services.proxy_cf_probe import probe_proxy_cf
+from services.proxy_cf_probe import probe_proxy_cf, probe_proxy_cf_with_retries
 from services.proxy_quarantine import (
     is_gpt_unavailable_proxy,
     list_quarantine_entries,
@@ -312,7 +312,7 @@ class WebshareCfScanService:
         if batch:
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 futures = {
-                    executor.submit(probe_proxy_cf, proxy, timeout=timeout): proxy for proxy in batch
+                    executor.submit(probe_proxy_cf_with_retries, proxy, timeout=timeout): proxy for proxy in batch
                 }
                 for future in as_completed(futures):
                     proxy = futures[future]
@@ -350,6 +350,13 @@ class WebshareCfScanService:
                 except Exception:
                     pass
 
+        inventory = build_pool_inventory(
+            settings,
+            latest_report={
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "nodes": nodes,
+            },
+        )
         summary = {
             "batch_size": len(batch),
             "pool_total": len(pool),
@@ -358,13 +365,15 @@ class WebshareCfScanService:
             "quarantined": len(quarantined),
             "errors": sum(1 for node in nodes if node.get("error") and not node.get("ok")),
         }
-        inventory = build_pool_inventory(
-            settings,
-            latest_report={
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "nodes": nodes,
-            },
-        )
+        previous = self._read_latest_report() or {}
+        merged_nodes = list(_scan_nodes_by_endpoint(previous).values())
+        merged_index = {str(node.get("proxy_endpoint") or node.get("proxy_hash") or "").strip().lower(): node for node in merged_nodes}
+        for node in nodes:
+            endpoint = str(node.get("proxy_endpoint") or node.get("proxy_hash") or "").strip().lower()
+            if endpoint:
+                merged_index[endpoint] = node
+        merged_nodes = sorted(merged_index.values(), key=lambda item: str(item.get("proxy_endpoint") or ""))
+        summary["merged_nodes"] = len(merged_nodes)
         summary.update(
             {
                 "available_count": inventory["available_count"],
@@ -377,7 +386,7 @@ class WebshareCfScanService:
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "summary": summary,
             "inventory": inventory,
-            "nodes": nodes,
+            "nodes": merged_nodes,
             "quarantined_endpoints": quarantined,
         }
         self._write_report(report)

@@ -111,6 +111,81 @@ def account_cf_cache_ok(account: dict | None, *, proxy_url: str) -> bool:
     return (time.time() - ok_at) <= scan_stale_sec()
 
 
+def account_cf_cache_expired(account: dict | None, *, proxy_url: str) -> bool:
+    """True when a stamp exists for the current endpoint but is older than scan_stale_sec."""
+    if not isinstance(account, dict):
+        return False
+    proxy = str(proxy_url or "").strip()
+    if not proxy:
+        return False
+    if not bool(account.get("proxy_cf_ok")):
+        return False
+    cached_endpoint = str(account.get("proxy_cf_probe_endpoint") or "").strip().lower()
+    current = proxy_endpoint_key(proxy)
+    if not cached_endpoint or cached_endpoint != current:
+        return False
+    try:
+        ok_at = float(account.get("proxy_cf_ok_at") or 0)
+    except (TypeError, ValueError):
+        return False
+    if ok_at <= 0:
+        return False
+    return (time.time() - ok_at) > scan_stale_sec()
+
+
+def cf_scan_index_stale(*, max_age_sec: float | None = None) -> bool:
+    """True when batch scan report is missing or older than scan_stale_sec."""
+    index = load_scan_index(max_age_sec=max_age_sec)
+    return not index
+
+
+def account_needs_cf_stamp_refresh(
+    account: dict | None,
+    *,
+    proxy_url: str | None = None,
+    peer_index: object | None = None,
+) -> bool:
+    """Account is otherwise healthy but static CF gate would block scheduling."""
+    if not isinstance(account, dict):
+        return False
+    if not require_cf_ok_for_image():
+        return False
+    status = str(account.get("status") or "")
+    if status in {"禁用", "限流", "异常"}:
+        return False
+    proxy = str(proxy_url or account.get("proxy") or "").strip()
+    if not proxy:
+        return False
+    try:
+        from services.account_service import account_service
+
+        if not account_service._is_image_account_available(account):
+            return False
+        if account_service._has_image_account_failure_evidence(account):
+            return False
+        if account_service._requires_panda_receive_verification(account):
+            return False
+        if peer_index is not None:
+            if getattr(peer_index, "binding_duplicate", lambda _a: False)(account):
+                return False
+            if getattr(peer_index, "egress_duplicate", lambda _a: False)(account):
+                return False
+        elif account_service._active_proxy_binding_duplicate(account) or account_service._active_proxy_egress_duplicate(account):
+            return False
+        if account_service._is_image_account_schedulable(account, allow_live_cf_probe=False, peer_index=peer_index):
+            return False
+    except Exception:
+        return False
+    if account_cf_cache_ok(account, proxy_url=proxy):
+        return False
+    endpoint = proxy_endpoint_key(proxy)
+    if scan_verdict(endpoint) is True:
+        return False
+    if is_gpt_unavailable_proxy(proxy):
+        return False
+    return True
+
+
 def is_proxy_cf_ok_for_image(
     proxy_url: str,
     *,

@@ -432,7 +432,7 @@ class AccountService:
                 probe_on_assign,
                 require_cf_ok_for_image,
             )
-            from services.proxy_cf_probe import probe_proxy_cf
+            from services.proxy_cf_probe import probe_proxy_cf_with_retries
             from services.proxy_quarantine import proxy_endpoint_key
 
             if not require_cf_ok_for_image() or not probe_on_assign():
@@ -448,7 +448,7 @@ class AccountService:
             # 同一出口 1h 内已探过（含失败）则跳过，避免 normalize 热路径反复打 CF。
             if ok_at > 0 and cached_endpoint == endpoint and (time.time() - ok_at) < 3600:
                 return account
-            probe = probe_proxy_cf(proxy, timeout=45.0)
+            probe = probe_proxy_cf_with_retries(proxy, timeout=45.0)
             stamped = dict(account)
             stamped.update(cf_probe_account_fields(proxy, probe))
             return stamped
