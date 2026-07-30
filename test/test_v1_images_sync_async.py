@@ -130,6 +130,45 @@ class ImageGenerationsSyncAsyncTests(unittest.TestCase):
         self.assertEqual(response.json()["detail"]["code"], "image_generation_paused")
         handle.assert_not_called()
 
+    def test_sync_wait_timeout_returns_image_task_for_polling(self):
+        from services.image_task_service import ImageTaskWaitTimeoutError
+
+        task = {
+            "id": "sync-handoff-1",
+            "task_id": "sync-handoff-1",
+            "status": "timeout_pending",
+            "mode": "generate",
+            "progress": "timeout_pending",
+            "created_at": "2026-01-01 00:00:00",
+            "updated_at": "2026-01-01 00:01:00",
+            "data": [],
+            "error": "poll timeout",
+        }
+
+        def raise_handoff(identity, **kwargs):
+            raise ImageTaskWaitTimeoutError("sync-handoff-1", task)
+
+        with mock.patch.object(ai_module, "run_generation_sync", raise_handoff):
+            with mock.patch.object(
+                ai_module.image_task_service,
+                "queue_snapshot_for_task",
+                return_value=task,
+            ):
+                response = self.client.post(
+                    "/v1/images/generations",
+                    headers=AUTH_HEADERS,
+                    json={
+                        "model": "gpt-image-2",
+                        "prompt": "handoff",
+                        "response_format": "b64_json",
+                    },
+                )
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["object"], "image.task")
+        self.assertEqual(payload["task_id"], "sync-handoff-1")
+        self.assertEqual(payload["status"], "timeout_pending")
+
 
 if __name__ == "__main__":
     unittest.main()

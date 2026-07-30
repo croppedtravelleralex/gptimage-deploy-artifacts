@@ -69,11 +69,10 @@ DEFAULT_IMAGE_TASK_QUEUE = {
     # inflight < cap 且 queued 可立即开跑时 interval=0（conc≤sse_slots 时 task_queue≈0）
     "submit_interval_adaptive": True,
     "timeout_pending_poll_secs": 180,
-    "timeout_pending_max_attempts": 4,
-    # 同步等待预算中保留给排队/投递/CDN 的比例；其余部分是"首次尝试 + 全部续轮询"的总预算。
-    # 见 docs/28 §B7：阶梯总时长必须严格小于 newapi_image_sync_wait_timeout_secs。
+    "timeout_pending_max_attempts": 0,
+    # 同步等待预算中保留给排队/投递/CDN 的比例。
     "sync_ladder_reserve_ratio": 0.10,
-    "generation_poll_timeout_secs": 120,
+    "generation_poll_timeout_secs": 60,
     "edit_poll_timeout_secs": 480,
     "multi_reference_poll_timeout_secs": 360,
     "pre_conversation_timeout_secs": 45,
@@ -98,7 +97,7 @@ DEFAULT_IMAGE_PIPELINE = {
     "schedule_trace_enabled": True,
     "account_lease_prewarm_enabled": True,
     "release_account_after_sse": True,
-    "ss_stage_wall_timeout_secs": 75,
+    "ss_stage_wall_timeout_secs": 120,
     # Watchdog forced-release deadline for a whole sS/account lease (SSE + poll +
     # resolve + download + return window). Must stay well above the largest poll
     # budget (multi_reference 360s) plus download, otherwise the watchdog would yank
@@ -1852,7 +1851,7 @@ class ConfigStore:
         """
         try:
             settings = self.get_image_pipeline_settings()
-            return max(5.0, float(settings.get("ss_stage_wall_timeout_secs") or 75))
+            return max(5.0, float(settings.get("ss_stage_wall_timeout_secs") or 120))
         except (TypeError, ValueError):
             return 75.0
 
@@ -2139,9 +2138,53 @@ class ConfigStore:
     @property
     def newapi_image_sync_wait_timeout_secs(self) -> float:
         try:
-            return max(60.0, min(900.0, float(self.data.get("newapi_image_sync_wait_timeout_secs", 540.0))))
+            raw = self.data.get("newapi_image_sync_wait_timeout_secs")
+            if raw is None:
+                raw = self.data.get("newapi_image_attempt_budget_secs", 180.0)
+            return max(60.0, min(900.0, float(raw)))
         except (TypeError, ValueError):
-            return 540.0
+            return 180.0
+
+    @property
+    def newapi_image_attempt_budget_secs(self) -> float:
+        try:
+            return max(60.0, min(900.0, float(self.data.get("newapi_image_attempt_budget_secs", 180.0))))
+        except (TypeError, ValueError):
+            return 180.0
+
+    @property
+    def image_attempt_sse_phase_secs(self) -> float:
+        try:
+            explicit = self.data.get("image_attempt_sse_phase_secs")
+            if explicit is not None:
+                return max(10.0, min(600.0, float(explicit)))
+            return max(10.0, float(self.image_ss_stage_wall_timeout_secs))
+        except (TypeError, ValueError):
+            return 120.0
+
+    @property
+    def image_attempt_poll_phase_secs(self) -> float:
+        try:
+            explicit = self.data.get("image_attempt_poll_phase_secs")
+            if explicit is not None:
+                return max(5.0, min(600.0, float(explicit)))
+            return max(5.0, float(self.image_generation_poll_timeout_secs))
+        except (TypeError, ValueError):
+            return 60.0
+
+    @property
+    def image_poll_after_slow_sse_ms(self) -> float:
+        try:
+            return max(0.0, float(self.data.get("image_poll_after_slow_sse_ms", 45000.0)))
+        except (TypeError, ValueError):
+            return 45000.0
+
+    @property
+    def image_poll_after_slow_sse_initial_wait_secs(self) -> float:
+        try:
+            return max(0.0, float(self.data.get("image_poll_after_slow_sse_initial_wait_secs", 2.0)))
+        except (TypeError, ValueError):
+            return 2.0
 
     @property
     def newapi_image_sync_poll_interval_secs(self) -> float:
@@ -2149,6 +2192,16 @@ class ConfigStore:
             return max(0.2, min(10.0, float(self.data.get("newapi_image_sync_poll_interval_secs", 1.5))))
         except (TypeError, ValueError):
             return 1.5
+
+    @property
+    def newapi_image_sync_handoff_on_timeout_pending(self) -> bool:
+        try:
+            raw = self.data.get("newapi_image_sync_handoff_on_timeout_pending", True)
+            if isinstance(raw, str):
+                return raw.strip().lower() not in {"0", "false", "no", "off"}
+            return bool(raw)
+        except Exception:
+            return True
 
     @property
     def newapi_image_sync_admission_max(self) -> int:

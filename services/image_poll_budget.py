@@ -226,7 +226,13 @@ class ImagePollBudget:
         else:
             key = self.timeout_config_key or "image_poll_timeout_secs"
             mode_txt = f"当前模式 {self.mode}，" if self.mode else ""
-            detail = f"{mode_txt}墙钟预算已耗尽 —— 请调大 config.json 的 {key}。"
+            if self.timeout_secs < 30:
+                detail = (
+                    f"{mode_txt}本轮可用等待预算仅 {self.timeout_secs:.0f} 秒，"
+                    "同步总预算已接近耗尽；客户端应改用 task_id 异步轮询。"
+                )
+            else:
+                detail = f"{mode_txt}墙钟预算已耗尽 —— 请调大 config.json 的 {key}。"
         return head + detail + "也可能是账号被限流或生图队列拥堵导致。"
 
     def snapshot(self) -> dict[str, object]:

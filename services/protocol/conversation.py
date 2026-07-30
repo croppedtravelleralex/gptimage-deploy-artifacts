@@ -69,11 +69,9 @@ class ImageGenerationError(Exception):
 
 
 def public_image_error_message(message: str) -> str:
-    text = str(message or "").strip()
-    lower = text.lower()
-    if any(item in lower for item in ("backend-api/", "status=", "body=", "chatgpt.com", "upstreamhttperror")):
-        return "The image generation request failed. Please try again later."
-    return text or "The image generation request failed. Please try again later."
+    from services.protocol.user_facing_errors import map_user_facing_image_error
+
+    return map_user_facing_image_error(message)
 
 
 def is_token_invalid_error(message: str) -> bool:
@@ -1367,6 +1365,16 @@ def stream_image_outputs(
             pass
     if request.progress_callback:
         request.progress_callback("image_stream_resolve_start")
+    if request.progress_callback:
+        try:
+            request.progress_callback({
+                "step": "sse_stream_complete",
+                "conversation_id": conversation_id,
+                "file_ids": file_ids,
+                "sediment_ids": sediment_ids,
+            })
+        except Exception:
+            pass
     if message and not file_ids and not sediment_ids and last.get("blocked"):
         # 尝试从 /backend-api/tasks/ 获取详细错误信息
         detailed_error = _get_detailed_error_from_tasks(backend, conversation_id)
@@ -2029,11 +2037,25 @@ def _generate_single_image(
                         "index": index,
                         "error": str(exc)[:200],
                     })
+                    resume_enabled = max(
+                        0,
+                        int(config.get_image_task_queue_settings().get("timeout_pending_max_attempts") or 0),
+                    ) > 0
+                    if resume_enabled:
+                        raise ImageGenerationError(
+                            str(exc) or "ChatGPT 生图超时，已进入后台续轮询。",
+                            status_code=202,
+                            error_type="server_error",
+                            code="image_timeout_pending",
+                            account_email=account_email,
+                            conversation_id=conversation_id,
+                            access_token=token,
+                        ) from exc
                     raise ImageGenerationError(
-                        str(exc) or "ChatGPT 生图超时，已进入后台续轮询。",
-                        status_code=202,
+                        str(exc) or "ChatGPT 生图轮询超时。",
+                        status_code=504,
                         error_type="server_error",
-                        code="image_timeout_pending",
+                        code="image_poll_timeout",
                         account_email=account_email,
                         conversation_id=conversation_id,
                         access_token=token,

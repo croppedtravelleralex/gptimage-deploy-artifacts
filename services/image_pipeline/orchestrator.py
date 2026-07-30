@@ -238,8 +238,15 @@ class PipelineRun:
         if started is None:
             return
         limit = config.image_ss_stage_wall_timeout_secs
-        if time.monotonic() - started > limit:
-            raise TimeoutError(f"sS stage wall timeout ({limit:.0f}s)")
+        elapsed = time.monotonic() - started
+        if elapsed > limit:
+            exc = TimeoutError(
+                f"sS stage wall timeout ({limit:.0f}s, elapsed {elapsed:.1f}s)"
+            )
+            setattr(exc, "code", "image_sse_slow")
+            setattr(exc, "failure_phase", "sse")
+            setattr(exc, "failure_reason", "sse_slow")
+            raise exc
 
     def note_ss_stream_phase_end(self, *, image_index: int) -> None:
         """Disarm the sS fast-fail wall: the SSE streaming phase is over.

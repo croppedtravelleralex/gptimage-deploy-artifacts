@@ -291,22 +291,23 @@ async def _run_image_sync_call(call: LoggedCall, runner, **kwargs):
             headers={"Retry-After": "30"},
         ) from exc
     except ImageTaskWaitTimeoutError as exc:
+        task = exc.task if isinstance(exc.task, dict) else {}
+        task_id = str(exc.task_id or task.get("id") or task.get("task_id") or "").strip()
         call.log(
-            "调用超时",
+            "调用转异步轮询",
+            result={"task_id": task_id} if task_id else None,
             status="timeout_pending",
             error=str(exc),
         )
-        return JSONResponse(
-            status_code=504,
-            content={
-                "error": {
-                    "message": str(exc),
-                    "type": "image_task_timeout",
-                    "code": "image_task_timeout",
-                    "task_id": exc.task_id,
-                }
-            },
-        )
+        try:
+            enriched = await run_in_threadpool(
+                image_task_service.queue_snapshot_for_task,
+                call.identity,
+                task_id,
+            )
+        except Exception:
+            enriched = task
+        return _image_task_envelope(enriched or task)
     except Exception as exc:
         call.log("调用失败", status="failed", error=str(exc))
         return _image_error_response(exc)
@@ -380,15 +381,24 @@ def _image_task_envelope(task: dict[str, object]) -> dict[str, object]:
     if summary.get("running_limit") is not None:
         payload["running_limit"] = summary["running_limit"]
     if summary.get("error"):
+        from services.protocol.user_facing_errors import map_user_facing_image_error
+
         # NewAPI treats a top-level "error" field as a failed channel call even
         # when HTTP status is 200.  For async task status polling, keep the
         # transport successful and expose the task failure under panda_error so
         # pollers can stop without creating a NewAPI error-log storm.
         payload["panda_error"] = {
-            "message": summary["error"],
+            "message": map_user_facing_image_error(str(summary["error"])),
             "type": "image_task_error",
             "code": "image_task_error",
         }
+    failure_obs = task.get("failure_observability") if isinstance(task, dict) else None
+    if isinstance(failure_obs, dict) and failure_obs:
+        payload["failure_observability"] = failure_obs
+    if isinstance(task, dict) and task.get("failure_phase"):
+        payload["failure_phase"] = task.get("failure_phase")
+    if isinstance(task, dict) and task.get("failure_reason"):
+        payload["failure_reason"] = task.get("failure_reason")
     return payload
 
 

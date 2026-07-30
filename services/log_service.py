@@ -258,8 +258,10 @@ def _request_excerpt(text: object, limit: int = 1000) -> str:
 
 def _image_error_response(exc: Exception) -> JSONResponse:
     from services.protocol.conversation import public_image_error_message
+    from services.openai_backend_api import _is_content_policy_error
 
-    message = public_image_error_message(str(exc))
+    raw_message = str(exc)
+    message = public_image_error_message(raw_message)
     if "no available image quota" in message.lower():
         payload: dict[str, Any] = {
             "error": {
@@ -277,8 +279,51 @@ def _image_error_response(exc: Exception) -> JSONResponse:
                 "runtime": breakdown.get("runtime"),
             }
         return openai_error_response(payload, 429)
+    if _is_content_policy_error(raw_message):
+        return openai_error_response(
+            {
+                "error": {
+                    "message": message,
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": "content_policy_violation",
+                }
+            },
+            400,
+        )
+    if "instant limit" in message.lower() or "limit resets" in message.lower():
+        return openai_error_response(
+            {
+                "error": {
+                    "message": message,
+                    "type": "rate_limit_error",
+                    "param": None,
+                    "code": "image_instant_limit",
+                }
+            },
+            429,
+        )
+    if "duplicate prompt" in message.lower():
+        return openai_error_response(
+            {"error": {"message": message, "type": "rate_limit_error", "code": "duplicate_prompt"}},
+            429,
+            headers={"Retry-After": "30"},
+        )
     if hasattr(exc, "to_openai_error") and hasattr(exc, "status_code"):
         return JSONResponse(status_code=int(exc.status_code), content=exc.to_openai_error())
+    from services.protocol.user_facing_errors import is_internal_image_error
+
+    if is_internal_image_error(raw_message):
+        return openai_error_response(
+            {
+                "error": {
+                    "message": message,
+                    "type": "server_error",
+                    "code": "image_generation_timeout",
+                }
+            },
+            504,
+        )
     return openai_error_response(message, 502)
 
 

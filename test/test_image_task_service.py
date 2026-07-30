@@ -941,6 +941,35 @@ class ImageTaskServiceTests(unittest.TestCase):
             # thread warning during teardown.
             wait_for_task(service, OWNER, "slow-task", TASK_STATUS_SUCCESS)
 
+    def test_wait_for_result_hands_off_when_task_becomes_timeout_pending(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            class TimeoutWithConversation(RuntimeError):
+                conversation_id = "conv-handoff"
+                code = "image_timeout_pending"
+
+            def handler(_payload):
+                raise TimeoutWithConversation("poll timeout")
+
+            service = self.make_service(
+                Path(tmp_dir) / "image_tasks.json",
+                handler,
+                submit_workers_getter=lambda: 1,
+                poll_workers_getter=lambda: 0,
+            )
+            service.submit_generation(
+                OWNER,
+                client_task_id="handoff-task",
+                prompt="cat",
+                model="gpt-image-2",
+                size=None,
+                base_url="http://local.test",
+            )
+            wait_for_task(service, OWNER, "handoff-task", TASK_STATUS_TIMEOUT_PENDING)
+            with self.assertRaises(ImageTaskWaitTimeoutError) as ctx:
+                service.wait_for_result(OWNER, "handoff-task", timeout_secs=60.0, poll_interval_secs=0.05)
+            self.assertEqual(ctx.exception.task_id, "handoff-task")
+            self.assertEqual(ctx.exception.task.get("status"), TASK_STATUS_TIMEOUT_PENDING)
+
     def test_timeout_pending_defers_schedule_trace_until_terminal(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             class TimeoutWithConversation(RuntimeError):

@@ -3394,6 +3394,9 @@ class OpenAIBackendAPI:
             early_wait = float(config.image_poll_early_sse_initial_wait_secs)
         except (TypeError, ValueError):
             early_wait = 25.0
+        if sse_image_gen_ms is not None and float(sse_image_gen_ms) >= float(config.image_poll_after_slow_sse_ms):
+            # SSE already waited for upstream image_gen; skip the long post-stream settle.
+            return min(base, float(config.image_poll_after_slow_sse_initial_wait_secs))
         if sse_image_gen_ms is not None and float(sse_image_gen_ms) < early_ms:
             return max(base, early_wait)
         return base

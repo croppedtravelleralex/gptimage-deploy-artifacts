@@ -33,7 +33,10 @@ def _poll_interval_secs() -> float:
 
 
 def _task_error_message(task: dict[str, Any]) -> str:
-    return str(task.get("error") or "image task failed").strip() or "image task failed"
+    from services.protocol.user_facing_errors import map_user_facing_image_error
+
+    raw = str(task.get("error") or "image task failed").strip() or "image task failed"
+    return map_user_facing_image_error(raw)
 
 
 def build_openai_image_response(task: dict[str, Any], *, task_id: str | None = None) -> dict[str, Any]:

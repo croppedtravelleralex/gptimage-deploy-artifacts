@@ -397,6 +397,12 @@ def _public_task(task: dict[str, Any]) -> dict[str, Any]:
     sediment_ids = task.get("sediment_ids")
     if isinstance(sediment_ids, list) and sediment_ids:
         item["sediment_ids"] = sediment_ids
+    if isinstance(task.get("failure_observability"), dict) and task.get("failure_observability"):
+        item["failure_observability"] = dict(task["failure_observability"])
+    if task.get("failure_phase"):
+        item["failure_phase"] = task.get("failure_phase")
+    if task.get("failure_reason"):
+        item["failure_reason"] = task.get("failure_reason")
     if task.get("resume_attempts") is not None:
         item["resume_attempts"] = int(task.get("resume_attempts") or 0)
     if task.get("next_resume_ts"):
@@ -701,6 +707,34 @@ class ImageTaskService:
         if deadline <= 0:
             return None
         return deadline - float(now if now is not None else time.time())
+
+    def _resume_poll_enabled(self) -> bool:
+        return max(0, int(self.timeout_pending_max_attempts_getter())) > 0
+
+    def _build_failure_observability(
+        self,
+        *,
+        task: dict[str, Any],
+        exc: Exception,
+        error_message: str,
+        code: str,
+        conversation_id: str,
+    ) -> dict[str, Any]:
+        from services.image_failure_classification import classify_image_failure
+
+        phase_timings = task.get("phase_timings_ms") if isinstance(task.get("phase_timings_ms"), dict) else None
+        poll_budget = getattr(exc, "poll_budget", None)
+        return classify_image_failure(
+            error_message=error_message,
+            code=code,
+            conversation_id=conversation_id,
+            phase_timings_ms=phase_timings,
+            poll_budget=poll_budget if isinstance(poll_budget, dict) else None,
+            sse_had_file_ids=bool(task.get("sse_had_file_ids")),
+            sse_had_sediment_ids=bool(task.get("sse_had_sediment_ids")),
+            schedule_queue_ms=_positive_int(task.get("task_queue_ms")),
+            exc=exc,
+        )
 
     def _sync_ladder_exhausted(self, key: str, *, now: float | None = None) -> bool:
         remaining = self._sync_ladder_remaining_secs(key, now=now)
@@ -1157,6 +1191,12 @@ class ImageTaskService:
                     status = _clean(task.get("status"))
                     if status in TERMINAL_STATUSES:
                         return _public_task(task)
+                    if (
+                        status == TASK_STATUS_TIMEOUT_PENDING
+                        and self._resume_poll_enabled()
+                        and bool(getattr(config, "newapi_image_sync_handoff_on_timeout_pending", True))
+                    ):
+                        raise ImageTaskWaitTimeoutError(task_id, _public_task(task))
                     remaining = deadline - time.time()
                     if remaining <= 0:
                         raise ImageTaskWaitTimeoutError(task_id, _public_task(task))
@@ -2307,6 +2347,9 @@ class ImageTaskService:
                         updates["progress"] = progress
                     if progress == "image_stream_resolve_start":
                         updates["resolve_started_ts"] = time.time()
+                    if isinstance(step, dict) and step.get("step") == "sse_stream_complete":
+                        updates["sse_had_file_ids"] = bool(step.get("file_ids"))
+                        updates["sse_had_sediment_ids"] = bool(step.get("sediment_ids"))
                     if conversation_id:
                         updates["conversation_id"] = conversation_id
                     resume_access_token = _clean(outcome.get("access_token"))
@@ -2537,15 +2580,21 @@ class ImageTaskService:
                 **_call_log_traffic_fields(result),
             }
         except Exception as exc:
+            from services.image_failure_classification import user_message_for_failure
+
             error_message = str(exc) or "image task failed"
             account_email = _clean(getattr(exc, "account_email", ""))
             conversation_id = _clean(getattr(exc, "conversation_id", ""))
             code = _clean(getattr(exc, "code", ""))
             duration_ms = int((time.time() - started) * 1000)
+            with self._lock:
+                task_snapshot = dict(self._tasks.get(key) or {})
             ladder_left = self._sync_ladder_remaining_secs(key)
             resume_affordable = ladder_left is None or ladder_left >= _SYNC_LADDER_MIN_ATTEMPT_SECS
+            resume_enabled = self._resume_poll_enabled()
             if (
-                conversation_id
+                resume_enabled
+                and conversation_id
                 and resume_affordable
                 and (
                     code == "image_timeout_pending"
@@ -2584,13 +2633,24 @@ class ImageTaskService:
                     account_email=account_email,
                 )
                 return
+            observability = self._build_failure_observability(
+                task=task_snapshot,
+                exc=exc,
+                error_message=error_message,
+                code=code,
+                conversation_id=conversation_id,
+            )
+            public_error = user_message_for_failure(observability)
             self._update_task(
                 key,
                 status=TASK_STATUS_ERROR,
                 progress="failed",
-                error=error_message,
+                error=public_error,
                 data=[],
                 duration_ms=duration_ms,
+                failure_observability=observability,
+                failure_phase=observability.get("failure_phase"),
+                failure_reason=observability.get("failure_reason"),
                 **({"conversation_id": conversation_id} if conversation_id else {}),
             )
             self._notify_quota_prime_terminal(
@@ -2598,9 +2658,21 @@ class ImageTaskService:
                 payload_for_run,
                 success=False,
                 access_token=_clean(payload_for_run.get("prime_access_token")),
-                error=error_message,
+                error=public_error,
             )
-            self._log_call(identity, mode, model, started, "调用失败", request_preview=request_text(payload_for_run.get("prompt")), status="failed", error=error_message, account_email=account_email, task_key=key)
+            self._log_call(
+                identity,
+                mode,
+                model,
+                started,
+                "调用失败",
+                request_preview=request_text(payload_for_run.get("prompt")),
+                status="failed",
+                error=public_error,
+                account_email=account_email,
+                task_key=key,
+                failure_observability=observability,
+            )
 
     def _force_release_image_slots(self, access_tokens: set[str] | list[str] | tuple[str, ...]) -> int:
         released = 0
@@ -2718,7 +2790,7 @@ class ImageTaskService:
                 # leaving the resolve/download margin `_resume_poll_hard_timeout_secs`
                 # adds on top, so attempt end == deadline rather than deadline + 60s.
                 affordable = (deadline - now) - _RESUME_POLL_OVERHEAD_SECS
-                if (deadline - now) < _SYNC_LADDER_MIN_ATTEMPT_SECS:
+                if affordable < _SYNC_LADDER_MIN_ATTEMPT_SECS:
                     task.update(
                         status=TASK_STATUS_ERROR,
                         progress="failed",
@@ -3009,6 +3081,7 @@ class ImageTaskService:
         traffic_fields: dict[str, int] | None = None,
         phase_timings_ms: dict[str, int] | None = None,
         schedule_trace_payload: dict[str, Any] | None = None,
+        failure_observability: dict[str, Any] | None = None,
     ) -> None:
         endpoint = "/v1/images/edits" if mode == "edit" else "/v1/images/generations"
         summary_prefix = "图生图" if mode == "edit" else "文生图"
@@ -3027,6 +3100,12 @@ class ImageTaskService:
             detail["request_text"] = request_preview
         if error:
             detail["error"] = error
+        if isinstance(failure_observability, dict) and failure_observability:
+            detail["failure_observability"] = failure_observability
+            if failure_observability.get("failure_phase"):
+                detail["failure_phase"] = failure_observability.get("failure_phase")
+            if failure_observability.get("failure_reason"):
+                detail["failure_reason"] = failure_observability.get("failure_reason")
         if account_email:
             detail["account_email"] = account_email
         if urls:
