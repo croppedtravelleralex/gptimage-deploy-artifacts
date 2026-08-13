@@ -19,7 +19,12 @@ from services.proxy_cf_eligibility import (
     scan_stale_sec,
 )
 from services.proxy_cf_probe import probe_proxy_cf_with_retries
-from services.proxy_quarantine import clear_gpt_unavailable, proxy_endpoint_key
+from services.proxy_quarantine import (
+    clear_gpt_unavailable,
+    is_gpt_unavailable_proxy,
+    mark_gpt_unavailable,
+    proxy_endpoint_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +193,7 @@ class AccountCfRefreshService:
             token = str(item.get("token") or "").strip()
             if not proxy or not token:
                 continue
+            was_quarantined = is_gpt_unavailable_proxy(proxy)
             clear_gpt_unavailable(proxy)
             probe = probe_proxy_cf_with_retries(proxy, timeout=timeout)
             cf_ok = bool(probe.get("ok"))
@@ -199,6 +205,7 @@ class AccountCfRefreshService:
                 "elapsed_ms": probe.get("elapsed_ms"),
                 "probe_attempts": probe.get("probe_attempts"),
                 "probe_retries": probe.get("probe_retries"),
+                "was_quarantined": was_quarantined,
                 "restamped": False,
             }
             if cf_ok:
@@ -209,6 +216,10 @@ class AccountCfRefreshService:
                 with self._lock:
                     self._status["totals"]["restamped"] = int(self._status["totals"].get("restamped") or 0) + 1
             else:
+                # The endpoint was cleared above so the probe could run. It failed, so put
+                # it back: without this the loop would slowly drain the quarantine list.
+                mark_gpt_unavailable(proxy, reason="cf403_refresh_probe", former_account=email)
+                row["re_quarantined"] = True
                 self._next_retry_at[email] = now + min_retry
                 with self._lock:
                     self._status["totals"]["failed"] = int(self._status["totals"].get("failed") or 0) + 1

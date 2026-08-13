@@ -2195,6 +2195,20 @@ class ConfigStore:
             return 600.0
 
     @property
+    def image_transient_backoff_sec(self) -> float:
+        """上游瞬断/硬超时后把账号移出候选面的时长。
+
+        与 `image_preflight_failure_backoff_sec` 刻意分开：preflight 失败说明账号
+        自身有问题（token 失效、配额拉取失败），值得退避 10 分钟；而 160s 硬超时、
+        SSE 瞬断说明的是**上游出图慢**，与账号健康无关。两者共用 600s 会在号池偏小
+        时形成正反馈——超时踢号 → 可用面变小 → 排队更久 → 更多超时。
+        """
+        try:
+            return max(0.0, min(3600.0, float(self.data.get("image_transient_backoff_sec", 60.0))))
+        except (TypeError, ValueError):
+            return 60.0
+
+    @property
     def image_preflight_min_interval_sec(self) -> float:
         """同一账号图片取号 preflight 的最短间隔。
 
@@ -2507,6 +2521,7 @@ class ConfigStore:
         data["image_quota_freshness_hours"] = self.image_quota_freshness_hours
         data["image_token_max_attempts"] = self.image_token_max_attempts
         data["image_preflight_failure_backoff_sec"] = self.image_preflight_failure_backoff_sec
+        data["image_transient_backoff_sec"] = self.image_transient_backoff_sec
         data["image_preflight_min_interval_sec"] = self.image_preflight_min_interval_sec
         data["image_return_window_size"] = self.image_return_window_size
         data["image_return_window_timeout_secs"] = self.image_return_window_timeout_secs

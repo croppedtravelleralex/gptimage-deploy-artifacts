@@ -1297,13 +1297,25 @@ class AccountService:
             return False
         return (now - refreshed_at).total_seconds() <= interval
 
-    def _record_image_preflight_failure(self, access_token: str, error: object) -> None:
-        backoff_sec = float(config.image_preflight_failure_backoff_sec or 0)
+    def _record_image_preflight_failure(
+        self,
+        access_token: str,
+        error: object,
+        *,
+        backoff_sec: float | None = None,
+    ) -> None:
+        if backoff_sec is None:
+            backoff_sec = float(config.image_preflight_failure_backoff_sec or 0)
+        backoff_sec = float(backoff_sec or 0)
         if not access_token or backoff_sec <= 0:
             return
         with self._image_slot_condition:
             token = self._resolve_access_token_locked(access_token)
-            self._image_preflight_failed_until[token] = time.time() + backoff_sec
+            # Never shorten an existing longer backoff: a cheap transient hit must not
+            # release an account that a real preflight failure just parked.
+            until = time.time() + backoff_sec
+            current = float(self._image_preflight_failed_until.get(token) or 0)
+            self._image_preflight_failed_until[token] = max(current, until)
 
     def _clear_image_preflight_failure(self, access_token: str) -> None:
         if not access_token:
@@ -1317,8 +1329,15 @@ class AccountService:
 
         这里只复用内存态 preflight backoff，不删除账号、不写库；目标是在
         ChatGPT 上游连接 timeout / reset 时避免同一个 token 立刻被重复调度。
+
+        用 `image_transient_backoff_sec`（默认 60s）而非 preflight 的 600s：调用方
+        是 160s 硬超时和 SSE 瞬断，反映的是上游慢，不是账号坏。
         """
-        self._record_image_preflight_failure(access_token, error)
+        self._record_image_preflight_failure(
+            access_token,
+            error,
+            backoff_sec=float(config.image_transient_backoff_sec or 0),
+        )
 
     @classmethod
     def _account_matches_plan_type(cls, account: dict, plan_type: str | None = None) -> bool:

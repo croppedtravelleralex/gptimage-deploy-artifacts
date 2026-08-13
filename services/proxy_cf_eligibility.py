@@ -181,8 +181,13 @@ def account_needs_cf_stamp_refresh(
     endpoint = proxy_endpoint_key(proxy)
     if scan_verdict(endpoint) is True:
         return False
-    if is_gpt_unavailable_proxy(proxy):
-        return False
+    # Quarantine must NOT veto here. A quarantined endpoint that is still bound to a
+    # healthy account is exactly the case the refresh loop exists for: the entry is
+    # usually stale (cf403 recorded against a *former* account, proxy later reassigned),
+    # and the only code path that clears it — `_tick`'s clear_gpt_unavailable() — runs
+    # after candidate selection. Vetoing on quarantine therefore deadlocks the account
+    # out of scheduling forever. `_tick` re-quarantines on a failed probe, so letting
+    # these through costs one probe and never silently whitelists a dead endpoint.
     return True
 
 
@@ -249,7 +254,7 @@ def pick_cf_verified_proxy(
     blocked = {str(item).strip().lower() for item in (exclude or set()) if str(item).strip()}
     blocked_egress = {str(item).strip() for item in (exclude_egress or set()) if str(item).strip()}
     timeout = float(probe_timeout or _cf_policy().get("probe_timeout_sec") or 45.0)
-    egress_fn = measure_egress_ip if callable(measure_egress) else measure_proxy_egress_ip
+    egress_fn = measure_egress if callable(measure_egress) else measure_proxy_egress_ip
 
     for url in pool:
         key = proxy_endpoint_key(url)

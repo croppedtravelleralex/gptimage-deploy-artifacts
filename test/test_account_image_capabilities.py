@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -413,6 +414,55 @@ class AccountCapabilityTests(unittest.TestCase):
                 self.assertEqual(service._list_ready_candidate_tokens(), ["token-b"])
         finally:
             self._restore_config("image_preflight_failure_backoff_sec", prev_backoff)
+            self._restore_config("image_require_recent_quota_refresh", prev_required)
+
+    def test_transient_backoff_is_shorter_than_preflight_failure(self) -> None:
+        """A slow upstream must not park an account as long as a broken one.
+
+        160s hard timeouts call record_image_transient_backoff(); sharing the 600s
+        preflight backoff shrinks the candidate pool and feeds more timeouts.
+        """
+        prev_preflight = self._set_config("image_preflight_failure_backoff_sec", 600)
+        prev_transient = self._set_config("image_transient_backoff_sec", 60)
+        prev_required = self._set_config("image_require_recent_quota_refresh", False)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+                service.add_account_items([
+                    {"access_token": "token-a", "status": "正常", "quota": 5},
+                    {"access_token": "token-b", "status": "正常", "quota": 5},
+                ])
+
+                now = time.time()
+                service.record_image_transient_backoff("token-a", "hard timeout")
+                service._record_image_preflight_failure("token-b", RuntimeError("bad token"))
+
+                transient_until = service._image_preflight_failed_until["token-a"]
+                preflight_until = service._image_preflight_failed_until["token-b"]
+                self.assertLess(transient_until - now, 120)
+                self.assertGreater(preflight_until - now, 500)
+        finally:
+            self._restore_config("image_preflight_failure_backoff_sec", prev_preflight)
+            self._restore_config("image_transient_backoff_sec", prev_transient)
+            self._restore_config("image_require_recent_quota_refresh", prev_required)
+
+    def test_transient_backoff_never_shortens_a_longer_one(self) -> None:
+        prev_preflight = self._set_config("image_preflight_failure_backoff_sec", 600)
+        prev_transient = self._set_config("image_transient_backoff_sec", 60)
+        prev_required = self._set_config("image_require_recent_quota_refresh", False)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+                service.add_account_items([{"access_token": "token-a", "status": "正常", "quota": 5}])
+
+                service._record_image_preflight_failure("token-a", RuntimeError("bad token"))
+                parked_until = service._image_preflight_failed_until["token-a"]
+                service.record_image_transient_backoff("token-a", "hard timeout")
+
+                self.assertEqual(service._image_preflight_failed_until["token-a"], parked_until)
+        finally:
+            self._restore_config("image_preflight_failure_backoff_sec", prev_preflight)
+            self._restore_config("image_transient_backoff_sec", prev_transient)
             self._restore_config("image_require_recent_quota_refresh", prev_required)
 
     def test_imported_accounts_enter_panda_incoming_until_verified(self) -> None:

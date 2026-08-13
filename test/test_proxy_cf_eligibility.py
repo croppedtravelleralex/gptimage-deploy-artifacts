@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -33,8 +34,12 @@ class ProxyCfEligibilityTest(unittest.TestCase):
 
     def test_scan_verdict_from_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
+            # Relative, not a literal date: load_scan_index() drops reports older than
+            # scan_stale_sec, so a hardcoded timestamp turns this into a time bomb that
+            # starts failing once the date passes.
+            generated_at = datetime.now(timezone.utc).isoformat()
             report = {
-                "generated_at": "2026-07-25T08:00:00+00:00",
+                "generated_at": generated_at,
                 "nodes": [
                     {"proxy_endpoint": "1.2.3.4:8080", "ok": True},
                     {"proxy_endpoint": "5.6.7.8:8080", "ok": False},
