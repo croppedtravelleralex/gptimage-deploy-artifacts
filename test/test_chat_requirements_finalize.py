@@ -88,5 +88,62 @@ class ChatRequirementsFinalizeShapeTests(unittest.TestCase):
         self.assertEqual(api.session.post.call_count, 1)
 
 
+class ImagePathPreTicketCacheTests(unittest.TestCase):
+    """The image path must reuse the pre-ticket cache without gaining CF retries.
+
+    It used to call the bare `_once` helper, paying prepare+finalize on every single
+    generation even for a hot account.
+    """
+
+    def _api(self) -> OpenAIBackendAPI:
+        api = OpenAIBackendAPI.__new__(OpenAIBackendAPI)
+        api.access_token = "tok-image"
+        return api
+
+    def test_cache_hit_skips_the_round_trip(self) -> None:
+        api = self._api()
+        cached = ChatRequirements(token="cached-token")
+        with (
+            patch.object(api, "_cached_chat_requirements", return_value=cached),
+            patch.object(api, "_get_chat_requirements_once") as once,
+            patch.object(api, "_store_chat_requirements") as store,
+        ):
+            got = api._get_chat_requirements_cached_once()
+
+        self.assertIs(got, cached)
+        once.assert_not_called()
+        store.assert_not_called()
+
+    def test_cache_miss_fetches_once_and_stores(self) -> None:
+        api = self._api()
+        fresh = ChatRequirements(token="fresh-token")
+        with (
+            patch.object(api, "_cached_chat_requirements", return_value=None),
+            patch.object(api, "_get_chat_requirements_once", return_value=fresh) as once,
+            patch.object(api, "_store_chat_requirements") as store,
+        ):
+            got = api._get_chat_requirements_cached_once()
+
+        self.assertIs(got, fresh)
+        self.assertEqual(once.call_count, 1)
+        store.assert_called_once_with(fresh)
+
+    def test_cf_403_still_propagates_without_retry(self) -> None:
+        """Single-shot semantics are the whole reason the image path avoided the
+        retrying helper; caching must not reintroduce hammering."""
+        api = self._api()
+        boom = RuntimeError("cf_edge_block 403")
+        with (
+            patch.object(api, "_cached_chat_requirements", return_value=None),
+            patch.object(api, "_get_chat_requirements_once", side_effect=boom) as once,
+            patch.object(api, "_store_chat_requirements") as store,
+        ):
+            with self.assertRaises(RuntimeError):
+                api._get_chat_requirements_cached_once()
+
+        self.assertEqual(once.call_count, 1)
+        store.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

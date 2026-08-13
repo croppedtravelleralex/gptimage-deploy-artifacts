@@ -4600,7 +4600,9 @@ class OpenAIBackendAPI:
                 # text helper retries CF responses internally, which would triple
                 # pressure on the same account/egress before failover.  TLS/socket
                 # errors still bubble to this outer loop and rebuild the session.
-                requirements = self._get_chat_requirements_once()
+                # The cached variant keeps that single-shot behaviour but reuses the
+                # pre-ticket pool, so a hot account skips the prepare+finalize hop.
+                requirements = self._get_chat_requirements_cached_once()
                 self._report_progress("preparing_conversation")
                 conduit_token = self._prepare_image_conversation(prompt, requirements, model)
                 self._report_progress("starting_generation")
@@ -4722,41 +4724,70 @@ class OpenAIBackendAPI:
             return
         self._bootstrap(soft_fail=soft_fail)
 
+    def _cached_chat_requirements(self) -> ChatRequirements | None:
+        """Pre-ticket cache lookup, or None when disabled/absent/expired."""
+        try:
+            from services.config import config as _cfg
+
+            settings = _cfg.get_image_pipeline_settings()
+            if not bool(settings.get("pre_ticket_pool_enabled")) or not self.access_token:
+                return None
+            from services.image_pipeline.pre_ticket_pool import pre_ticket_pool
+
+            cached = pre_ticket_pool.get(self.access_token)
+            if cached is not None and cached.requirements is not None:
+                return cached.requirements
+        except Exception:
+            pass
+        return None
+
+    def _store_chat_requirements(self, requirements: ChatRequirements) -> None:
+        try:
+            from services.config import config as _cfg
+
+            settings = _cfg.get_image_pipeline_settings()
+            if not bool(settings.get("pre_ticket_pool_enabled")) or not self.access_token:
+                return
+            from services.image_pipeline.pre_ticket_pool import PreTicketBundle, pre_ticket_pool
+
+            pre_ticket_pool.put(
+                self.access_token,
+                PreTicketBundle(requirements=requirements, turnstile_solved=bool(requirements.turnstile_token)),
+            )
+        except Exception:
+            pass
+
+    def _get_chat_requirements_cached_once(self) -> ChatRequirements:
+        """Cache-aware single-shot variant, for callers that must not retry on CF.
+
+        Same CF semantics as `_get_chat_requirements_once` — a 403 propagates
+        immediately so the caller can fail over to another account instead of
+        hammering this one — but it participates in the same pre-ticket cache the
+        text path uses. The image path previously called the bare `_once` helper and
+        so refetched chat-requirements on every single generation, paying the
+        prepare+finalize round trip (~1-4s) even on a hot account.
+        """
+        cached = self._cached_chat_requirements()
+        if cached is not None:
+            return cached
+        requirements = self._get_chat_requirements_once()
+        self._store_chat_requirements(requirements)
+        return requirements
+
     def _get_chat_requirements(self) -> ChatRequirements:
         """获取当前模式对话所需的 sentinel token（prepare + finalize 两步流程）。
 
         CF/边缘 403 时最多重试 2 次（短退避），避免对话 UI 长时间空挂。
         """
-        try:
-            from services.config import config as _cfg
-
-            settings = _cfg.get_image_pipeline_settings()
-            if bool(settings.get("pre_ticket_pool_enabled")) and self.access_token:
-                from services.image_pipeline.pre_ticket_pool import pre_ticket_pool
-
-                cached = pre_ticket_pool.get(self.access_token)
-                if cached is not None and cached.requirements is not None:
-                    return cached.requirements
-        except Exception:
-            pass
+        cached = self._cached_chat_requirements()
+        if cached is not None:
+            return cached
 
         last_exc: BaseException | None = None
         for attempt in range(1, 4):
             try:
                 requirements = self._get_chat_requirements_once()
-                try:
-                    from services.config import config as _cfg
-
-                    settings = _cfg.get_image_pipeline_settings()
-                    if bool(settings.get("pre_ticket_pool_enabled")) and self.access_token:
-                        from services.image_pipeline.pre_ticket_pool import PreTicketBundle, pre_ticket_pool
-
-                        pre_ticket_pool.put(
-                            self.access_token,
-                            PreTicketBundle(requirements=requirements, turnstile_solved=bool(requirements.turnstile_token)),
-                        )
-                except Exception:
-                    pass
+                self._store_chat_requirements(requirements)
                 return requirements
             except UpstreamHTTPError as exc:
                 last_exc = exc
