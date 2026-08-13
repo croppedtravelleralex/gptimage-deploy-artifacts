@@ -109,13 +109,26 @@ _PER_USER_RUNNING_CONFIG_KEYS = (
 # pool and by a reserve that keeps the pool from ever being fully consumed by one owner.
 _OWNER_RESERVE_RATIO = 0.25
 
+# Parallel-slot rejection has no deterministic reopen time (it waits on a sibling task
+# finishing, typically 40-75s), so the client gets a conservative poll hint instead.
+_DUP_PARALLEL_RETRY_AFTER_SECS = 30
+
 
 class ImageTaskQueueFullError(RuntimeError):
     """异步生图队列已满或被熔断保护暂停。"""
 
 
 class ImageTaskDuplicatePromptError(RuntimeError):
-    """同 owner 短窗内重复 prompt 被拒绝。"""
+    """同 owner 短窗内重复 prompt 被拒绝。
+
+    ``retry_after_secs`` 是客户端**真正**需要等待的秒数。窗口拒绝时它是窗口剩余量，
+    并行位拒绝时退化为保守猜测（要等某个同 prompt 任务先跑完，无法精确预测）。
+    之前 HTTP 层对两种情况都写死 30s，而窗口是 120s，客户端照做必然再吃一次 429。
+    """
+
+    def __init__(self, message: str, *, retry_after_secs: float = _DUP_PARALLEL_RETRY_AFTER_SECS) -> None:
+        super().__init__(message)
+        self.retry_after_secs = max(1, int(math.ceil(float(retry_after_secs or 1))))
 
 
 class ImageTaskWaitTimeoutError(TimeoutError):
@@ -954,7 +967,9 @@ class ImageTaskService:
         unfinished = self._count_unfinished_same_prompt_locked(owner, fingerprint)
         if unfinished >= max_parallel:
             raise ImageTaskDuplicatePromptError(
-                f"duplicate prompt within {int(window)}s window; please wait or vary the prompt"
+                f"duplicate prompt: {unfinished} identical prompts already running "
+                f"(max {max_parallel}); wait for one to finish or vary the prompt",
+                retry_after_secs=_DUP_PARALLEL_RETRY_AFTER_SECS,
             )
         last = float(self._recent_prompt_hashes.get(fingerprint) or 0.0)
         # 仍有未完成同 prompt → 同批兄弟，放行
@@ -963,8 +978,11 @@ class ImageTaskService:
             return
         # 无未完成：窗口内刚提交过则视为刷单拒绝
         if last > 0 and (now - last) < window:
+            remaining = window - (now - last)
             raise ImageTaskDuplicatePromptError(
-                f"duplicate prompt within {int(window)}s window; please wait or vary the prompt"
+                f"duplicate prompt within {int(window)}s window; "
+                f"retry in {int(math.ceil(remaining))}s or vary the prompt",
+                retry_after_secs=remaining,
             )
         self._recent_prompt_hashes[fingerprint] = now
 

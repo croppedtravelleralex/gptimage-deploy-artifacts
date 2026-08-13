@@ -23,6 +23,15 @@ class PromptDedupParallelTests(unittest.TestCase):
         # 防止 max(1, 0) 仍拉起 worker 立刻消费队列
         self.svc._ensure_workers_locked = lambda: None  # type: ignore[method-assign]
         self.identity = {"id": "tester", "role": "admin"}
+        # These tests exercise the dedup gate only. Without this, _submit() first runs
+        # ensure_dispatchable_pool(), which reads the real account pool and raises
+        # ImagePoolStarvedError on any machine that has no schedulable accounts.
+        pipeline = patch(
+            "services.image_task_service.image_pipeline_scheduler.enabled",
+            return_value=False,
+        )
+        pipeline.start()
+        self.addCleanup(pipeline.stop)
 
     def _scheduler(self, **overrides):
         base = {
@@ -85,6 +94,50 @@ class PromptDedupParallelTests(unittest.TestCase):
                 self.svc.submit_generation(
                     self.identity, client_task_id="a2", prompt=prompt, model="gpt-image-2", size="1024x1024"
                 )
+
+    def test_window_rejection_reports_real_remaining_seconds(self) -> None:
+        """Retry-After must reflect the 120s window, not a hardcoded 30s.
+
+        Telling a client to retry in 30s when the gate reopens at 120s guarantees a
+        second 429 — which is what users experienced as "waited and it still failed".
+        """
+        with patch("services.image_task_service.config") as cfg, patch(
+            "services.image_task_service._image_generation_paused", return_value=False
+        ):
+            self._patch_cfg(cfg)
+            prompt = "同一提示词，测剩余秒数"
+            self.svc.submit_generation(
+                self.identity, client_task_id="w1", prompt=prompt, model="gpt-image-2", size="1024x1024"
+            )
+            self.svc.cancel_task(self.identity, "w1")
+            with self.assertRaises(ImageTaskDuplicatePromptError) as caught:
+                self.svc.submit_generation(
+                    self.identity, client_task_id="w2", prompt=prompt, model="gpt-image-2", size="1024x1024"
+                )
+        # submitted a moment ago, so nearly the whole 120s window is still to run
+        self.assertGreater(caught.exception.retry_after_secs, 100)
+        self.assertLessEqual(caught.exception.retry_after_secs, 120)
+        self.assertIn("retry in", str(caught.exception))
+
+    def test_parallel_slot_rejection_uses_conservative_hint(self) -> None:
+        """Slot exhaustion has no deterministic reopen time, so keep a short poll hint."""
+        with patch("services.image_task_service.config") as cfg, patch(
+            "services.image_task_service._image_generation_paused", return_value=False
+        ):
+            self._patch_cfg(cfg)
+            prompt = "并行位打满"
+            for i in range(4):
+                self.svc.submit_generation(
+                    self.identity, client_task_id=f"p-{i}", prompt=prompt,
+                    model="gpt-image-2", size="1024x1024",
+                )
+            with self.assertRaises(ImageTaskDuplicatePromptError) as caught:
+                self.svc.submit_generation(
+                    self.identity, client_task_id="p-4", prompt=prompt,
+                    model="gpt-image-2", size="1024x1024",
+                )
+        self.assertEqual(caught.exception.retry_after_secs, 30)
+        self.assertIn("already running", str(caught.exception))
 
     def test_cancel_queued_task(self) -> None:
         with patch("services.image_task_service.config") as cfg, patch(

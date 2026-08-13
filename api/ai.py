@@ -288,7 +288,7 @@ async def _run_image_sync_call(call: LoggedCall, runner, **kwargs):
         raise HTTPException(
             status_code=429,
             detail={"error": str(exc), "code": "duplicate_prompt"},
-            headers={"Retry-After": "30"},
+            headers={"Retry-After": str(exc.retry_after_secs)},
         ) from exc
     except ImageTaskWaitTimeoutError as exc:
         task = exc.task if isinstance(exc.task, dict) else {}
@@ -456,7 +456,7 @@ async def _run_generation_async_submit_call(call: LoggedCall, identity: dict[str
         raise HTTPException(
             status_code=429,
             detail={"error": str(exc), "code": "duplicate_prompt"},
-            headers={"Retry-After": "30"},
+            headers={"Retry-After": str(exc.retry_after_secs)},
         ) from exc
 
 
@@ -484,7 +484,7 @@ async def _run_edit_async_submit_call(call: LoggedCall, identity: dict[str, obje
         raise HTTPException(
             status_code=429,
             detail={"error": str(exc), "code": "duplicate_prompt"},
-            headers={"Retry-After": "30"},
+            headers={"Retry-After": str(exc.retry_after_secs)},
         ) from exc
 
 

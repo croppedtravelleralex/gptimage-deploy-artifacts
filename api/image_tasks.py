@@ -127,7 +127,7 @@ def create_router() -> APIRouter:
             raise HTTPException(
                 status_code=429,
                 detail={"error": str(exc), "code": "duplicate_prompt"},
-                headers={"Retry-After": "30"},
+                headers={"Retry-After": str(exc.retry_after_secs)},
             ) from exc
 
     @router.post("/api/image-tasks/edits")
@@ -180,7 +180,7 @@ def create_router() -> APIRouter:
             raise HTTPException(
                 status_code=429,
                 detail={"error": str(exc), "code": "duplicate_prompt"},
-                headers={"Retry-After": "30"},
+                headers={"Retry-After": str(exc.retry_after_secs)},
             ) from exc
 
     @router.post("/api/image-tasks/{task_id}/resume-poll")
